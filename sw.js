@@ -1,17 +1,26 @@
-const CACHE_NAME = 'ofp-log-v1';
+const CACHE_NAME = 'efb-log-v2';
 const ASSETS = [
   './',
   './index.html',
-  './style.css',
-  './script.js',
+  './efb-log-pro.js',
   './pdf-lib.min.js',
-  './pdf.worker.min.js'
+  './pdf.min.js',
+  './signature_pad.umd.min.js',
+  './icon.png'
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+  e.waitUntil(
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(ASSETS);
+    })
+  );
 });
 
 self.addEventListener('fetch', (e) => {
-  e.respondWith(caches.match(e.request).then(res => res || fetch(e.request)));
+  e.respondWith(
+    caches.match(e.request).then(response => {
+      return response || fetch(e.request);
+    })
+  );
 });
