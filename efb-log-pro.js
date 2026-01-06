@@ -35,12 +35,12 @@
             'j-ldg-type': 675,   // Manual/Automatic landing
             'j-flt-alt': 710,   // Flight Altitude
             'j-ldg-detail': 750,   // LDG Detail
-            'j-init': 40,     // Init Fuel
-            'j-uplift-w': 80, // Uplift Weight
-            'j-calc-ramp': 120, // Calculated Ramp
-            'j-act-ramp': 160, // Actual Ramp
-            'j-shut': 200, // Shutdown
-            'j-burn': 240,     // Trip Burn
+            'j-init': 38,     // Init Fuel
+            'j-uplift-w': 78, // Uplift Weight
+            'j-calc-ramp': 118, // Calculated Ramp
+            'j-act-ramp': 158, // Actual Ramp
+            'j-shut': 198, // Shutdown
+            'j-burn': 238,     // Trip Burn
             'j-uplift-vol': 280, // Uplift Volume
             'j-disc': 320,      // Discrepancy
             'j-slip': 350,      // Fuel Slip
@@ -51,7 +51,7 @@
             'j-cargo': 595,      // Loadsheet Cargo
             'j-mail': 635,      // Loadsheet Mail
             'j-bag': 675,      // Loadsheet BAG
-            'j-zfw': 715,      // Loadsheet ZFW
+            'j-zfw': 714,      // Loadsheet ZFW
             'j-duty-operating': 205,      // Operating Crew
             'j-duty-time': 245,      // Duty Time
             'j-duty-night': 285,      // Duty Night
@@ -698,6 +698,32 @@ async function runAnalysis(fileOrEvent) {
         calcDutyLogic();
     };
 
+    window.updateCruiseLevel = function() {
+    let finalLevel = "";
+
+    // 1. Default: Find Planned Level from OFP
+    if(waypoints.length > 0) {
+        const cruiseWP = waypoints.find(w => /^\d{3}$/.test(w.level) && w.level !== "000");
+        if(cruiseWP) finalLevel = "FL" + cruiseWP.level;
+    }
+
+    // 2. Priority: Check if User entered an Actual Level
+    // We scan all "ACT FL" inputs and take the highest value found
+    let maxAct = 0;
+    const inputs = document.querySelectorAll('[id^="o-agl-"]'); // Select all Flight Log FL inputs
+    inputs.forEach(input => {
+        const val = parseInt(input.value);
+        if(val && val > maxAct) maxAct = val;
+    });
+
+    if(maxAct > 0) {
+        finalLevel = "FL" + maxAct;
+    }
+
+    // 3. Update the Journey Log Summary
+        safeSet('j-flt-alt', finalLevel);
+    };
+
     window.calcFuel = function() {
         // Safely get numeric values
         const val = (id) => { 
@@ -951,7 +977,7 @@ function renderTables() {
                     ? `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="updateTakeoffTime(this.value)" value="${atdVal}">`
                     : `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="${onInputFn}">`;
                 
-                const actFlInput = `<input type="number" id="${pre}-agl-${i}" class="input" maxlength="3" style="width:50px;padding:8px;text-align:center;color:var(--accent)">`;
+                const actFlInput = `<input type="number" id="${pre}-agl-${i}" class="input" maxlength="3" style="width:50px;padding:8px;text-align:center;color:var(--accent)" oninput="updateCruiseLevel()">`;
                 const notesInput = `<input type="text" id="${pre}-n-${i}" class="input" style="padding:8px; width:100%" placeholder="...">`;
 
                 // --- ADDED ID TO ETO CELL BELOW ---
@@ -978,21 +1004,18 @@ function renderTables() {
         fill(waypoints, 'ofp-tbody', 'o'); 
         fill(alternateWaypoints, 'altn-tbody', 'a');
         
-        if(waypoints.length > 0) {
-            const cruiseWP = waypoints.find(w => /^\d{3}$/.test(w.level) && w.level !== "000");
-            if(cruiseWP) safeSet('j-flt-alt', "FL" + cruiseWP.level);
-        }
+        updateCruiseLevel();
     }
 
     window.updateLevel = function(type, index, value) {
-        if(type === 'o' && waypoints[index]) waypoints[index].level = value;
-        if(type === 'a' && alternateWaypoints[index]) alternateWaypoints[index].level = value;
-        
-        // Optional: Re-run the "Smart Auto Fill" for Journey Log if you change a level
-        if(type === 'o') {
-            const cruiseWP = waypoints.find(w => /^\d{3}$/.test(w.level) && w.level !== "000");
-            if(cruiseWP) safeSet('j-flt-alt', "FL" + cruiseWP.level);
-        }
+    // 1. Update the internal data model (Keep this)
+    if(type === 'o' && waypoints[index]) waypoints[index].level = value;
+    if(type === 'a' && alternateWaypoints[index]) alternateWaypoints[index].level = value;
+    
+    // 2. Update the UI using the new SMART logic
+    if(type === 'o') {
+        updateCruiseLevel();
+    }
     };
 
     function renderFuelTable() {
