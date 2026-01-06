@@ -684,65 +684,70 @@ async function runAnalysis(fileOrEvent) {
 window.runCalc = function() {
     const atd = el('ofp-atd-in')?.value;
     
-    // 1. Determine Baseline & Start Fuel
-    const pdfTakeoffFuel = waypoints[0] ? (waypoints[0].baseFuel || parseInt(waypoints[0].fuel)) : 0;
-    
-    let startFuelInput = el('o-f-0');
-    let currentStartFuel = 0;
+    // 1. Find the LATEST ATO (Actual Time Over) entered by the pilot
+    let lastAtoMins = -1;
+    let lastAtoIndex = -1;
 
-    if (startFuelInput && startFuelInput.value) {
-        currentStartFuel = parseInt(startFuelInput.value);
-    } else {
-        // Fallback calculation
-        let block = parseInt(el('view-pic-block')?.value) || blockFuelValue || 0;
-        let taxi = 200; 
-        if (blockFuelValue && pdfTakeoffFuel) taxi = blockFuelValue - pdfTakeoffFuel;
-        currentStartFuel = block - taxi;
+    for (let i = waypoints.length - 1; i >= 0; i--) {
+        const atoInput = el(`o-a-${i}`);
+        if (atoInput && atoInput.value) {
+            const [h, m] = atoInput.value.split(':').map(Number);
+            lastAtoMins = h * 60 + m;
+            lastAtoIndex = i;
+            break; // We found the most recent actual time
+        }
     }
 
-    // 2. Calculate Delta
+    // 2. Determine Baseline & Start Fuel (Your existing fuel logic)
+    const pdfTakeoffFuel = waypoints[0] ? (waypoints[0].baseFuel || parseInt(waypoints[0].fob)) : 0;
+    let startFuelInput = el('o-f-0');
+    let currentStartFuel = (startFuelInput && startFuelInput.value) 
+        ? parseInt(startFuelInput.value) 
+        : (parseInt(el('view-pic-block')?.value) || blockFuelValue || 0) - 200;
     const delta = currentStartFuel - pdfTakeoffFuel;
 
-    // 3. Update Loop
+    // 3. Update Waypoints Loop
     waypoints.forEach((wp, index) => {
-        // If baseFuel wasn't set in runAnalysis for some reason, try to grab it now
-        if (wp.baseFuel === undefined || wp.baseFuel === 0) {
-            wp.baseFuel = parseInt(wp.fob) || parseInt(wp.fuel) || 0;
-        }
+        // --- FUEL CALC ---
+        if (wp.baseFuel === undefined) wp.baseFuel = parseInt(wp.fob) || 0;
+        if (wp.baseFuel > 0) wp.fuel = wp.baseFuel + delta;
 
-        // Calc New Fuel
-        let newFuel = 0;
-        if (wp.baseFuel > 0) {
-            newFuel = wp.baseFuel + delta;
-            wp.fuel = newFuel; 
-        }
-
-        // Calc ETO
+        // --- TIME CALC (The Ripple Fix) ---
         if (index === 0 && wp.name === "TAKEOFF") {
             wp.eto = atd ? atd.replace(':', '') : "";
-        } else {
-            if(!atd) {
-                wp.eto = "";
-            } else {
-                const [h,m] = atd.split(':').map(Number);
-                const base = new Date(Date.UTC(2000,0,1,h,m));
-                const target = new Date(base.getTime() + (wp.totalMins * 60000));
-                wp.eto = target.getUTCHours().toString().padStart(2,'0') + 
-                         target.getUTCMinutes().toString().padStart(2,'0');
+        } 
+        else if (lastAtoIndex !== -1 && index > lastAtoIndex) {
+            // If we are AFTER the latest actual waypoint, calculate ETO based on that ATO
+            // New ETO = Latest ATO + (This WP Planned Leg Time - Latest WP Planned Leg Time)
+            const minutesFromLatest = wp.totalMins - waypoints[lastAtoIndex].totalMins;
+            const newEtoMins = lastAtoMins + minutesFromLatest;
+            
+            const h = Math.floor((newEtoMins / 60) % 24).toString().padStart(2, '0');
+            const m = Math.floor(newEtoMins % 60).toString().padStart(2, '0');
+            wp.eto = h + m;
+        } 
+        else {
+            // Default: Calculate from Original ATD (Standard OFP profile)
+            if(!atd) wp.eto = "";
+            else {
+                const [h, m] = atd.split(':').map(Number);
+                const targetMins = (h * 60 + m) + wp.totalMins;
+                const hh = Math.floor((targetMins / 60) % 24).toString().padStart(2, '0');
+                const mm = Math.floor(targetMins % 60).toString().padStart(2, '0');
+                wp.eto = hh + mm;
             }
         }
 
-        // --- UPDATE SCREEN (Text Only - No Redraw) ---
-        
-        // Update ETO
+        // --- UPDATE SCREEN ---
         const etoCell = el(`o-eto-${index}`);
         if (etoCell) etoCell.innerText = wp.eto || "--";
-
         const fuelCell = el(`o-calcfuel-${index}`);
         if (fuelCell) fuelCell.innerText = Math.round(wp.fuel) || "-";
     });
     
     updateAlternateETOs();
+    updateFuelMonitor(); // This will now compare the NEW Destination ETO vs STA
+    syncLastWaypoint();
 };
 
     function calculatePICBlock() {
@@ -1044,7 +1049,7 @@ function renderTables() {
             const isTO = (i === 0 && wp.name === "TAKEOFF");
             const atdVal = el('ofp-atd-in')?.value || '';
             
-            const onInputFn = (pre === 'o') ? "syncLastWaypoint(); updateAlternateETOs(); updateFuelMonitor();" : "syncLastWaypoint()";
+            const onInputFn = (pre === 'o') ? "runCalc(); syncLastWaypoint();" : "syncLastWaypoint()";
             
             const timeInput = isTO 
                 ? `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="updateTakeoffTime(this.value)" value="${atdVal}">`
@@ -1054,7 +1059,9 @@ function renderTables() {
             if (isTO) {
                 fuelEvent = "runCalc(); syncLastWaypoint(); updateFuelMonitor();";
             }
-            const actFuelInput = `<input type="number" id="${pre}-f-${i}" ... oninput="${fuelEvent}">`;
+            const actFuelInput = `<input type="number" id="${pre}-f-${i}" class="input" 
+            style="width:70px; padding:8px; background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text); text-align:center;" 
+            oninput="${fuelEvent}">`;
             
             const actFlInput = `<input type="number" id="${pre}-agl-${i}" class="input" maxlength="3" style="width:50px;padding:8px;text-align:center;color:var(--accent)" oninput="updateCruiseLevel()">`;
             const notesInput = `<input type="text" id="${pre}-n-${i}" class="input" style="padding:8px; width:100%" placeholder="...">`;
@@ -1199,83 +1206,97 @@ function renderTables() {
     };
 
     window.syncLastWaypoint = function() {
-        if(waypoints.length === 0) return;
-        const lastIdx = waypoints.length - 1;
-        const lastATO = el(`o-a-${lastIdx}`)?.value;
-        const lastFuel = el(`o-f-${lastIdx}`)?.value;
-        if(lastATO && el('j-on')) el('j-on').value = lastATO;
-        if(lastFuel && el('j-shut')) el('j-shut').value = lastFuel;
-        calcJourneyTimes(); calcFuel();
+    if(waypoints.length === 0) return;
+    const lastIdx = waypoints.length - 1;
+    const wp = waypoints[lastIdx];
+
+    // 1. Handle Landing Time (ATO or ETO)
+    const lastATO = el(`o-a-${lastIdx}`)?.value;
+    const currentETO = wp.eto ? (wp.eto.substring(0,2) + ":" + wp.eto.substring(2,4)) : "";
+    
+    // Priority: Actual Time > Calculated Estimate
+    const finalTime = lastATO || currentETO;
+    if(finalTime && el('j-on')) el('j-on').value = finalTime;
+
+    // 2. Handle Shutdown Fuel (AFOB or EFOB)
+    const lastFuel = el(`o-f-${lastIdx}`)?.value;
+    const currentEFOB = Math.round(wp.fuel) || "";
+
+    // Priority: Actual Fuel > Calculated Estimate
+    const finalFuel = lastFuel || currentEFOB;
+    if(finalFuel && el('j-shut')) el('j-shut').value = finalFuel;
+
+    // 3. Trigger Journey Log math
+    calcJourneyTimes(); 
+    calcFuel();
     };
 
     window.updateFuelMonitor = function() {
     let latestIndex = -1;
     let fuelDiff = 0;
-    let timeDiff = 0;
+    let scheduleDiff = 0;
+    const statusBlock = el('nav-status-block');
 
-    // 1. Scan for the latest entry (Actual Fuel or Actual Time)
+    // 1. FUEL MONITORING
     for (let i = waypoints.length - 1; i >= 0; i--) {
         const fInput = el(`o-f-${i}`);
-        const tInput = el(`o-a-${i}`);
-        
-        // Check Fuel
-        if (fInput && fInput.value && latestIndex === -1) {
+        if (fInput && fInput.value) {
             fuelDiff = parseInt(fInput.value) - waypoints[i].fuel;
             latestIndex = i;
-        }
-
-        // Check Time (Only for waypoints that have an ETO)
-        if (tInput && tInput.value && waypoints[i].eto) {
-            const atoStr = tInput.value.replace(':', ''); // e.g. "12:30" -> "1230"
-            const etoStr = waypoints[i].eto;
-            
-            // Convert to minutes for comparison
-            const atoMins = parseInt(atoStr.substring(0,2)) * 60 + parseInt(atoStr.substring(2,4));
-            const etoMins = parseInt(etoStr.substring(0,2)) * 60 + parseInt(etoStr.substring(2,4));
-            
-            timeDiff = atoMins - etoMins;
-            
-            // Handle day-crossing (midnight)
-            if (timeDiff > 720) timeDiff -= 1440;
-            if (timeDiff < -720) timeDiff += 1440;
-            
-            // We use the most recent time entry for the display
-            const timeStatus = el('time-status');
-            if (timeStatus) {
-                if (timeDiff > 0) {
-                    timeStatus.innerText = `TIME: ${timeDiff} MIN LATE`;
-                    timeStatus.style.color = "#e74c3c";
-                } else if (timeDiff < 0) {
-                    timeStatus.innerText = `TIME: ${Math.abs(timeDiff)} MIN EARLY`;
-                    timeStatus.style.color = "#2ecc71";
-                } else {
-                    timeStatus.innerText = `TIME: ON TIME`;
-                    timeStatus.style.color = "var(--dim)";
-                }
-            }
-            break; // Stop after finding the latest time
+            break; 
         }
     }
 
-    // 2. Update Fuel UI
-    if (latestIndex !== -1) {
-        const diffEl = el('fuel-diff-val');
-        const monitorBar = el('fuel-monitor-bar');
-        const destEl = el('fuel-dest-val');
-        
-        const lastWp = waypoints[waypoints.length - 1];
-        const estAtDest = Math.round(lastWp.fuel + fuelDiff);
+    // 2. TIME MONITORING (ETA vs STA)
+    const lastWp = waypoints[waypoints.length - 1];
+    const staStr = el('view-sta-text')?.innerText.replace(':', '');
+    let hasTimeData = false;
 
-        if (fuelDiff >= 0) {
-            diffEl.innerText = `+${Math.round(fuelDiff)} kg`;
-            diffEl.style.color = "#2ecc71";
-            monitorBar.style.borderLeftColor = "#2ecc71";
-        } else {
-            diffEl.innerText = `${Math.round(fuelDiff)} kg`;
-            diffEl.style.color = "#e74c3c";
-            monitorBar.style.borderLeftColor = "#e74c3c";
+    if (lastWp && lastWp.eto && staStr && staStr !== "-") {
+        const etaMins = parseInt(lastWp.eto.substring(0,2)) * 60 + parseInt(lastWp.eto.substring(2,4));
+        const staMins = parseInt(staStr.substring(0,2)) * 60 + parseInt(staStr.substring(2,4));
+        
+        scheduleDiff = etaMins - staMins;
+        if (scheduleDiff > 720) scheduleDiff -= 1440;
+        if (scheduleDiff < -720) scheduleDiff += 1440;
+
+        const timeEl = el('time-status-nav');
+        if (timeEl) {
+            hasTimeData = true;
+            if (scheduleDiff > 0) {
+                timeEl.innerText = `${scheduleDiff} MIN LATE`;
+                timeEl.style.color = "#e74c3c";
+            } else if (scheduleDiff < 0) {
+                timeEl.innerText = `${Math.abs(scheduleDiff)} MIN EARLY`;
+                timeEl.style.color = "#2ecc71";
+            } else {
+                timeEl.innerText = `ON TIME`;
+                timeEl.style.color = "var(--dim)";
+            }
         }
-        destEl.innerText = `${estAtDest} kg`;
+    }
+
+    // 3. SHOW/HIDE LOGIC
+    // Only show the block if we have a fuel entry OR a valid schedule calculation
+    if (statusBlock) {
+        if (latestIndex !== -1 || hasTimeData) {
+            statusBlock.style.display = 'block';
+        } else {
+            statusBlock.style.display = 'none';
+        }
+    }
+
+    // 4. UPDATE FUEL TEXT
+    const fuelEl = el('fuel-status-nav');
+    if (fuelEl) {
+        if (latestIndex !== -1) {
+            const prefix = fuelDiff >= 0 ? "+" : "";
+            fuelEl.innerText = `FUEL: ${prefix}${Math.round(fuelDiff)} KG`;
+            fuelEl.style.color = fuelDiff >= 0 ? "#2ecc71" : "#e74c3c";
+            fuelEl.style.display = 'block';
+        } else {
+            fuelEl.style.display = 'none'; // Hide individual row if no fuel data
+        }
     }
 };
 

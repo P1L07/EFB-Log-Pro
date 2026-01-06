@@ -23,6 +23,7 @@
     transform: scale(1.02);
     transition: all 0.2s;
 }
+
 /* CSS CORE */
 :root {
     --bg:#000; --sidebar:#111; --panel:#1c1c1e; --accent:#0a84ff;
@@ -59,7 +60,7 @@ html,body{margin:0;width:100%;height:100%;font-family:-apple-system,system-ui,sa
 
 /* FORM */
 .grid-row{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
-.grid-row-10{display:grid;gap:10px;grid-template-columns:repeat(10,1fr)} /* 10 columns for compact display */
+.grid-row-10{display:grid;gap:10px;grid-template-columns:repeat(10,1fr)} 
 .field{display:flex;flex-direction:column;gap:6px}
 .field label{font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase}
 .input{background:var(--input);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:10px;font-size:16px;width:100%;outline:none}
@@ -69,20 +70,20 @@ select.input { appearance: none; -webkit-appearance: none; }
 
 /* FORCE COMPACT INPUTS ON IPAD */
 input[type="time"], input[type="number"], input[type="text"] {
-    -webkit-appearance: none; /* Removes iOS bubble styling */
+    -webkit-appearance: none;
     appearance: none;
     margin: 0;
 }
 
-/* Specific fix for table inputs to stop them expanding */
+/* Specific fix for table inputs */
 table .input {
-    padding: 4px !important;    /* Reduce padding inside box */
-    height: 30px !important;    /* Force a standard small height */
-    font-size: 12px !important; /* Smaller text prevents zooming */
-    min-width: 0 !important;    /* Allow box to shrink if needed */
+    padding: 4px !important;
+    height: 30px !important;
+    font-size: 12px !important;
+    min-width: 0 !important;
 }
 
-/* DATA BOX - REMOVED STYLING */
+/* DATA BOX */
 .data-box {
     font-size: 16px;
     font-weight: bold;
@@ -115,15 +116,25 @@ table .input {
 /* TABLES */
 .table-container {
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch; /* Smooth scrolling for iPad */
+    -webkit-overflow-scrolling: touch; 
 }
+.table-container input.input {
+    background: var(--input); /* Changed to var(--input) to look better in both modes */
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+.table-container input.input:focus {
+    border-color: var(--accent);
+}
+
 table{width:100%;min-width:650px;border-collapse:collapse}
 th{text-align:left;color:var(--accent);font-size:11px;padding:15px;border-bottom:1px solid var(--border)}
 td{padding:12px;border-bottom:1px solid var(--border);font-size:14px}
 
-/* Ensure the sticky header stays above the table content */
+/* FIXED: Header background now uses var(--bg) to respect theme toggle */
 #section-log > div:first-child {
-    background-color: #1a1a1a; /* Match your app background */
+    background-color: var(--bg);
 }
 
 /* CHECKLIST */
@@ -133,11 +144,22 @@ td{padding:12px;border-bottom:1px solid var(--border);font-size:14px}
 /* BUTTONS */
 .btn-group{display:flex;gap:15px;margin-top:20px}
 .btn{flex:1;padding:16px;border:none;border-radius:14px;font-weight:800;text-transform:uppercase;color:#fff;cursor:pointer;opacity:1}
-.btn:disabled{opacity:0.3;cursor:not-allowed}
 .btn-save{background:var(--success)} .btn-email{background:var(--accent)} .btn-danger{background:var(--error)}
 
 canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px solid var(--border)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+/* Added styles for the Navigation Status block you requested */
+#nav-status-block {
+    padding: 10px 0;
+    margin-bottom: 15px;
+    border-bottom: 1px solid var(--border);
+}
+#time-status-nav, #fuel-status-nav {
+    font-size: 13px;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
 </style>
 </head>
 <body>
@@ -148,6 +170,10 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
 <button id="upload-btn" class="nav-btn" onclick="document.getElementById('ofp-file-in').click()" style="background:var(--accent);color:#fff;margin-bottom:15px">
         📁 Upload/Drop OFP
     </button>
+    <div id="nav-status-block" style="display: none; padding: 10px 0; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
+        <div id="time-status-nav" style="font-size: 13px; font-weight: bold; margin-bottom: 4px;"></div>
+        <div id="fuel-status-nav" style="font-size: 13px; font-weight: bold;"></div>
+    </div>
         <button class="nav-btn active" onclick="showTab('summary',this)">Flight Summary</button>
         <button class="nav-btn" onclick="showTab('weights-fuel',this)">Weights & Fuel</button>
         <button class="nav-btn" onclick="showTab('log',this)">Flight Log</button>
@@ -251,27 +277,7 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
 </section>
 
 <section id="section-log" class="tool-section active">
-    <div style="position: sticky; top: 0; z-index: 100; background: var(--bg); padding-bottom: 10px;">
-        <div class="panel" style="margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: 1px solid var(--border);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h3 style="margin:0;">Flight Log</h3>
-                <div id="time-status" style="font-size: 14px; font-weight: bold; color: var(--dim);">TIME: ON TIME</div>
-            </div>
-
-            <div id="fuel-monitor-bar" style="padding: 12px; border-radius: 8px; background: rgba(0,0,0,0.3); display: flex; justify-content: space-between; align-items: center; border-left: 5px solid var(--accent);">
-                <div>
-                    <span style="color: var(--dim); font-size: 10px; display: block; text-transform: uppercase;">Fuel Status</span>
-                    <span id="fuel-diff-val" style="font-weight: bold; font-size: 18px;">READY</span>
-                </div>
-                <div style="text-align: right;">
-                    <span style="color: var(--dim); font-size: 10px; display: block; text-transform: uppercase;">Est. At Dest</span>
-                    <span id="fuel-dest-val" style="font-weight: bold; font-size: 18px;">-</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="panel" style="margin-top: 0; border-top-left-radius: 0; border-top-right-radius: 0;">
+    <div class="panel" style="margin-top: 0; ">
         <div class="table-container">
             <input type="time" id="ofp-atd-in" style="display: none">
             <table>
