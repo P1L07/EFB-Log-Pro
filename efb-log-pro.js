@@ -229,7 +229,7 @@
     // ==========================================
     // 4. OFP PARSING LOGIC
     // ==========================================
-async function runAnalysis() {
+async function runAnalysis(fileOrEvent) {
         let blob = null;
     let isAutoLoad = false;
 
