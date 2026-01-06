@@ -201,6 +201,7 @@
         }
 
         validateInputs();
+        loadState();
     };
 
     // ==========================================
@@ -404,6 +405,22 @@ async function runAnalysis() {
         validateInputs();
         renderFuelTable();
         calculatePICBlock();
+
+            //Check if we have saved data waiting to be filled
+        if (window.savedWaypointData && window.savedWaypointData.length > 0) {
+            // Try to match saved rows to the newly generated table
+            window.savedWaypointData.forEach((data, i) => {
+                if (i < waypoints.length) {
+                    if(data.ato) safeSet(`o-a-${i}`, data.ato);
+                    if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                    if(data.notes) safeSet(`o-n-${i}`, data.notes);
+                    if(data.agl) safeSet(`o-agl-${i}`, data.agl);
+                }
+            });
+            // Update calculations with the restored data
+            syncLastWaypoint();
+            updateAlternateETOs();
+        }
     }
 
     // --- PARSING HELPERS ---
@@ -1385,6 +1402,13 @@ function renderTables() {
         // Open Mail App
         window.location.href = `mailto:ops@airastana.com?subject=${encodeURIComponent(subject)}`;
     };
+
+    window.resetApp = function() {
+    if(confirm("Start new flight? This will clear all saved data.")) {
+        localStorage.removeItem('efb_log_state');
+        location.reload(); 
+        }
+    };
     
     window.triggerEmailOnly = function() { 
         // Get the values from the hidden inputs or summary fields
@@ -1432,6 +1456,92 @@ function renderTables() {
             runAnalysis(); 
         }
     }, false);
+    });
+
+    // ==========================================
+    // 9. LOCAL STORAGE (AUTO-SAVE)
+    // ==========================================
+
+    // A list of simple input IDs we want to save automatically
+    const SAVE_IDS = [
+        'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std',
+        'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
+        'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
+        'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
+        'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
+        'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-kg', 'front-extra-reason',
+        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2'
+    ];
+
+    function saveState() {
+        const state = {
+            inputs: {},
+            dailyLegs: dailyLegs, // Save the legs array
+            dutyStartTime: dutyStartTime // Save the calculated duty start
+        };
+
+        // 1. Save all simple inputs
+        SAVE_IDS.forEach(id => {
+            const e = el(id);
+            if(e) state.inputs[id] = e.value;
+        });
+
+        // 2. Save Waypoint Data (User entered ATOs/Fuel)
+        // We map just the user-editable fields from the table
+        const waypointData = waypoints.map((wp, i) => ({
+            ato: el(`o-a-${i}`)?.value || "",
+            fuel: el(`o-f-${i}`)?.value || "",
+            notes: el(`o-n-${i}`)?.value || "",
+            agl: el(`o-agl-${i}`)?.value || ""
+        }));
+        state.waypoints = waypointData;
+
+        // Save to browser storage
+        localStorage.setItem('efb_log_state', JSON.stringify(state));
+        console.log("Auto-saved");
+    }
+
+    function loadState() {
+        const raw = localStorage.getItem('efb_log_state');
+        if(!raw) return; // No previous data
+
+        try {
+            const state = JSON.parse(raw);
+            
+            // 1. Restore simple inputs
+            if(state.inputs) {
+                Object.keys(state.inputs).forEach(id => {
+                    safeSet(id, state.inputs[id]);
+                });
+            }
+
+            // 2. Restore Daily Legs
+            if(state.dailyLegs && Array.isArray(state.dailyLegs)) {
+                dailyLegs = state.dailyLegs;
+                renderJourneyList(); // Redraw the table
+            }
+
+            // 3. Restore Duty Start Time
+            if(state.dutyStartTime !== undefined) {
+                dutyStartTime = state.dutyStartTime;
+                // Re-run the visual update just in case
+                calcDutyLogic(); 
+            }
+
+            // 4. Note on Waypoints
+            // Waypoints depend on the OFP being loaded. 
+            // If the user reloads the page, waypoints array is empty until they upload PDF.
+            // We save the data in a temporary variable to fill AFTER upload if needed.
+            window.savedWaypointData = state.waypoints;
+
+        } catch(e) { console.error("Load error", e); }
+    }
+
+    // Trigger Save on any input change
+    window.addEventListener('input', (e) => {
+        // Debounce simple inputs (wait 500ms before saving to save performance)
+        if(window.saveTimeout) clearTimeout(window.saveTimeout);
+        window.saveTimeout = setTimeout(saveState, 500);
     });
 
 })();
