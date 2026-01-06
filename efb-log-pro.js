@@ -121,8 +121,12 @@
         validateInputs();
     };
 
-    window.onload = function() {
-        if (typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    
+    window.onload = async function() {
+        
+        if (typeof pdfjsLib !== 'undefined') {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
+        }
         
         // OFP Upload
         const ofpFileInput = el('ofp-file-in');
@@ -140,7 +144,6 @@
         }
         
         // --- REAL-TIME CALCULATION LISTENERS ---
-        // Ensure HTML inputs have these exact IDs for calculations to work
         
         // 1. Time fields
         ['j-out','j-off','j-on','j-in'].forEach(id => {
@@ -201,21 +204,61 @@
         }
 
         validateInputs();
-        loadState();
+
+        // --- NEW: OFFLINE AUTO-LOAD LOGIC ---
+        try {
+            // 1. Check if we have a saved PDF in the database
+            const savedPdf = await loadPdfFromDB();
+            
+            if (savedPdf) {
+                console.log("Auto-loading saved PDF...");
+                // If found, run analysis on the blob. 
+                // NOTE: runAnalysis() now calls loadState() internally at the end.
+                await runAnalysis(savedPdf); 
+            } else {
+                // 2. If no PDF, just load the text inputs from LocalStorage
+                loadState();
+            }
+        } catch (e) {
+            console.error("Auto-load error:", e);
+            // Fallback if DB fails
+            loadState();
+        }
     };
 
     // ==========================================
     // 4. OFP PARSING LOGIC
     // ==========================================
 async function runAnalysis() {
-        const file = el('ofp-file-in').files[0];
-        if(!file) return;
-        
-        clearOFPInputs();
-        originalFileName = file.name;
-        ofpPdfBytes = await file.arrayBuffer();
+        let blob = null;
+    let isAutoLoad = false;
 
-        const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
+    // 1. Determine if this is an Auto-Load (Blob passed in) or Manual Upload (from Input)
+    if (fileOrEvent instanceof Blob) {
+        blob = fileOrEvent;
+        isAutoLoad = true; // Mark as auto-load so we don't wipe user data
+    } else {
+        const fileInput = el('ofp-file-in');
+        if (fileInput && fileInput.files.length > 0) {
+            blob = fileInput.files[0];
+            // It's a manual upload -> Save to DB for next time
+            savePdfToDB(blob); 
+        }
+    }
+
+    if (!blob) return; // No file found, stop.
+
+    // 2. Only clear inputs if it's a MANUAL upload.
+    // If we are reloading from DB, we want to keep the saved inputs (localStorage).
+    if (!isAutoLoad) {
+        clearOFPInputs();
+    }
+
+    // 3. Process the file
+    originalFileName = blob.name || "Logged_OFP.pdf";
+    ofpPdfBytes = await blob.arrayBuffer();
+
+    const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
         
         // --- NEW: RENDER PDF FOR IPAD (Canvas Method) ---
         const container = document.getElementById('pdf-render-container');
@@ -406,9 +449,14 @@ async function runAnalysis() {
         renderFuelTable();
         calculatePICBlock();
 
-            //Check if we have saved data waiting to be filled
+        //Check if we have saved data waiting to be filled
+        // RESTORE USER INPUTS
+        // If we just parsed the PDF, it might have overwritten your manual changes (like Block Time).
+        // We re-run loadState() here to ensure your saved manual inputs take priority over the PDF defaults.
+        loadState(); 
+        
+        // Also re-apply the Waypoint Table data specifically
         if (window.savedWaypointData && window.savedWaypointData.length > 0) {
-            // Try to match saved rows to the newly generated table
             window.savedWaypointData.forEach((data, i) => {
                 if (i < waypoints.length) {
                     if(data.ato) safeSet(`o-a-${i}`, data.ato);
@@ -417,9 +465,8 @@ async function runAnalysis() {
                     if(data.agl) safeSet(`o-agl-${i}`, data.agl);
                 }
             });
-            // Update calculations with the restored data
-            syncLastWaypoint();
-            updateAlternateETOs();
+        syncLastWaypoint();
+        updateAlternateETOs();
         }
     }
 
@@ -1403,10 +1450,11 @@ function renderTables() {
         window.location.href = `mailto:ops@airastana.com?subject=${encodeURIComponent(subject)}`;
     };
 
-    window.resetApp = function() {
-    if(confirm("Start new flight? This will clear all saved data.")) {
-        localStorage.removeItem('efb_log_state');
-        location.reload(); 
+    window.resetApp = async function() {
+        if(confirm("Start new flight? This will clear all saved data.")) {
+            localStorage.removeItem('efb_log_state');
+            await clearPdfDB();
+            location.reload(); 
         }
     };
     
@@ -1544,4 +1592,47 @@ function renderTables() {
         window.saveTimeout = setTimeout(saveState, 500);
     });
 
+    // ==========================================
+    // 10. PDF STORAGE (IndexedDB)
+    // ==========================================
+    
+    // Open the Database
+    function openDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open("EFB_PDF_DB", 1);
+            request.onupgradeneeded = function(e) {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains("files")) {
+                    db.createObjectStore("files");
+                }
+            };
+            request.onsuccess = e => resolve(e.target.result);
+            request.onerror = e => reject(e);
+        });
+    }
+
+    // Save PDF Blob
+    async function savePdfToDB(fileBlob) {
+        const db = await openDB();
+        const tx = db.transaction("files", "readwrite");
+        tx.objectStore("files").put(fileBlob, "currentOFP");
+    }
+
+    // Load PDF Blob
+    async function loadPdfFromDB() {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("files", "readonly");
+            const req = tx.objectStore("files").get("currentOFP");
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => resolve(null);
+        });
+    }
+
+    // Delete PDF (for Reset)
+    async function clearPdfDB() {
+        const db = await openDB();
+        const tx = db.transaction("files", "readwrite");
+        tx.objectStore("files").delete("currentOFP");
+    }
 })();
