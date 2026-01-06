@@ -6,7 +6,8 @@ const ASSETS = [
   './pdf-lib.min.js',
   './pdf.min.js',
   './signature_pad.umd.min.js',
-  './icon.png'
+  './icon.png',
+  './pdf.worker.min.js',
 ];
 
 self.addEventListener('install', (e) => {
