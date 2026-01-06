@@ -1495,17 +1495,6 @@ function renderTables() {
     }
 };
 
-    window.sendJourneyLogEmail = function() {
-        const flt = el('j-flt')?.value || "FLT";
-        const date = el('j-date')?.value || "DATE";
-        
-        // Change the subject to "Journey Log"
-        const subject = `Journey Log: ${flt} ${date}`;
-        
-        // Open Mail App
-        window.location.href = `mailto:ops@airastana.com?subject=${encodeURIComponent(subject)}`;
-    };
-
     window.resetApp = async function() {
         if(confirm("Start new flight? This will clear all saved data.")) {
             localStorage.removeItem('efb_log_state');
@@ -1612,7 +1601,7 @@ function renderTables() {
 
     function loadState() {
         const raw = localStorage.getItem('efb_log_state');
-        if(!raw) return; // No previous data
+        if(!raw) return; 
 
         try {
             const state = JSON.parse(raw);
@@ -1620,32 +1609,29 @@ function renderTables() {
             // 1. Restore simple inputs
             if(state.inputs) {
                 Object.keys(state.inputs).forEach(id => {
-                    safeSet(id, state.inputs[id]);
+                    const val = state.inputs[id];
+                    // SMART RESTORE: 
+                    // Only overwrite if the saved value is NOT empty.
+                    // This prevents empty storage from erasing PDF data (like Flight No).
+                    if (val !== "" && val !== null) {
+                        safeSet(id, val);
+                    }
                 });
             }
 
             // 2. Restore Daily Legs
             if(state.dailyLegs && Array.isArray(state.dailyLegs)) {
                 dailyLegs = state.dailyLegs;
-                renderJourneyList(); // Redraw the table
+                renderJourneyList(); 
             }
 
             // 3. Restore Duty Start Time
             if(state.dutyStartTime !== undefined) {
                 dutyStartTime = state.dutyStartTime;
-                // Re-run the visual update just in case
                 calcDutyLogic(); 
             }
-
-            // 4. Restore Signature
-            if (state.signature && signaturePad) {
-                signaturePad.fromDataURL(state.signature);
-            }
-
-            // 4. Note on Waypoints
-            // Waypoints depend on the OFP being loaded. 
-            // If the user reloads the page, waypoints array is empty until they upload PDF.
-            // We save the data in a temporary variable to fill AFTER upload if needed.
+            
+            // 4. Restore Waypoints (Temp storage)
             window.savedWaypointData = state.waypoints;
 
         } catch(e) { console.error("Load error", e); }
