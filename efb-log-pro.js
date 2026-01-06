@@ -1549,13 +1549,13 @@ function renderTables() {
             ];
             frontItems.forEach(f => {
                 const v = el(f.id)?.value;
-                if(f.coord && v) pages[0].drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 8, font: fontB });
+                if(f.coord && v) pages[0].drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
             });
 
             // PIC Block
             const picBlockText = el('view-pic-block')?.innerText || "";
             if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
-                pages[0].drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 9, font: fontB });
+                pages[0].drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
             
             // Reason for Extra Fuel
@@ -1565,7 +1565,7 @@ function renderTables() {
                 pages[0].drawText(reasonText.toUpperCase(), { 
                     x: frontCoords.reasonLabel.transform[4] + 175, 
                     y: frontCoords.reasonLabel.transform[5] + V_LIFT, 
-                    size: 9, 
+                    size: 12, 
                     font: fontB 
                 });
             }
@@ -1574,7 +1574,7 @@ function renderTables() {
             ['altm1','stby','altm2'].forEach(k => {
                 const v = el('front-'+k)?.value;
                 if(frontCoords[k] && v) {
-                    pages[0].drawText(v, { x: frontCoords[k].transform[4] + (k==='stby'?40:50), y: frontCoords[k].transform[5] + V_LIFT, size: 9, font: fontB });
+                    pages[0].drawText(v, { x: frontCoords[k].transform[4] + (k==='stby'?40:50), y: frontCoords[k].transform[5] + V_LIFT, size: 12, font: fontB });
                 }
             });
 
