@@ -1246,15 +1246,33 @@ function renderTables() {
     };
 
     window.showTab = function(id, btn) {
-        document.querySelectorAll('.tool-section').forEach(s => s.classList.remove('active'));
-        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-        if(el('section-'+id)) el('section-'+id).classList.add('active');
-        if(btn) btn.classList.add('active');
-        if(id === 'confirm') validateInputs();
-        if(id === 'journey') setTimeout(() => {
+    // 1. Hide all tabs and deactivate buttons
+    document.querySelectorAll('.tool-section').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    
+    // 2. Show the specific tab and activate button
+    if(el('section-'+id)) el('section-'+id).classList.add('active');
+    if(btn) btn.classList.add('active');
+
+    // 3. Trigger validations when entering Confirm tab
+    if(id === 'confirm') {
+        validateInputs();
+        
+        // --- FIX FOR SIGNATURE OFFSET ---
+        // We wait 50ms for the tab to visually appear so the browser knows the size
+        setTimeout(() => {
             const c = el('sig-canvas');
-            if(c) { c.width = c.offsetWidth; c.height = c.offsetHeight; }
-        }, 100);
+            if(c) { 
+                // Force the canvas to match the screen size of the container
+                c.width = c.offsetWidth; 
+                c.height = c.offsetHeight;
+                
+                // CRITICAL: Resizing the canvas clears it. 
+                // We clear the data model too so the ink doesn't look distorted.
+                if (signaturePad) signaturePad.clear();
+            }
+        }, 50);
+    }
     };
 
     window.toggleTheme = function() {
