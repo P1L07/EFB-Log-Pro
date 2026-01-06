@@ -121,6 +121,23 @@
         validateInputs();
     };
 
+    window.clearSignature = function() {
+    // Check if the pad exists before trying to clear it
+    if (signaturePad) {
+        signaturePad.clear();
+    } else {
+        console.warn("Signature Pad not initialized yet.");
+    }
+
+    // Optional: Clear from storage if you implemented saving
+    let stored = {};
+    try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
+    if(stored.signature) {
+        delete stored.signature;
+        localStorage.setItem('efb_log_state', JSON.stringify(stored));
+    }
+
+    };
     
     window.onload = async function() {
         
@@ -1474,23 +1491,6 @@ function renderTables() {
         }
     };
 
-    window.clearSignature = function() {
-    // Check if the pad exists before trying to clear it
-    if (signaturePad) {
-        signaturePad.clear();
-    } else {
-        console.warn("Signature Pad not initialized yet.");
-    }
-
-    // Optional: Clear from storage if you implemented saving
-    let stored = {};
-    try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
-    if(stored.signature) {
-        delete stored.signature;
-        localStorage.setItem('efb_log_state', JSON.stringify(stored));
-    }
-
-    };
     
     window.triggerEmailOnly = function() { 
         // Get the values from the hidden inputs or summary fields
