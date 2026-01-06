@@ -1050,10 +1050,11 @@ function renderTables() {
                 ? `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="updateTakeoffTime(this.value)" value="${atdVal}">`
                 : `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="${onInputFn}">`;
             
-            let fuelEvent = "syncLastWaypoint()";
-            if (isTO) fuelEvent = "runCalc(); syncLastWaypoint()";
-            
-            const actFuelInput = `<input type="number" id="${pre}-f-${i}" class="input" style="width:70px;padding:8px" oninput="${fuelEvent}">`;
+            let fuelEvent = "syncLastWaypoint(); updateFuelMonitor();"; // Default for all rows
+            if (isTO) {
+                fuelEvent = "runCalc(); syncLastWaypoint(); updateFuelMonitor();";
+            }
+            const actFuelInput = `<input type="number" id="${pre}-f-${i}" ... oninput="${fuelEvent}">`;
             
             const actFlInput = `<input type="number" id="${pre}-agl-${i}" class="input" maxlength="3" style="width:50px;padding:8px;text-align:center;color:var(--accent)" oninput="updateCruiseLevel()">`;
             const notesInput = `<input type="text" id="${pre}-n-${i}" class="input" style="padding:8px; width:100%" placeholder="...">`;
@@ -1205,6 +1206,49 @@ function renderTables() {
         if(lastATO && el('j-on')) el('j-on').value = lastATO;
         if(lastFuel && el('j-shut')) el('j-shut').value = lastFuel;
         calcJourneyTimes(); calcFuel();
+    };
+
+    window.updateFuelMonitor = function() {
+    let latestIndex = -1;
+    let actualFuel = 0;
+    let estimatedFuel = 0;
+
+    // 1. Find the most recent waypoint where you entered actual fuel
+    for (let i = waypoints.length - 1; i >= 0; i--) {
+        const input = el(`o-f-${i}`);
+        if (input && input.value) {
+            actualFuel = parseInt(input.value);
+            estimatedFuel = waypoints[i].fuel; // This is the wp.fuel we calculated in runCalc
+            latestIndex = i;
+            break; // Stop at the most recent one
+        }
+    }
+
+    if (latestIndex === -1) return; // No data entered yet
+
+    // 2. Calculate the difference
+    const diff = actualFuel - estimatedFuel;
+    const diffEl = el('fuel-diff-val');
+    const monitorBar = el('fuel-monitor-bar');
+
+    // 3. Update the UI with colors
+    if (diff >= 0) {
+        diffEl.innerText = `+${diff} kg (OVER)`;
+        diffEl.style.color = "#2ecc71"; // Green (safe)
+        monitorBar.style.borderLeftColor = "#2ecc71";
+    } else {
+        diffEl.innerText = `${diff} kg (UNDER)`;
+        diffEl.style.color = "#e74c3c"; // Red (warning)
+        monitorBar.style.borderLeftColor = "#e74c3c";
+    }
+
+    // 4. Update the Estimated Landing Fuel
+    const lastWp = waypoints[waypoints.length - 1];
+    if (lastWp) {
+        // Your expected landing fuel is the original estimate + the current discrepancy
+        const estLanding = Math.round(lastWp.fuel + diff);
+        safeText('fuel-dest-val', estLanding + " kg");
+    }
     };
 
     function clearOFPInputs() {
@@ -1786,7 +1830,11 @@ async function sharePdf(pdfBytes, filename, subject, body) {
             // 4. Restore Waypoints (Temp storage)
             window.savedWaypointData = state.waypoints;
             calculateExtraFromTotal();
+
+            runCalc();
+            updateFuelMonitor();
         } catch(e) { console.error("Load error", e); }
+
     }
 
     // Trigger Save on any input change
