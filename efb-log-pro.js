@@ -1473,6 +1473,23 @@ function renderTables() {
             location.reload(); 
         }
     };
+
+    window.clearSignature = function() {
+    // Clear the visual canvas
+    if (signaturePad) {
+        signaturePad.clear();
+    }
+    
+    // Clear the saved data from LocalStorage
+    let stored = {};
+    try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
+    
+    // Remove the signature data if you were saving it
+    if(stored.signature) {
+        delete stored.signature;
+        localStorage.setItem('efb_log_state', JSON.stringify(stored));
+    }
+    };
     
     window.triggerEmailOnly = function() { 
         // Get the values from the hidden inputs or summary fields
@@ -1544,6 +1561,10 @@ function renderTables() {
             dutyStartTime: dutyStartTime // Save the calculated duty start
         };
 
+        if (!signaturePad.isEmpty()) {
+            state.signature = signaturePad.toDataURL();
+        }
+
         // 1. Save all simple inputs
         SAVE_IDS.forEach(id => {
             const e = el(id);
@@ -1590,6 +1611,11 @@ function renderTables() {
                 dutyStartTime = state.dutyStartTime;
                 // Re-run the visual update just in case
                 calcDutyLogic(); 
+            }
+
+            // 4. Restore Signature
+            if (state.signature && signaturePad) {
+                signaturePad.fromDataURL(state.signature);
             }
 
             // 4. Note on Waypoints
