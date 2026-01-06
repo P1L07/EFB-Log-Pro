@@ -107,25 +107,6 @@
     // 3. INITIALIZATION & LISTENERS
     // ==========================================
 
-// Initialize Signature Pad when the page loads or when the section becomes visible
-function initializeSignaturePad() {
-    const canvas = document.getElementById('sig-canvas');
-    if (!canvas) return;
-    
-    // Set canvas dimensions
-    canvas.width = canvas.offsetWidth;
-    canvas.height = 200; // Set your desired height
-    
-    // Initialize SignaturePad
-    signaturePad = new SignaturePad(canvas, {
-        backgroundColor: 'rgb(255, 255, 255)', // white background
-        penColor: 'rgb(0, 0, 0)' // black ink
-    });
-    
-    // Enable/disable save button based on signature presence
-    canvas.addEventListener('endStroke', updateSaveButtonState);
-    canvas.addEventListener('beginStroke', updateSaveButtonState);
-}
 
 // Clear signature function
 function clearSignature() {
@@ -163,30 +144,6 @@ function getSignatureBlob() {
         });
     });
 }
-
-// Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', function() {
-    initializeSignaturePad();
-    
-    // Also reinitialize if your section becomes visible dynamically
-    // You might need this if you show/hide sections
-    const observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
-                const section = document.getElementById('section-confirm');
-                if (section && section.style.display !== 'none' && !signaturePad) {
-                    // Small delay to ensure canvas is visible
-                    setTimeout(initializeSignaturePad, 100);
-                }
-            }
-        });
-    });
-    
-    const section = document.getElementById('section-confirm');
-    if (section) {
-        observer.observe(section, { attributes: true });
-    }
-});
 
 window.addEventListener('resize', function() {
     if (signaturePad) {
