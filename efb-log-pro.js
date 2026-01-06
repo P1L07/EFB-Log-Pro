@@ -1044,7 +1044,7 @@ function renderTables() {
             const isTO = (i === 0 && wp.name === "TAKEOFF");
             const atdVal = el('ofp-atd-in')?.value || '';
             
-            const onInputFn = (pre === 'o') ? "syncLastWaypoint(); updateAlternateETOs();" : "syncLastWaypoint()";
+            const onInputFn = (pre === 'o') ? "syncLastWaypoint(); updateAlternateETOs(); updateFuelMonitor();" : "syncLastWaypoint()";
             
             const timeInput = isTO 
                 ? `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="updateTakeoffTime(this.value)" value="${atdVal}">`
@@ -1210,46 +1210,74 @@ function renderTables() {
 
     window.updateFuelMonitor = function() {
     let latestIndex = -1;
-    let actualFuel = 0;
-    let estimatedFuel = 0;
+    let fuelDiff = 0;
+    let timeDiff = 0;
 
-    // 1. Find the most recent waypoint where you entered actual fuel
+    // 1. Scan for the latest entry (Actual Fuel or Actual Time)
     for (let i = waypoints.length - 1; i >= 0; i--) {
-        const input = el(`o-f-${i}`);
-        if (input && input.value) {
-            actualFuel = parseInt(input.value);
-            estimatedFuel = waypoints[i].fuel; // This is the wp.fuel we calculated in runCalc
+        const fInput = el(`o-f-${i}`);
+        const tInput = el(`o-a-${i}`);
+        
+        // Check Fuel
+        if (fInput && fInput.value && latestIndex === -1) {
+            fuelDiff = parseInt(fInput.value) - waypoints[i].fuel;
             latestIndex = i;
-            break; // Stop at the most recent one
+        }
+
+        // Check Time (Only for waypoints that have an ETO)
+        if (tInput && tInput.value && waypoints[i].eto) {
+            const atoStr = tInput.value.replace(':', ''); // e.g. "12:30" -> "1230"
+            const etoStr = waypoints[i].eto;
+            
+            // Convert to minutes for comparison
+            const atoMins = parseInt(atoStr.substring(0,2)) * 60 + parseInt(atoStr.substring(2,4));
+            const etoMins = parseInt(etoStr.substring(0,2)) * 60 + parseInt(etoStr.substring(2,4));
+            
+            timeDiff = atoMins - etoMins;
+            
+            // Handle day-crossing (midnight)
+            if (timeDiff > 720) timeDiff -= 1440;
+            if (timeDiff < -720) timeDiff += 1440;
+            
+            // We use the most recent time entry for the display
+            const timeStatus = el('time-status');
+            if (timeStatus) {
+                if (timeDiff > 0) {
+                    timeStatus.innerText = `TIME: ${timeDiff} MIN LATE`;
+                    timeStatus.style.color = "#e74c3c";
+                } else if (timeDiff < 0) {
+                    timeStatus.innerText = `TIME: ${Math.abs(timeDiff)} MIN EARLY`;
+                    timeStatus.style.color = "#2ecc71";
+                } else {
+                    timeStatus.innerText = `TIME: ON TIME`;
+                    timeStatus.style.color = "var(--dim)";
+                }
+            }
+            break; // Stop after finding the latest time
         }
     }
 
-    if (latestIndex === -1) return; // No data entered yet
+    // 2. Update Fuel UI
+    if (latestIndex !== -1) {
+        const diffEl = el('fuel-diff-val');
+        const monitorBar = el('fuel-monitor-bar');
+        const destEl = el('fuel-dest-val');
+        
+        const lastWp = waypoints[waypoints.length - 1];
+        const estAtDest = Math.round(lastWp.fuel + fuelDiff);
 
-    // 2. Calculate the difference
-    const diff = actualFuel - estimatedFuel;
-    const diffEl = el('fuel-diff-val');
-    const monitorBar = el('fuel-monitor-bar');
-
-    // 3. Update the UI with colors
-    if (diff >= 0) {
-        diffEl.innerText = `+${diff} kg (OVER)`;
-        diffEl.style.color = "#2ecc71"; // Green (safe)
-        monitorBar.style.borderLeftColor = "#2ecc71";
-    } else {
-        diffEl.innerText = `${diff} kg (UNDER)`;
-        diffEl.style.color = "#e74c3c"; // Red (warning)
-        monitorBar.style.borderLeftColor = "#e74c3c";
+        if (fuelDiff >= 0) {
+            diffEl.innerText = `+${Math.round(fuelDiff)} kg`;
+            diffEl.style.color = "#2ecc71";
+            monitorBar.style.borderLeftColor = "#2ecc71";
+        } else {
+            diffEl.innerText = `${Math.round(fuelDiff)} kg`;
+            diffEl.style.color = "#e74c3c";
+            monitorBar.style.borderLeftColor = "#e74c3c";
+        }
+        destEl.innerText = `${estAtDest} kg`;
     }
-
-    // 4. Update the Estimated Landing Fuel
-    const lastWp = waypoints[waypoints.length - 1];
-    if (lastWp) {
-        // Your expected landing fuel is the original estimate + the current discrepancy
-        const estLanding = Math.round(lastWp.fuel + diff);
-        safeText('fuel-dest-val', estLanding + " kg");
-    }
-    };
+};
 
     function clearOFPInputs() {
         // 1. Clear Front Page / Summary Inputs
