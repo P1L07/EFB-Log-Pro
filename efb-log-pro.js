@@ -230,26 +230,43 @@
     // 4. OFP PARSING LOGIC
     // ==========================================
 async function runAnalysis(fileOrEvent) {
-        let blob = null;
+    let blob = null;
     let isAutoLoad = false;
 
-    // 1. Determine if this is an Auto-Load (Blob passed in) or Manual Upload (from Input)
     if (fileOrEvent instanceof Blob) {
+        // Auto-load on startup
         blob = fileOrEvent;
-        isAutoLoad = true; // Mark as auto-load so we don't wipe user data
+        isAutoLoad = true; 
     } else {
+        // Manual Upload via Button
         const fileInput = el('ofp-file-in');
         if (fileInput && fileInput.files.length > 0) {
             blob = fileInput.files[0];
-            // It's a manual upload -> Save to DB for next time
             savePdfToDB(blob); 
+            
+            // --- SMART RESET LOGIC ---
+            // We want to clear old OFP inputs but KEEP the Journey Log legs.
+            
+            // 1. Read current saved data
+            let stored = {};
+            try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
+            
+            // 2. Wipe ONLY the OFP inputs and Waypoints
+            stored.inputs = {}; 
+            stored.waypoints = [];
+            // NOTE: We do NOT touch 'stored.dailyLegs'. They are safe!
+            
+            // 3. Save the cleaned state back to storage
+            localStorage.setItem('efb_log_state', JSON.stringify(stored));
+            
+            // 4. Clear the memory variable so old data doesn't ghost in
+            window.savedWaypointData = [];
         }
     }
 
-    if (!blob) return; // No file found, stop.
+    if (!blob) return;
 
-    // 2. Only clear inputs if it's a MANUAL upload.
-    // If we are reloading from DB, we want to keep the saved inputs (localStorage).
+    // Only clear visual inputs if it's a MANUAL upload
     if (!isAutoLoad) {
         clearOFPInputs();
     }
@@ -762,7 +779,6 @@ async function runAnalysis(fileOrEvent) {
     }
 
     if (!stdStr) {
-        console.error("Duty Calc Error: No STD found");
         return; 
     }
 
