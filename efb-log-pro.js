@@ -1787,22 +1787,23 @@ function renderTables() {
                     page.drawText(maxFDP, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
             }
 
-            const out = await pdfDoc.save();
-            const filename = "Journey_Log_Filled.pdf";
+            const out = await pdfDoc.save(); 
             
-            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            // 2. Construct the filename
+            const flt = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
+            const filename = `JOURNEY_LOG_${flt}.pdf`;
+            
+            // 3. Device detection
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || 
+                             (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
 
-            // Logic: Even if 'email' mode is requested, force 'download' for computers
             if (mode === 'email' && isMobile) {
-                // SHARING/EMAIL (iPad/Mobile only)
-                const flt = el('j-flt')?.value || "FLT";
-                const date = el('j-date')?.value || "DATE";
-                const subject = `OFP: ${flt} ${date}`;
-                
-                await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
+                const subject = `Journey Log: ${flt}`;
+                // Error was here: you must pass 'out' because that's where the data is
+                await sharePdf(out, filename, subject, "Journey Log attached.");
             } else {
-                // DOWNLOAD (Computers or manual download mode)
-                downloadBlob(bytes, filename);
+                // Error was here: you must pass 'out'
+                downloadBlob(out, filename);
             }
 
         } catch(e) { console.error(e); alert("Error generating Log: " + e.message); }
