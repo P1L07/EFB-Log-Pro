@@ -16,6 +16,29 @@
 <script src="efb-log-pro.js"></script>
 
 <style>
+
+#sig-canvas {
+    display: block !important;
+    width: 100% !important;
+    height: 150px !important;
+    background-color: white !important;
+    border: 2px dashed #666 !important;
+    border-radius: 4px;
+    cursor: crosshair;
+    touch-action: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+}
+
+.signature-container {
+    min-height: 150px;
+    margin: 20px 0;
+    padding: 10px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 8px;
+}
+
 /* Drag & Drop Highlight */
 .nav-btn.drag-over {
     border: 2px dashed #fff !important;
@@ -597,7 +620,7 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
                 <div id="validation-list" style="margin-bottom: 10px;"></div>
             
                 <h3>Signature</h3>
-                <canvas id="sig-canvas"></canvas>
+                <canvas id="signature-pad" width="600" height="200" style="touch-action: none;"></canvas>
                 <button class="btn" style="background:#444; margin-top:10px; margin-bottom:10px; padding:7px" onclick="clearSignature()">Clear Signature</button>
                 <div class="btn-group">
                     <button id="btn-save-ofp" class="btn btn-save" onclick="runDownload('email')" disabled>Send OFP</button>
