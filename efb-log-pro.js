@@ -1475,20 +1475,21 @@ function renderTables() {
     };
 
     window.clearSignature = function() {
-    // Clear the visual canvas
+    // Check if the pad exists before trying to clear it
     if (signaturePad) {
         signaturePad.clear();
+    } else {
+        console.warn("Signature Pad not initialized yet.");
     }
-    
-    // Clear the saved data from LocalStorage
+
+    // Optional: Clear from storage if you implemented saving
     let stored = {};
     try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
-    
-    // Remove the signature data if you were saving it
     if(stored.signature) {
         delete stored.signature;
         localStorage.setItem('efb_log_state', JSON.stringify(stored));
     }
+
     };
     
     window.triggerEmailOnly = function() { 
