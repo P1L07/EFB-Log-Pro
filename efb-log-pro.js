@@ -145,6 +145,14 @@ function getSignatureBlob() {
     });
 }
 
+window.saveSignatureToMemory = function() {
+    if (signaturePad && !signaturePad.isEmpty()) {
+        // We save the raw point data instead of an image 
+        // This is much safer against shrinking!
+        savedSignatureData = signaturePad.toDataURL(); 
+    }
+};
+
 window.addEventListener('resize', function() {
     if (signaturePad) {
         const canvas = document.getElementById('sig-canvas');
@@ -156,6 +164,7 @@ window.addEventListener('resize', function() {
 // Make functions available globally if needed
 window.clearSignature = clearSignature;
 window.getSignatureDataURL = getSignatureDataURL;
+
 
     // --- VALIDATION HELPERS ---
     window.validateAltimeter = function(el) {
@@ -1457,30 +1466,47 @@ function renderTables() {
 
     // 2. RESTORE when entering Confirm
     if(id === 'confirm') {
-        validateInputs();
-        
-        setTimeout(() => {
-            const canvas = el('sig-canvas');
-            if (canvas) {
-                // Adjust canvas resolution to match its display size
-                canvas.width = canvas.offsetWidth;
-                canvas.height = canvas.offsetHeight;
+    validateInputs();
+    
+    setTimeout(() => {
+        const canvas = el('sig-canvas');
+        if (canvas) {
+            const ratio = Math.max(window.devicePixelRatio || 1, 1);
+            
+            // 1. Capture current size
+            const newWidth = canvas.offsetWidth;
+            const newHeight = canvas.offsetHeight;
 
-                // Initialize or Re-initialize the pad
-                if (!signaturePad) {
-                    signaturePad = new SignaturePad(canvas, {
-                        backgroundColor: 'rgba(255, 255, 255, 0)', // Transparent
-                        penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || 'rgb(10, 132, 255)'
-                    });
-                }
-
-                // If we have saved ink, put it back
-                if (savedSignatureData) {
-                    signaturePad.fromDataURL(savedSignatureData);
-                }
+            // 2. Only perform resize logic if size is different to prevent shrinking loop
+            if (canvas.width !== newWidth * ratio || canvas.height !== newHeight * ratio) {
+                canvas.width = newWidth * ratio;
+                canvas.height = newHeight * ratio;
+                canvas.getContext("2d").scale(ratio, ratio);
+                
+                // If we resize, we MUST re-init the pad
+                if (signaturePad) signaturePad.off(); // Kill old listeners
+                signaturePad = new SignaturePad(canvas, {
+                    backgroundColor: 'rgba(0,0,0,0)',
+                    penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+                });
             }
-        }, 50);
-    }
+
+            // 3. Initialize if first time
+            if (!signaturePad) {
+                signaturePad = new SignaturePad(canvas, {
+                    backgroundColor: 'rgba(0,0,0,0)',
+                    penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+                });
+            }
+
+            // 4. Restore Ink - USE 'fromData' instead of 'fromDataURL' if possible
+            // but if using DataURL, this check prevents the shrinking feedback loop
+            if (savedSignatureData) {
+                signaturePad.fromDataURL(savedSignatureData, { ratio: ratio });
+            }
+        }
+    }, 50);
+}
 };
 
 
