@@ -17,26 +17,18 @@
 
 <style>
 
-#sig-canvas {
-    display: block !important;
-    width: 100% !important;
-    height: 150px !important;
-    background-color: white !important;
-    border: 2px dashed #666 !important;
-    border-radius: 4px;
-    cursor: crosshair;
-    touch-action: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    user-select: none;
+.signature-container {
+    width: 100%;
+    margin-top: 10px;
 }
 
-.signature-container {
-    min-height: 150px;
-    margin: 20px 0;
-    padding: 10px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 8px;
+#sig-canvas {
+    width: 100%;
+    height: 200px; /* Fixed height for the pad */
+    background: var(--input); /* Matches your theme */
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    touch-action: none; /* Prevents iPad from scrolling while signing */
 }
 
 /* Drag & Drop Highlight */

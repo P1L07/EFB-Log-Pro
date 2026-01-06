@@ -71,10 +71,12 @@
     // ==========================================
     let ofpPdfBytes = null, originalFileName = "Logged_OFP.pdf";
     let journeyLogTemplateBytes = null;
-    let waypoints = [], alternateWaypoints = [], dailyLegs = [], signaturePad = null;
+    let waypoints = [], alternateWaypoints = [], dailyLegs = [], signaturePad = null; let savedSignatureData = null;
     let fuelData = [];
     let blockFuelValue = 0;
     let dutyStartTime = null;
+
+
     
     let frontCoords = { 
         atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null 
@@ -104,6 +106,99 @@
     // ==========================================
     // 3. INITIALIZATION & LISTENERS
     // ==========================================
+
+// Initialize Signature Pad when the page loads or when the section becomes visible
+function initializeSignaturePad() {
+    const canvas = document.getElementById('sig-canvas');
+    if (!canvas) return;
+    
+    // Set canvas dimensions
+    canvas.width = canvas.offsetWidth;
+    canvas.height = 200; // Set your desired height
+    
+    // Initialize SignaturePad
+    signaturePad = new SignaturePad(canvas, {
+        backgroundColor: 'rgb(255, 255, 255)', // white background
+        penColor: 'rgb(0, 0, 0)' // black ink
+    });
+    
+    // Enable/disable save button based on signature presence
+    canvas.addEventListener('endStroke', updateSaveButtonState);
+    canvas.addEventListener('beginStroke', updateSaveButtonState);
+}
+
+// Clear signature function
+function clearSignature() {
+    if (signaturePad) {
+        signaturePad.clear();
+        updateSaveButtonState();
+    }
+}
+
+// Update save button state based on whether signature exists
+function updateSaveButtonState() {
+    const saveButton = document.getElementById('btn-save-ofp');
+    if (!signaturePad || saveButton === null) return;
+    
+    saveButton.disabled = signaturePad.isEmpty();
+}
+
+// Get signature as data URL (for saving/sending)
+function getSignatureDataURL() {
+    if (!signaturePad || signaturePad.isEmpty()) {
+        return null;
+    }
+    return signaturePad.toDataURL(); // returns PNG image as base64
+}
+
+// Get signature as blob (for file upload)
+function getSignatureBlob() {
+    if (!signaturePad || signaturePad.isEmpty()) {
+        return null;
+    }
+    
+    return new Promise((resolve) => {
+        signaturePad.toBlob((blob) => {
+            resolve(blob);
+        });
+    });
+}
+
+// Initialize when DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    initializeSignaturePad();
+    
+    // Also reinitialize if your section becomes visible dynamically
+    // You might need this if you show/hide sections
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+                const section = document.getElementById('section-confirm');
+                if (section && section.style.display !== 'none' && !signaturePad) {
+                    // Small delay to ensure canvas is visible
+                    setTimeout(initializeSignaturePad, 100);
+                }
+            }
+        });
+    });
+    
+    const section = document.getElementById('section-confirm');
+    if (section) {
+        observer.observe(section, { attributes: true });
+    }
+});
+
+window.addEventListener('resize', function() {
+    if (signaturePad) {
+        const canvas = document.getElementById('sig-canvas');
+        canvas.width = canvas.offsetWidth;
+        signaturePad.clear(); // Clearing redraws with new dimensions
+    }
+});
+
+// Make functions available globally if needed
+window.clearSignature = clearSignature;
+window.getSignatureDataURL = getSignatureDataURL;
 
     // --- VALIDATION HELPERS ---
     window.validateAltimeter = function(el) {
@@ -1389,18 +1484,45 @@ function renderTables() {
     };
 
     window.showTab = function(id, btn) {
-    
-    // 1. Hide all tabs and deactivate buttons
+    // 1. SAVE before leaving
+    const activeSection = document.querySelector('.tool-section.active');
+    if (activeSection && activeSection.id === 'section-confirm' && signaturePad) {
+        if (!signaturePad.isEmpty()) {
+            savedSignatureData = signaturePad.toDataURL(); 
+        }
+    }
+
+    // Standard tab switching
     document.querySelectorAll('.tool-section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    
-    // 2. Show the specific tab and activate button
     if(el('section-'+id)) el('section-'+id).classList.add('active');
     if(btn) btn.classList.add('active');
 
-    // 3. Special handling for Confirm tab
+    // 2. RESTORE when entering Confirm
     if(id === 'confirm') {
         validateInputs();
+        
+        setTimeout(() => {
+            const canvas = el('sig-canvas');
+            if (canvas) {
+                // Adjust canvas resolution to match its display size
+                canvas.width = canvas.offsetWidth;
+                canvas.height = canvas.offsetHeight;
+
+                // Initialize or Re-initialize the pad
+                if (!signaturePad) {
+                    signaturePad = new SignaturePad(canvas, {
+                        backgroundColor: 'rgba(255, 255, 255, 0)', // Transparent
+                        penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || 'rgb(10, 132, 255)'
+                    });
+                }
+
+                // If we have saved ink, put it back
+                if (savedSignatureData) {
+                    signaturePad.fromDataURL(savedSignatureData);
+                }
+            }
+        }, 50);
     }
 };
 
