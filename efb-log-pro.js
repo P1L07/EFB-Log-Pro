@@ -1652,6 +1652,31 @@ function renderTables() {
                 });
             });
 
+            // --- SIGNATURE DRAWING SECTION ---
+            // 1. Check if the signature exists and isn't empty
+            if (signaturePad && !signaturePad.isEmpty()) {
+                try {
+                    // 2. Get the Base64 image data (PNG format)
+                    const sigImageBase64 = signaturePad.toDataURL();
+                    
+                    // 3. Embed the PNG into the PDF
+                    const sigImage = await pdfDoc.embedPng(sigImageBase64);
+                    
+                    // 4. Set the position and size (Adjust x, y, width, height as needed)
+                    // Usually signatures go near the bottom right of the Journey Log
+                    const sigDims = sigImage.scale(0.5); // Scales image to 50% size
+                    
+                    page.drawImage(sigImage, {
+                        x: 570,        // Horizontal position (Adjust for your PDF)
+                        y: 120,         // Vertical position (Adjust for your PDF)
+                        width: 200,    // Signature width
+                        height: 50,    // Signature height
+                    });
+                } catch (sigError) {
+                    console.error("Signature Embedding Error:", sigError);
+                }
+            }
+
             // --- CREW DATA SECTION (UPDATED) ---
             const crewStart = 333; 
             const crewGap = 17;    
