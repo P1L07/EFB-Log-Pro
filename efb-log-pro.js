@@ -75,7 +75,6 @@
     let fuelData = [];
     let blockFuelValue = 0;
     let dutyStartTime = null;
-    let signatureDataURL = null;
     
     let frontCoords = { 
         atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null 
@@ -106,36 +105,6 @@
     // 3. INITIALIZATION & LISTENERS
     // ==========================================
 
-    window.testSignature = function() {
-        const canvas = el('sig-canvas');
-        if (!canvas) {
-            console.error("Canvas not found");
-            return;
-        }
-        
-        if (!signaturePad) {
-            console.error("Signature pad not initialized");
-            return;
-        }
-        
-        // Test direct drawing
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'red';
-        ctx.fillRect(10, 10, 50, 50);
-        console.log("Canvas test - drew red rectangle");
-        
-        // Test signature pad
-        console.log("Signature pad initialized:", !!signaturePad);
-        console.log("Canvas dimensions:", canvas.width, "x", canvas.height);
-        console.log("Canvas actual size:", canvas.offsetWidth, "x", canvas.offsetHeight);
-        console.log("Is empty:", signaturePad.isEmpty());
-        
-        // Test if canvas is clickable
-        canvas.style.border = "2px solid green";
-        setTimeout(() => {
-            canvas.style.border = "";
-        }, 1000);
-    };
     // --- VALIDATION HELPERS ---
     window.validateAltimeter = function(el) {
         // Allow only 4 digits
@@ -175,50 +144,6 @@
     validateInputs();
     };
 
-   window.clearSignature = function() {
-    const canvas = el('sig-canvas');
-    if (canvas) {
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        signatureDataURL = null;
-        
-        // Clear from localStorage
-        let stored = {};
-        try { 
-            stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; 
-        } catch(e) {}
-        
-        if(stored.signature) {
-            delete stored.signature;
-            localStorage.setItem('efb_log_state', JSON.stringify(stored));
-        }
-        
-        console.log("Signature cleared");
-    }
-};
-
-function saveSignature() {
-    const canvas = el('sig-canvas');
-    if (canvas) {
-        // Check if canvas has any drawing
-        const ctx = canvas.getContext('2d');
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        let hasDrawing = false;
-        
-        // Check if any pixels are not transparent
-        for (let i = 3; i < imageData.data.length; i += 4) {
-            if (imageData.data[i] > 0) {
-                hasDrawing = true;
-                break;
-            }
-        }
-        
-        if (hasDrawing) {
-            signatureDataURL = canvas.toDataURL();
-            console.log("Signature saved");
-        }
-    }
-}
     
     window.onload = async function() {
         
@@ -290,9 +215,6 @@ function saveSignature() {
             const e = el(id);
             if(e) e.addEventListener('input', validateInputs);
         });
-
-        // Signature Pad
-        initializeSignaturePad();
 
         validateInputs();
 
@@ -589,112 +511,6 @@ async function runAnalysis(fileOrEvent) {
         updateAlternateETOs();
         }
     }
-
-    let isDrawing = false;
-let lastX = 0;
-let lastY = 0;
-
-function initializeSignaturePad() {
-    const canvas = el('sig-canvas');
-    if (!canvas) {
-        console.error("Signature canvas not found");
-        return;
-    }
-    
-    // Set canvas size
-    canvas.width = canvas.offsetWidth || 400;
-    canvas.height = 150;
-    
-    const ctx = canvas.getContext('2d');
-    
-    // Style
-    canvas.style.border = '2px dashed #666';
-    canvas.style.borderRadius = '4px';
-    canvas.style.backgroundColor = 'white';
-    canvas.style.cursor = 'crosshair';
-    
-    // Drawing functions
-    function startDrawing(e) {
-        isDrawing = true;
-        [lastX, lastY] = getMousePos(canvas, e);
-        e.preventDefault();
-    }
-    
-    function draw(e) {
-        if (!isDrawing) return;
-        e.preventDefault();
-        
-        const [x, y] = getMousePos(canvas, e);
-        
-        ctx.beginPath();
-        ctx.moveTo(lastX, lastY);
-        ctx.lineTo(x, y);
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.stroke();
-        
-        [lastX, lastY] = [x, y];
-    }
-    
-    function stopDrawing() {
-        isDrawing = false;
-        saveSignature();
-    }
-    
-    function getMousePos(canvas, evt) {
-        const rect = canvas.getBoundingClientRect();
-        let clientX, clientY;
-        
-        if (evt.type.includes('touch')) {
-            clientX = evt.touches[0].clientX;
-            clientY = evt.touches[0].clientY;
-        } else {
-            clientX = evt.clientX;
-            clientY = evt.clientY;
-        }
-        
-        return [
-            clientX - rect.left,
-            clientY - rect.top
-        ];
-    }
-    
-    // Clear the existing signature pad and use manual drawing
-    signaturePad = null; // Clear the SignaturePad instance
-    
-    // Add event listeners
-    canvas.addEventListener('mousedown', startDrawing);
-    canvas.addEventListener('mousemove', draw);
-    canvas.addEventListener('mouseup', stopDrawing);
-    canvas.addEventListener('mouseout', stopDrawing);
-    
-    // Touch events for mobile
-    canvas.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        startDrawing(e);
-    });
-    canvas.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        draw(e);
-    });
-    canvas.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        stopDrawing();
-    });
-    
-    // Restore saved signature if exists
-    if (signatureDataURL) {
-        const img = new Image();
-        img.onload = function() {
-            ctx.drawImage(img, 0, 0);
-        };
-        img.src = signatureDataURL;
-    }
-    
-    console.log("Manual signature pad initialized");
-}
 
     // --- PARSING HELPERS ---
     
@@ -1458,32 +1274,6 @@ function renderTables() {
 };
 
 
-    window.cachedSignature = null;
-
-    function saveSignatureToMemory() {
-        const canvas = el('sig-canvas');
-        if (canvas && signaturePad && !signaturePad.isEmpty()) {
-            signatureDataURL = signaturePad.toDataURL();
-        }
-    }
-
-
-    function restoreSignatureFromMemory() {
-        if (!signatureDataURL) return;
-        
-        const canvas = el('sig-canvas');
-        if (canvas && signaturePad) {
-            const img = new Image();
-            img.onload = () => {
-                // Clear the pad first
-                signaturePad.clear();
-                // Draw the saved signature
-                signaturePad.fromDataURL(signatureDataURL);
-            };
-            img.src = signatureDataURL;
-        }
-    }
-
     function clearOFPInputs() {
         // 1. Clear Front Page / Summary Inputs
         ['front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'front-extra-kg', 'front-extra-reason'].forEach(id => safeSet(id, ''));
@@ -1599,8 +1389,6 @@ function renderTables() {
     };
 
     window.showTab = function(id, btn) {
-    // Save signature before switching tabs
-    saveSignature();
     
     // 1. Hide all tabs and deactivate buttons
     document.querySelectorAll('.tool-section').forEach(s => s.classList.remove('active'));
@@ -1613,87 +1401,8 @@ function renderTables() {
     // 3. Special handling for Confirm tab
     if(id === 'confirm') {
         validateInputs();
-        
-        // Reinitialize signature pad
-        setTimeout(() => {
-            initializeSignaturePad();
-        }, 100);
     }
 };
-    
-    // 1. Hide all tabs and deactivate buttons
-    document.querySelectorAll('.tool-section').forEach(s => s.classList.remove('active'));
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    
-    // 2. Show the specific tab and activate button
-    if(el('section-'+id)) el('section-'+id).classList.add('active');
-    if(btn) btn.classList.add('active');
-
-    // 3. Special handling for Confirm tab
-    if(id === 'confirm') {
-        validateInputs();
-        
-        // Initialize/Reinitialize signature pad with delay
-        setTimeout(() => {
-            const canvas = el('sig-canvas');
-            if(canvas) {
-                const container = canvas.parentElement;
-                const width = container ? container.clientWidth : 400;
-                const height = container ? container.clientHeight * 0.8 : 150;
-                
-                // Only resize if dimensions actually changed
-                if (canvas.width !== width || canvas.height !== height) {
-                    // Preserve current signature
-                    const currentSig = signaturePad ? signaturePad.toDataURL() : null;
-                    
-                    // Set new dimensions
-                    canvas.width = width;
-                    canvas.height = height;
-                    
-                    // Reinitialize signature pad
-                    signaturePad = new SignaturePad(canvas, {
-                        backgroundColor: 'rgba(255, 255, 255, 0)',
-                        penColor: 'rgb(0, 0, 0)',
-                        minWidth: 1,
-                        maxWidth: 3,
-                        throttle: 16
-                    });
-                    
-                    // Restore signature if it exists
-                    if (signatureDataURL || currentSig) {
-                        setTimeout(() => {
-                            signaturePad.fromDataURL(signatureDataURL || currentSig);
-                        }, 50);
-                    }
-                } else if (!signaturePad) {
-                    // Initialize if not exists
-                    signaturePad = new SignaturePad(canvas, {
-                        backgroundColor: 'rgba(255, 255, 255, 0)',
-                        penColor: 'rgb(0, 0, 0)',
-                        minWidth: 1,
-                        maxWidth: 3,
-                        throttle: 16
-                    });
-                    
-                    // Restore saved signature
-                    if (signatureDataURL) {
-                        setTimeout(() => {
-                            signaturePad.fromDataURL(signatureDataURL);
-                        }, 50);
-                    }
-                } else if (signatureDataURL && signaturePad.isEmpty()) {
-                    // Restore signature if pad is empty but we have saved data
-                    setTimeout(() => {
-                        signaturePad.fromDataURL(signatureDataURL);
-                    }, 50);
-                }
-                
-                // Add CSS to ensure canvas is visible and interactive
-                canvas.style.display = 'block';
-                canvas.style.touchAction = 'none'; // Important for touch devices
-            }
-        }, 150); // Increased delay for better rendering
-    }
 
 
     window.toggleTheme = function() {
@@ -1898,29 +1607,6 @@ function renderTables() {
                     page.drawText(maxFDP, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
             }
 
-            // D. Signature
-            const canvas = el('sig-canvas');
-            if (canvas) {
-                // Check if canvas has any drawing
-                const ctx = canvas.getContext('2d');
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                let hasDrawing = false;
-                
-                for (let i = 3; i < imageData.data.length; i += 4) {
-                    if (imageData.data[i] > 0) {
-                        hasDrawing = true;
-                        break;
-                    }
-                }
-                
-                if (hasDrawing) {
-                    const pngDataUrl = canvas.toDataURL('image/png');
-                    const pngImage = await pdfDoc.embedPng(pngDataUrl);
-                    const sigConf = JOURNEY_CONFIG.sig;
-                    page.drawImage(pngImage, { x: sigConf.x, y: sigConf.y, width: sigConf.width, height: sigConf.height });
-                }
-            }
-
             const out = await pdfDoc.save();
             const filename = "Journey_Log_Filled.pdf";
             
@@ -2009,8 +1695,6 @@ async function sharePdf(pdfBytes, filename, subject, body) {
 
     window.resetApp = async function() {
     if(confirm("Start new flight? This will clear all saved data.")) {
-        signatureDataURL = null;
-        if (signaturePad) signaturePad.clear();
         localStorage.removeItem('efb_log_state');
         await clearPdfDB();
         location.reload(); 
@@ -2088,13 +1772,6 @@ async function sharePdf(pdfBytes, filename, subject, body) {
             dutyStartTime: dutyStartTime // Save the calculated duty start
         };
 
-        // Save signature if exists
-        saveSignature();
-        if (signatureDataURL) {
-            state.signature = signatureDataURL;
-            console.log("Signature saved to state");
-        }
-
         // 1. Save all simple inputs
         SAVE_IDS.forEach(id => {
             const e = el(id);
@@ -2151,11 +1828,6 @@ async function sharePdf(pdfBytes, filename, subject, body) {
             // 4. Restore Waypoints (Temp storage)
             window.savedWaypointData = state.waypoints;
             calculateExtraFromTotal();
-
-            // 5. Restore signature
-            if(state.signature) {
-                signatureDataURL = state.signature;
-            }
             runCalc();
             updateFuelMonitor();
 
@@ -2214,34 +1886,4 @@ async function sharePdf(pdfBytes, filename, subject, body) {
         tx.objectStore("files").delete("currentOFP");
     }
 
-    document.addEventListener('DOMContentLoaded', function() {
-    // Add a debug button (optional - can be removed later)
-    const debugBtn = document.createElement('button');
-    debugBtn.innerHTML = '🛠️ Debug Sig';
-    debugBtn.style.position = 'fixed';
-    debugBtn.style.bottom = '10px';
-    debugBtn.style.right = '10px';
-    debugBtn.style.zIndex = '9999';
-    debugBtn.style.padding = '5px 10px';
-    debugBtn.style.fontSize = '12px';
-    debugBtn.style.backgroundColor = '#333';
-    debugBtn.style.color = 'white';
-    debugBtn.style.border = '1px solid #666';
-    debugBtn.style.borderRadius = '4px';
-    debugBtn.onclick = window.testSignature;
-    document.body.appendChild(debugBtn);
-    
-    // Make signature container clickable
-    const sigContainer = document.querySelector('.signature-container');
-    if (sigContainer) {
-        sigContainer.addEventListener('click', function(e) {
-            // If clicking on the container but not the canvas, focus the canvas
-            const canvas = el('sig-canvas');
-            if (canvas && e.target !== canvas) {
-                canvas.focus();
-                console.log("Signature canvas focused");
-            }
-        });
-    }
-});
 })();
