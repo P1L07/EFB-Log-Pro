@@ -1526,7 +1526,16 @@ async function sharePdf(pdfBytes, filename, subject, body) {
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
     const file = new File([blob], filename, { type: 'application/pdf' });
 
-    // 2. Check if the device supports native file sharing (iPad/iPhone do)
+    // 2. Copy the target email to clipboard automatically
+    try {
+        await navigator.clipboard.writeText("ofp@airastana.com");
+        // Optional: Alert the user so they know
+        // alert("Email 'ofp@airastana.com' copied to clipboard! Paste it in the To: field.");
+    } catch (err) {
+        console.log("Clipboard write failed", err);
+    }
+
+    // 3. Check if the device supports native file sharing (iPad/iPhone do)
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
             await navigator.share({
