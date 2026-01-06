@@ -139,7 +139,8 @@
 
     extraInput.value = diff;
     
-    // Trigger validation updates
+    // --- NEW: Update the Flight Log Table immediately ---
+    runCalc();       // Re-run the fuel math for all waypoints
     validateInputs();
     };
 
@@ -498,18 +499,30 @@ async function runAnalysis(fileOrEvent) {
                 }
             }
         } 
+        
+        waypoints.forEach(wp => {
+            // Your parser uses 'fob' to store the PDF value, 
+            // so we save that into 'baseFuel' for our math.
+            wp.baseFuel = parseInt(wp.fob) || 0; 
+            wp.fuel = wp.baseFuel; // Set initial estimated fuel
+        });
 
         processWaypointsList();
+        
+        // --- AUTO-FILL PIC BLOCK ---
+        // Ensure the input field shows the OFP block fuel immediately
+        if (el('view-pic-block')) {
+            el('view-pic-block').value = blockFuelValue || 0;
+        }
+
         runCalc(); 
         validateInputs();
         renderFuelTable();
-        calculatePICBlock();
+        // calculatePICBlock(); // You can remove this if you deleted the function earlier
+        renderTables();
 
-        //Check if we have saved data waiting to be filled
-        // RESTORE USER INPUTS
-        // If we just parsed the PDF, it might have overwritten your manual changes (like Block Time).
-        // We re-run loadState() here to ensure your saved manual inputs take priority over the PDF defaults.
-        loadState(); 
+        // RESTORE USER INPUTS (Keep the rest of your logic below)
+        loadState();
         
         // Also re-apply the Waypoint Table data specifically
         if (window.savedWaypointData && window.savedWaypointData.length > 0) {
@@ -668,32 +681,69 @@ async function runAnalysis(fileOrEvent) {
         return h*60 + m;
     }
 
-    function runCalc() {
-        const atd = el('ofp-atd-in')?.value;
+window.runCalc = function() {
+    const atd = el('ofp-atd-in')?.value;
+    
+    // 1. Determine Baseline & Start Fuel
+    const pdfTakeoffFuel = waypoints[0] ? (waypoints[0].baseFuel || parseInt(waypoints[0].fuel)) : 0;
+    
+    let startFuelInput = el('o-f-0');
+    let currentStartFuel = 0;
 
-        // 1. Calculate Primary Route ETOs (Standard)
-        waypoints.forEach((wp, index) => {
-            if (index === 0 && wp.name === "TAKEOFF") {
-                wp.eto = atd ? atd.replace(':', '') : "";
-                return;
-            }
-            if(!atd) wp.eto = "";
-            else {
+    if (startFuelInput && startFuelInput.value) {
+        currentStartFuel = parseInt(startFuelInput.value);
+    } else {
+        // Fallback calculation
+        let block = parseInt(el('view-pic-block')?.value) || blockFuelValue || 0;
+        let taxi = 200; 
+        if (blockFuelValue && pdfTakeoffFuel) taxi = blockFuelValue - pdfTakeoffFuel;
+        currentStartFuel = block - taxi;
+    }
+
+    // 2. Calculate Delta
+    const delta = currentStartFuel - pdfTakeoffFuel;
+
+    // 3. Update Loop
+    waypoints.forEach((wp, index) => {
+        // If baseFuel wasn't set in runAnalysis for some reason, try to grab it now
+        if (wp.baseFuel === undefined || wp.baseFuel === 0) {
+            wp.baseFuel = parseInt(wp.fob) || parseInt(wp.fuel) || 0;
+        }
+
+        // Calc New Fuel
+        let newFuel = 0;
+        if (wp.baseFuel > 0) {
+            newFuel = wp.baseFuel + delta;
+            wp.fuel = newFuel; 
+        }
+
+        // Calc ETO
+        if (index === 0 && wp.name === "TAKEOFF") {
+            wp.eto = atd ? atd.replace(':', '') : "";
+        } else {
+            if(!atd) {
+                wp.eto = "";
+            } else {
                 const [h,m] = atd.split(':').map(Number);
                 const base = new Date(Date.UTC(2000,0,1,h,m));
                 const target = new Date(base.getTime() + (wp.totalMins * 60000));
                 wp.eto = target.getUTCHours().toString().padStart(2,'0') + 
                          target.getUTCMinutes().toString().padStart(2,'0');
             }
-        });
+        }
 
-        // 2. Render Tables (Draws Primary ETOs)
-        renderTables();
+        // --- UPDATE SCREEN (Text Only - No Redraw) ---
+        
+        // Update ETO
+        const etoCell = el(`o-eto-${index}`);
+        if (etoCell) etoCell.innerText = wp.eto || "--";
 
-        // 3. Trigger Alternate Calculation immediately
-        // This ensures Alternates are calculated based on the new Primary ETOs/ATOs
-        updateAlternateETOs();
-    }
+        const fuelCell = el(`o-calcfuel-${index}`);
+        if (fuelCell) fuelCell.innerText = Math.round(wp.fuel) || "-";
+    });
+    
+    updateAlternateETOs();
+};
 
     function calculatePICBlock() {
         const extra = parseInt(el('front-extra-kg')?.value) || 0;
@@ -978,56 +1028,60 @@ async function runAnalysis(fileOrEvent) {
     // 6. UI RENDERING & VALIDATION
     // ==========================================
 function renderTables() {
-        const extra = parseInt(el('front-extra-kg')?.value) || 0;
-        
-        const fill = (list, id, pre) => {
-            const tb = el(id); 
-            if(!tb) return;
-            if (list.length === 0) {
-                tb.innerHTML = '<tr><td colspan="13" style="text-align:center;color:gray;padding:20px">No waypoints found</td></tr>';
-                return;
-            }
-            tb.innerHTML = list.map((wp,i) => {
-                const isTO = (i === 0 && wp.name === "TAKEOFF");
-                const atdVal = el('ofp-atd-in')?.value || '';
-                
-                // ATO Input Logic
-                // If it's the Main Log (type 'o'), trigger updateAlternateETOs() on input
-                const onInputFn = (pre === 'o') ? "syncLastWaypoint(); updateAlternateETOs();" : "syncLastWaypoint()";
-                
-                const timeInput = isTO 
-                    ? `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="updateTakeoffTime(this.value)" value="${atdVal}">`
-                    : `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="${onInputFn}">`;
-                
-                const actFlInput = `<input type="number" id="${pre}-agl-${i}" class="input" maxlength="3" style="width:50px;padding:8px;text-align:center;color:var(--accent)" oninput="updateCruiseLevel()">`;
-                const notesInput = `<input type="text" id="${pre}-n-${i}" class="input" style="padding:8px; width:100%" placeholder="...">`;
+    // IMPORTANT: Calculate the latest fuel/times BEFORE drawing the HTML
+    runCalc(); 
 
-                // --- ADDED ID TO ETO CELL BELOW ---
-                return `<tr>
-                    <td style="font-weight:bold">${wp.name}</td>
-                    <td style="font-size:12px">${wp.awy || "-"}</td>
-                    <td style="font-size:12px; font-weight:bold; color:var(--text)">${wp.level || "-"}</td>
-                    <td style="font-size:12px">${wp.track || "-"}</td>
-                    <td style="font-size:12px">${wp.wind || "-"}</td>
-                    <td style="font-size:12px">${wp.tas || "-"}</td>
-                    <td style="font-size:12px">${wp.gs || "-"}</td>
-                    <td>${notesInput}</td>
-                    
-                    <td id="${pre}-eto-${i}">${wp.eto||"--"}</td>
-                    
-                    <td>${timeInput}</td>
-                    <td>${wp.fob + extra}</td>
-                    <td><input type="number" id="${pre}-f-${i}" class="input" style="width:70px;padding:8px" oninput="syncLastWaypoint()"></td>
-                    <td>${actFlInput}</td>
-                </tr>`;
-            }).join('');
-        };
+    const fill = (list, id, pre) => {
+        const tb = el(id); 
+        if(!tb) return;
         
-        fill(waypoints, 'ofp-tbody', 'o'); 
-        fill(alternateWaypoints, 'altn-tbody', 'a');
-        
-        updateCruiseLevel();
-    }
+        if (list.length === 0) {
+            tb.innerHTML = '<tr><td colspan="13" style="text-align:center;color:gray;padding:20px">No waypoints found</td></tr>';
+            return;
+        }
+
+        tb.innerHTML = list.map((wp, i) => {
+            const isTO = (i === 0 && wp.name === "TAKEOFF");
+            const atdVal = el('ofp-atd-in')?.value || '';
+            
+            const onInputFn = (pre === 'o') ? "syncLastWaypoint(); updateAlternateETOs();" : "syncLastWaypoint()";
+            
+            const timeInput = isTO 
+                ? `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="updateTakeoffTime(this.value)" value="${atdVal}">`
+                : `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" oninput="${onInputFn}">`;
+            
+            let fuelEvent = "syncLastWaypoint()";
+            if (isTO) fuelEvent = "runCalc(); syncLastWaypoint()";
+            
+            const actFuelInput = `<input type="number" id="${pre}-f-${i}" class="input" style="width:70px;padding:8px" oninput="${fuelEvent}">`;
+            
+            const actFlInput = `<input type="number" id="${pre}-agl-${i}" class="input" maxlength="3" style="width:50px;padding:8px;text-align:center;color:var(--accent)" oninput="updateCruiseLevel()">`;
+            const notesInput = `<input type="text" id="${pre}-n-${i}" class="input" style="padding:8px; width:100%" placeholder="...">`;
+
+            return `<tr>
+                <td style="font-weight:bold">${wp.name}</td>
+                <td style="font-size:12px">${wp.awy || "-"}</td>
+                <td style="font-size:12px; font-weight:bold; color:var(--text)">${wp.level || "-"}</td>
+                <td style="font-size:12px">${wp.track || "-"}</td>
+                <td style="font-size:12px">${wp.wind || "-"}</td>
+                <td style="font-size:12px">${wp.tas || "-"}</td>
+                <td style="font-size:12px">${wp.gs || "-"}</td>
+                <td>${notesInput}</td>
+                <td id="${pre}-eto-${i}">${wp.eto || "--"}</td>
+                <td>${timeInput}</td>
+                
+                <td id="${pre}-calcfuel-${i}">${Math.round(wp.fuel) || "-"}</td>
+                
+                <td>${actFuelInput}</td>
+                <td>${actFlInput}</td>
+            </tr>`;
+        }).join('');
+    };
+    
+    fill(waypoints, 'ofp-tbody', 'o'); 
+    fill(alternateWaypoints, 'altn-tbody', 'a');
+    updateCruiseLevel();
+}
 
     window.updateLevel = function(type, index, value) {
     // 1. Update the internal data model (Keep this)
