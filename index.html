@@ -250,7 +250,6 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
             </table>
         </div>
         <p style="text-align:center; font-size:12px; color:gray; margin-top:10px;">
-            First waypoint is TAKEOFF - enter time in ATO column<br>
             Last Waypoint inputs will auto-fill Journey Log Landing/Shutdown.
         </p>
     </div>
@@ -363,11 +362,8 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
                 <div class="grid-row" style="margin-top:15px">
                      <div class="field"><label>ZFW</label><input type="number" id="j-zfw" class="input" type="number"></div>
                 </div>
-            </div>
-
-            <div class="panel">
                 <div class="btn-group">
-                    <button class="btn btn-email" onclick="addLeg()">+ Add Leg to Day</button>
+                    <button class="btn btn-email" onclick="addLeg()">+ Add Leg</button>
                 </div>
             </div>
 
@@ -429,7 +425,7 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
                 <br>
                 <h3>Signature</h3>
                 <canvas id="sig-canvas"></canvas>
-                <button class="btn" style="background:#444; margin-top:10px; padding:10px" onclick="clearSignature()">Clear Signature</button>
+                <button class="btn" style="background:#444; margin-top:10px; margin-bottom:10px; padding:7px" onclick="clearSignature()">Clear Signature</button>
 <div class="panel">
     <div class="field" margin-top:10px;>
         <label>Upload Journey Log</label>
