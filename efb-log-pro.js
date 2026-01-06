@@ -1588,9 +1588,16 @@ function renderTables() {
                     // but push it further right (+350) to be next to the text
                     pages[0].drawImage(sigImage, {
                         x: frontCoords.reasonLabel.transform[4], 
-                        y: frontCoords.reasonLabel.transform[5] + V_LIFT - 10, // Slight downward adjustment to center with text
+                        y: frontCoords.reasonLabel.transform[5] + 40, // Slight downward adjustment to center with text
                         width: 100, 
                         height: 35
+                    });
+                    const now = new Date().toISOString().substring(11, 16) + "Z";
+                    pages[0].drawText(now, {
+                        x: frontCoords.reasonLabel.transform[4],
+                        y: frontCoords.reasonLabel.transform[5] + 40,
+                        size: 6,
+                        font: fontR
                     });
 
                 } catch (sigError) {
