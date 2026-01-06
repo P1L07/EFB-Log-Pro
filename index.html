@@ -216,14 +216,30 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
             </table>
         </div>
     <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-        <div class="field"><label>Extra Fuel (kg)</label><input id="front-extra-kg" class="input" type="tel" maxlength="4" oninput="validateExtraFuel(this)" pattern="\d*"></div>
-        <div class="field"><label>Reason for Extra</label><input id="front-extra-reason" class="input"></div>
+    <div class="field">
+        <label>Extra Fuel (kg)</label>
+        <input id="front-extra-kg" class="input" readonly style="background:transparent; border:none; color:var(--dim); font-weight:bold; padding-left:0;">
     </div>
-    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-        <div class="field"><label>Burn Increase per 1T</label><div id="view-burn-inc" class="data-box">32 kg</div></div>
-        <div class="field"><label>PIC Block Fuel</label><div id="view-pic-block" class="data-box" style="color:var(--accent); font-weight:bold">-</div></div>
+    
+    <div class="field">
+        <label>Reason for Extra</label>
+        <input id="front-extra-reason" class="input">
     </div>
 </div>
+
+    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+        <div class="field">
+            <label>Burn Increase per 1T</label>
+            <div id="view-burn-inc" class="data-box">32 kg</div>
+        </div>
+        
+        <div class="field">
+            <label>PIC Block Fuel</label>
+            <input id="view-pic-block" class="input" type="tel" pattern="\d*" 
+                style="color:var(--accent); font-weight:bold; font-size:18px;" 
+                oninput="calculateExtraFromTotal()">
+        </div>
+    </div>
 </section>
 
 <section id="section-log" class="tool-section">

@@ -121,6 +121,28 @@
         validateInputs();
     };
 
+    window.calculateExtraFromTotal = function() {
+    const totalInput = el('view-pic-block');
+    const extraInput = el('front-extra-kg');
+    
+    // Ensure we have the base Block Fuel from the OFP
+    // (blockFuelValue is the global variable set when parsing the PDF)
+    if (typeof blockFuelValue === 'undefined' || blockFuelValue === 0) return;
+
+    const picTotal = parseInt(totalInput.value) || 0;
+    
+    // Calculation: Extra = User Total - OFP Block
+    let diff = picTotal - blockFuelValue;
+    
+    // Optional: Don't allow negative extra (unless you want to undercut block fuel)
+    if (diff < 0) diff = 0;
+
+    extraInput.value = diff;
+    
+    // Trigger validation updates
+    validateInputs();
+    };
+
     window.clearSignature = function() {
     // Check if the pad exists before trying to clear it
     if (signaturePad) {
@@ -1639,8 +1661,8 @@ async function sharePdf(pdfBytes, filename, subject, body) {
         'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
         'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
         'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
-        'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-kg', 'front-extra-reason',
-        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2'
+        'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-reason',
+        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block',
     ];
 
     function saveState() {
@@ -1709,7 +1731,7 @@ async function sharePdf(pdfBytes, filename, subject, body) {
             
             // 4. Restore Waypoints (Temp storage)
             window.savedWaypointData = state.waypoints;
-
+            calculateExtraFromTotal();
         } catch(e) { console.error("Load error", e); }
     }
 
