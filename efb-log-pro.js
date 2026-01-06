@@ -1265,7 +1265,7 @@ function renderTables() {
     // ==========================================
     // 7. PDF GENERATION (OFP)
     // ==========================================
-    window.runDownload = async function() {
+    window.runDownload = async function(mode = 'download') {
         if(!ofpPdfBytes) return;
         try {
             const pdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
@@ -1342,14 +1342,25 @@ function renderTables() {
             draw(alternateWaypoints, 'a');
 
             const bytes = await pdf.save();
-            downloadBlob(bytes, originalFileName.replace(".pdf", "_Logged.pdf"));
+            const filename = originalFileName.replace(".pdf", "_Logged.pdf");
+
+            if (mode === 'email') {
+                const flt = el('j-flt')?.value || "FLT";
+                const date = el('j-date')?.value || "DATE";
+                const subject = `OFP: ${flt} ${date}`;
+                
+                await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
+            } else {
+                downloadBlob(bytes, filename);
+            }
+            
         } catch (error) { console.error(error); alert("Error saving PDF: " + error.message); }
     };
 
     // ==========================================
     // 8. PDF GENERATION (JOURNEY LOG)
     // ==========================================
-    window.downloadJourneyLog = async function() {
+    window.downloadJourneyLog = async function(mode = 'download') {
         if (!journeyLogTemplateBytes) return alert("Please upload Journey Log first.");
         if (dailyLegs.length === 0) return alert("No legs to print.");
 
@@ -1457,7 +1468,21 @@ function renderTables() {
             }
 
             const out = await pdfDoc.save();
-            downloadBlob(out, "Journey_Log_Filled.pdf");
+            const filename = "Journey_Log_Filled.pdf";
+            
+            if (mode === 'email') {
+                // Generate Subject
+                const flt = el('j-flt')?.value || "FLT";
+                const date = el('j-date')?.value || "DATE";
+                const subject = `Journey Log: ${flt} ${date}`;
+                
+                // Use new share function
+                await sharePdf(out, filename, subject, "Journey Log.");
+            } else {
+                // Default: Save to files
+                downloadBlob(out, filename);
+            }
+
         } catch(e) { console.error(e); alert("Error generating Log: " + e.message); }
     };
 
@@ -1493,7 +1518,31 @@ function renderTables() {
         const destIsKZ = dest.startsWith("UA");
         return destIsKZ ? 75 : 90; // Domestic : International Outbound
     }
-};
+    };
+
+    // New Helper: Share PDF natively on iPad without the Blob URL
+async function sharePdf(pdfBytes, filename, subject, body) {
+    // 1. Create a "File" object from the PDF bytes
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const file = new File([blob], filename, { type: 'application/pdf' });
+
+    // 2. Check if the device supports native file sharing (iPad/iPhone do)
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+            await navigator.share({
+                files: [file],
+                title: subject,
+                text: body || subject
+                // CRITICAL: We do NOT add a 'url' property here, which stops the blob link appearing
+            });
+        } catch (err) {
+            console.log("Share cancelled or failed", err);
+        }
+    } else {
+        // Fallback for computers (just download it)
+        downloadBlob(pdfBytes, filename);
+    }
+    }
 
     window.resetApp = async function() {
         if(confirm("Start new flight? This will clear all saved data.")) {
