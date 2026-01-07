@@ -2227,59 +2227,64 @@ function loadState() {
 
     try {
         const state = JSON.parse(raw);
-
-        if (state.savedTaxiValue) {
-            if (typeof fuelData === 'undefined') fuelData = [];
-            // Only push if not already there
-            if (!fuelData.find(x => x.name === 'TAXI')) {
-                fuelData.push({ name: "TAXI", fuel: state.savedTaxiValue });
+        
+        // 1. Restore Route Structure (The backbone)
+        if(state.routeStructure && Array.isArray(state.routeStructure) && state.routeStructure.length > 0) {
+            waypoints = state.routeStructure;
+            
+            // A. Draw the empty table first
+            if (typeof renderTables === 'function') {
+                renderTables(); 
+            }
+            
+            // B. Restore Waypoint Inputs (ATO, Fuel, Notes) into the table
+            // This MUST happen before runCalc()
+            if(state.waypointUserValues && Array.isArray(state.waypointUserValues)) {
+                state.waypointUserValues.forEach((data, i) => {
+                    if (i < waypoints.length) {
+                        if(data.ato) safeSet(`o-a-${i}`, data.ato);
+                        if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                        if(data.notes) safeSet(`o-n-${i}`, data.notes);
+                        if(data.agl) safeSet(`o-agl-${i}`, data.agl);
+                    }
+                });
             }
         }
-            
-        // 1. Restore Simple Inputs
+
+        // 2. Restore Simple Inputs (Includes ATD 'ofp-atd-in')
         if(state.inputs) {
             Object.keys(state.inputs).forEach(id => {
                 const val = state.inputs[id];
                 if (val !== "" && val !== null) safeSet(id, val);
             });
         }
-
-        // 2. Restore Daily Legs
+        
+        // 3. Restore Daily Legs (Journey Log)
         if(state.dailyLegs && Array.isArray(state.dailyLegs)) {
             dailyLegs = state.dailyLegs;
             renderJourneyList(); 
         }
 
-        // 3. Restore Duty Start
+        // 4. Restore Taxi Fuel (To prevent jump to 200)
+        if (state.savedTaxiValue) {
+            if (typeof fuelData === 'undefined') fuelData = [];
+            if (!fuelData.find(x => x.name === 'TAXI')) {
+                fuelData.push({ name: "TAXI", fuel: state.savedTaxiValue });
+            }
+        }
+
+        // 5. Restore Duty Start
         if(state.dutyStartTime !== undefined) {
             dutyStartTime = state.dutyStartTime;
             calcDutyLogic(); 
         }
 
-        // 4. RESTORE ROUTE & CALCULATE
-        if(state.routeStructure && Array.isArray(state.routeStructure) && state.routeStructure.length > 0) {
-            // Restore the backbone of the flight plan
-            waypoints = state.routeStructure;
-            
-            // Restore the user's typed values to the temp variable used by renderTables
-            if(state.waypointUserValues) {
-                window.savedWaypointData = state.waypointUserValues;
-            }
-
-            // Re-draw the HTML table using the restored route
-            if (typeof renderTables === 'function') {
-                renderTables(); 
-            }
-            
-            // Now run the math (Ripple effect) to populate ETOs
-            runCalc();
-            updateFuelMonitor();
-            
-            // Sync the 'Last Waypoint' logic for the journey log
-            if (typeof syncLastWaypoint === 'function') {
-                syncLastWaypoint();
-            }
-        }
+        // 6. FINALLY: Run Calculations
+        // Now that ATD is restored (Step 2) AND ATOs are restored (Step 1B),
+        // runCalc will see the data and generate the ETOs correctly.
+        runCalc();
+        updateFuelMonitor();
+        if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
 
     } catch(e) { console.error("Load error", e); }
 }
