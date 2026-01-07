@@ -1848,9 +1848,9 @@ window.modifyLeg = function(index) {
                         const mainY = wp.y_anchor;
 
                         // ETO (Shifted UP)
-                        if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 9, font: fontB, color: PDFLib.rgb(0,0,0.5) });
+                        if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
                         // ATO (Main Row)
-                        if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 9, font: fontR });
+                        if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
                         // Fuel (Main Row, Size 10)
                         if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
                         // Notes (Main Row, Size 10)
@@ -2285,6 +2285,8 @@ function loadState() {
         runCalc();
         updateFuelMonitor();
         if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
+
+        validateInputs();
 
     } catch(e) { console.error("Load error", e); }
 }
