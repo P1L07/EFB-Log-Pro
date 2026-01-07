@@ -221,8 +221,8 @@ window.getSignatureDataURL = getSignatureDataURL;
 
     extraInput.value = diff;
     
-    // --- NEW: Update the Flight Log Table immediately ---
-    runCalc();       // Re-run the fuel math for all waypoints
+    // Update the Flight Log Table immediately ---
+    runCalc();
     validateInputs();
     };
 
@@ -2178,7 +2178,7 @@ async function sharePdf(pdfBytes, filename, subject, body) {
 
     // A list of simple input IDs we want to save automatically
     const SAVE_IDS = [
-        'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std',
+        'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std','front-extra-kg',
         'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
         'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
         'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
