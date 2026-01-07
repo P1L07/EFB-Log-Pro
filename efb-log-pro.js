@@ -1804,77 +1804,83 @@ window.downloadJourneyLog = async function(mode = 'download') {
             const numCC = parseInt(el('j-cc-count')?.value || 4);
             const totalRows = numFC + numCC;
 
-            // A. Get Start Times (FC vs CC)
-            const fcDutyStartStr = el('j-duty-start')?.innerText || "00:00";
-            const ccDutyStartStr = el('j-cc-duty-start')?.innerText || "00:00";
+            // --- FIX 1: ROBUST TIME EXTRACTION ---
+            // Helper to get value from Input OR Div/Span
+            const getTextOrValue = (id) => {
+                const e = el(id);
+                if (!e) return "";
+                return (e.value || e.innerText || e.textContent || "").trim();
+            };
+
+            const fcDutyStartStr = getTextOrValue('j-duty-start') || "00:00";
+            const ccDutyStartStr = getTextOrValue('j-cc-duty-start') || "00:00";
+            
+            // Console check to ensure we are reading the times
+            console.log("PDF Crew Start Times:", { FC: fcDutyStartStr, CC: ccDutyStartStr });
+
             const fcStartMins = parseTimeString(fcDutyStartStr);
             const ccStartMins = parseTimeString(ccDutyStartStr);
 
-            // B. Get End Time (Last Leg In-Block)
+            // --- FIX 2: ENSURE END TIME EXISTS ---
             const lastLeg = dailyLegs[dailyLegs.length - 1];
+            // If Last Leg exists, use its 'j-in'. If not, 0.
             const onBlocksMins = lastLeg ? parseTimeString(lastLeg['j-in']) : 0;
             const maxFDP = el('j-max-fdp')?.value || ""; 
 
-            // --- HELPER 1: Calculate FDP based on Start Time ---
+            // HELPER: Calculate FDP
             const getFDP = (startMins) => {
-                if(!onBlocksMins) return "";
+                // If we don't have an "In" time yet, we can't calculate duration
+                if(!onBlocksMins && onBlocksMins !== 0) return ""; 
                 let diff = onBlocksMins - startMins;
-                if(diff < 0) diff += 1440; // Handle midnight crossing
+                if(diff < 0) diff += 1440; 
                 return minsToTime(diff);
             };
 
-            // --- HELPER 2: Calculate Night Overlap based on Start Time ---
+            // HELPER: Calculate Night Overlap
             const getNightOverlap = (startMins) => {
-                if(!onBlocksMins) return "";
+                if(!onBlocksMins && onBlocksMins !== 0) return "";
                 
-                // Determine absolute End Mins relative to Start
                 let endMins = onBlocksMins;
                 if(endMins < startMins) endMins += 1440;
 
-                // Night Window: 21:00 UTC (1260) to 23:59 UTC (1439)
-                // (Matches your calcDutyLogic)
-                const wStart = 1260; 
-                const wEnd = 1439;
+                const wStart = 1260; // 21:00 UTC
+                const wEnd = 1439;   // 23:59 UTC
                 
                 let overlap = 0;
-                // Overlap Day 1
                 overlap += Math.max(0, Math.min(endMins, wEnd) - Math.max(startMins, wStart));
-                // Overlap Day 2 (if flight goes very long or starts late)
                 overlap += Math.max(0, Math.min(endMins, wEnd + 1440) - Math.max(startMins, wStart + 1440));
 
                 return overlap > 0 ? minsToTime(overlap) : "";
             };
 
-            // C. Draw Rows
+            // DRAW ROWS
             for(let i = 0; i < totalRows; i++) {
                 const y = crewStart - (i * crewGap);
-                
-                // Determine Row Type
                 const isFlightCrew = (i < numFC);
                 
-                // Select Inputs based on Crew Type
-                // If Flight Crew -> Use FC Start | If Cabin Crew -> Use CC Start
+                // Select Start Time based on role
                 const myStart = isFlightCrew ? fcStartMins : ccStartMins;
                 
+                // Calculate
                 const myFDP = getFDP(myStart);
                 const myNight = getNightOverlap(myStart);
 
-                // Draw OP (Always)
+                // 1. OP (Always)
                 if(cols['j-duty-operating']) 
-                    page.drawText("OP", { x: cols['j-duty-operating'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
+                    page.drawText("OP", { x: cols['j-duty-operating'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
 
-                // Draw Duty Time
+                // 2. Duty Time
                 if(myFDP && cols['j-duty-time']) 
-                    page.drawText(myFDP, { x: cols['j-duty-time'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
+                    page.drawText(myFDP, { x: cols['j-duty-time'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
 
-                // Draw Night Duty (Unique to this crew type)
+                // 3. Night Duty
                 if(myNight && cols['j-duty-night']) {
-                    page.drawText(myNight, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
+                    page.drawText(myNight, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
                 }
 
-                // Draw Max FDP
+                // 4. Allowed FDP
                 if(maxFDP && cols['j-duty-allowed']) 
-                    page.drawText(maxFDP, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
+                    page.drawText(maxFDP, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
             }
 
             // --- 4. SAVE & DOWNLOAD ---
