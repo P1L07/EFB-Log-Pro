@@ -359,6 +359,19 @@ async function runAnalysis(fileOrEvent) {
     // Only clear visual inputs if it's a MANUAL upload
     if (!isAutoLoad) {
         clearOFPInputs();
+        const headersToReset = [
+            'view-pic-block', 'view-flt', 'view-reg', 'view-date', 
+            'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn'
+        ];
+    
+        headersToReset.forEach(id => {
+            const e = document.getElementById(id);
+            if(e) {
+                // Handle both Input fields and Text spans
+                if (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') e.value = "";
+                else e.innerText = "-";
+            }
+        });
     }
 
     // 3. Process the file
@@ -561,14 +574,19 @@ async function runAnalysis(fileOrEvent) {
         
         // --- AUTO-FILL PIC BLOCK ---
         // Ensure the input field shows the OFP block fuel immediately
+        // --- AUTO-FILL PIC BLOCK ---
         if (el('view-pic-block')) {
-            el('view-pic-block').value = blockFuelValue || 0;
+            const elPic = el('view-pic-block');
+            const val = blockFuelValue || 0;
+            
+            // Check type to assign correctly
+            if(elPic.tagName === 'INPUT') elPic.value = val;
+            else elPic.innerText = val; // <--- CORRECT for spans/divs
         }
 
         runCalc(); 
         validateInputs();
         renderFuelTable();
-        // calculatePICBlock(); // You can remove this if you deleted the function earlier
         renderTables();
 
         // RESTORE USER INPUTS (Keep the rest of your logic below)
