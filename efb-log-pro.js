@@ -1934,74 +1934,93 @@ async function sharePdf(pdfBytes, filename, subject, body) {
     ];
 
     function saveState() {
-        const state = {
-            inputs: {},
-            dailyLegs: dailyLegs, // Save the legs array
-            dutyStartTime: dutyStartTime // Save the calculated duty start
-        };
+    // 1. Capture the "User Inputs" (Actuals, Notes, AGL) from the DOM
+    const userInputs = waypoints.map((wp, i) => ({
+        ato: el(`o-a-${i}`)?.value || "",
+        fuel: el(`o-f-${i}`)?.value || "",
+        notes: el(`o-n-${i}`)?.value || "",
+        agl: el(`o-agl-${i}`)?.value || ""
+    }));
 
-        // 1. Save all simple inputs
-        SAVE_IDS.forEach(id => {
-            const e = el(id);
-            if(e) state.inputs[id] = e.value;
-        });
+    const state = {
+        inputs: {},
+        dailyLegs: dailyLegs, 
+        dutyStartTime: dutyStartTime,
+        
+        // --- CRITICAL FIX ---
+        // Save the Route Structure (Names, Distances, Frequencies)
+        // This ensures the calculator has data to work with on reload.
+        routeStructure: waypoints, 
+        
+        // Save the typed values separately
+        waypointUserValues: userInputs 
+    };
 
-        // 2. Save Waypoint Data (User entered ATOs/Fuel)
-        // We map just the user-editable fields from the table
-        const waypointData = waypoints.map((wp, i) => ({
-            ato: el(`o-a-${i}`)?.value || "",
-            fuel: el(`o-f-${i}`)?.value || "",
-            notes: el(`o-n-${i}`)?.value || "",
-            agl: el(`o-agl-${i}`)?.value || ""
-        }));
-        state.waypoints = waypointData;
+    // 2. Save simple inputs
+    SAVE_IDS.forEach(id => {
+        const e = el(id);
+        if(e) state.inputs[id] = e.value;
+    });
 
-        // Save to browser storage
-        localStorage.setItem('efb_log_state', JSON.stringify(state));
-        console.log("Auto-saved");
-    }
+    localStorage.setItem('efb_log_state', JSON.stringify(state));
+    console.log("Auto-saved");
+}
 
-    function loadState() {
-        const raw = localStorage.getItem('efb_log_state');
-        if(!raw) return; 
+function loadState() {
+    const raw = localStorage.getItem('efb_log_state');
+    if(!raw) return; 
 
-        try {
-            const state = JSON.parse(raw);
+    try {
+        const state = JSON.parse(raw);
+        
+        // 1. Restore Simple Inputs
+        if(state.inputs) {
+            Object.keys(state.inputs).forEach(id => {
+                const val = state.inputs[id];
+                if (val !== "" && val !== null) safeSet(id, val);
+            });
+        }
+
+        // 2. Restore Daily Legs
+        if(state.dailyLegs && Array.isArray(state.dailyLegs)) {
+            dailyLegs = state.dailyLegs;
+            renderJourneyList(); 
+        }
+
+        // 3. Restore Duty Start
+        if(state.dutyStartTime !== undefined) {
+            dutyStartTime = state.dutyStartTime;
+            calcDutyLogic(); 
+        }
+
+        // 4. RESTORE ROUTE & CALCULATE (The Fix)
+        if(state.routeStructure && Array.isArray(state.routeStructure) && state.routeStructure.length > 0) {
+            // Restore the backbone of the flight plan
+            waypoints = state.routeStructure;
             
-            // 1. Restore simple inputs
-            if(state.inputs) {
-                Object.keys(state.inputs).forEach(id => {
-                    const val = state.inputs[id];
-                    // SMART RESTORE: 
-                    // Only overwrite if the saved value is NOT empty.
-                    // This prevents empty storage from erasing PDF data (like Flight No).
-                    if (val !== "" && val !== null) {
-                        safeSet(id, val);
-                    }
-                });
+            // Restore the user's typed values to the temp variable used by renderTables
+            if(state.waypointUserValues) {
+                window.savedWaypointData = state.waypointUserValues;
             }
 
-            // 2. Restore Daily Legs
-            if(state.dailyLegs && Array.isArray(state.dailyLegs)) {
-                dailyLegs = state.dailyLegs;
-                renderJourneyList(); 
-            }
-
-            // 3. Restore Duty Start Time
-            if(state.dutyStartTime !== undefined) {
-                dutyStartTime = state.dutyStartTime;
-                calcDutyLogic(); 
+            // Re-draw the HTML table using the restored route
+            // (This ensures the input fields exist before we calculate)
+            if (typeof renderTables === 'function') {
+                renderTables(); 
             }
             
-            // 4. Restore Waypoints (Temp storage)
-            window.savedWaypointData = state.waypoints;
-            calculateExtraFromTotal();
+            // Now run the math (Ripple effect) to populate ETOs
             runCalc();
             updateFuelMonitor();
+            
+            // Sync the 'Last Waypoint' logic for the journey log
+            if (typeof syncLastWaypoint === 'function') {
+                syncLastWaypoint();
+            }
+        }
 
-        } catch(e) { console.error("Load error", e); }
-
-    }
+    } catch(e) { console.error("Load error", e); }
+}
 
     // Trigger Save on any input change
     window.addEventListener('input', (e) => {
