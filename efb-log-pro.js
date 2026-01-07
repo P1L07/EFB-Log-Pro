@@ -938,11 +938,10 @@ window.runCalc = function() {
     // 1. DETERMINE REFERENCE STD (ANCHOR)
     // ==========================================
     if (dailyLegs.length > 0) {
-        // CASE A: We have legs. Duty Start is FIXED to the FIRST leg's STD.
-        // This ensures it doesn't shift when you type in Leg 2, 3, etc.
+        // CASE A: Lock to First Leg
         referenceStdStr = dailyLegs[0]['j-std']; 
     } else {
-        // CASE B: No legs yet. Look for OFP or Manual Input to give a preview.
+        // CASE B: Preview Mode (OFP/Input)
         const stdSources = ['j-std', 'view-std-text', 'ofp-std-in'];
         for (let id of stdSources) {
             const element = el(id);
@@ -956,17 +955,17 @@ window.runCalc = function() {
         }
     }
 
-    // IF NO DATA -> RESET TO 00:00
+    // IF NO DATA AT ALL -> RESET AND STOP
     if (!referenceStdStr) {
         safeText('j-duty-start', "00:00");
         safeText('j-cc-duty-start', "00:00");
-        safeSet('j-max-fdp', ""); // Clear FDP limit if no time
+        safeSet('j-max-fdp', ""); 
         safeSet('j-night-calc', "");
         return; 
     }
 
     // ==========================================
-    // 2. CALCULATE DUTY START (UTC)
+    // 2. CALCULATE DUTY START (Internal Math)
     // ==========================================
     const stdMins = parseTimeString(referenceStdStr);
     
@@ -978,22 +977,45 @@ window.runCalc = function() {
     }
     const reportOffset = parseInt(select?.value || 90);
     
-    // Calculate Start
+    // Calculate Start Time
     let startMins = stdMins - reportOffset;
     if(startMins < 0) startMins += 1440; 
     
-    dutyStartTime = startMins; // Update global
-    safeText('j-duty-start', minsToTime(startMins)); 
-    
-    // CC Start (usually 15min later or same)
+    // Calculate CC Start
     let ccStart = startMins - (reportOffset === 60 ? 0 : 15);
     if(ccStart < 0) ccStart += 1440;
-    safeText('j-cc-duty-start', minsToTime(ccStart));
 
     // ==========================================
-    // 3. EASA MAX FDP CALCULATION
+    // 3. UI UPDATE & CONTROL FLOW (The Fix)
     // ==========================================
-    // Use stored legs count if available, otherwise 1
+    if (dailyLegs.length > 0) {
+        // --- CASE: ACTIVE FLIGHT LOG ---
+        // Update global
+        dutyStartTime = startMins; 
+
+        // Update UI if empty (Safety check)
+        if(el('j-duty-start').innerText === "00:00" || el('j-duty-start').innerText === "") {
+             safeText('j-duty-start', minsToTime(startMins));
+             safeText('j-cc-duty-start', minsToTime(ccStart));
+        }
+    } 
+    else {
+        // --- CASE: EMPTY LOG (RESET) ---
+        // 1. Clear the UI
+        safeText('j-duty-start', "00:00");
+        safeText('j-cc-duty-start', "00:00");
+        safeSet('j-max-fdp', "");
+        safeSet('j-night-calc', "");
+        
+        // 2. IMPORTANT: STOP HERE!
+        // Do not calculate FDP or Night Duty if we haven't started a log yet.
+        return; 
+    }
+
+    // ==========================================
+    // 4. EASA MAX FDP CALCULATION
+    // (This now only runs if dailyLegs.length > 0)
+    // ==========================================
     const sectors = Math.max(dailyLegs.length + 1, 1);
     
     // Convert to Local Time (Assume UTC+5 for Base)
@@ -1039,7 +1061,7 @@ window.runCalc = function() {
     safeSet('j-max-fdp', maxFDP);
 
     // ==========================================
-    // 4. NIGHT DUTY CALCULATION
+    // 5. NIGHT DUTY CALCULATION
     // ==========================================
     let lastInStr = el('j-in')?.value; 
     if (!lastInStr && dailyLegs.length > 0) {
@@ -1362,7 +1384,7 @@ function renderTables() {
         ['view-flt', 'view-reg', 'view-dep', 'view-dest'].forEach(id => safeText(id, '-'));
     }
 
-    function clearJourneyInputs() {
+    function clearJourneyInputs(transferFuel = "") {
         // Clear Times
         ['j-out', 'j-off', 'j-on', 'j-in', 'j-night'].forEach(id => safeSet(id, ''));
         
@@ -1372,8 +1394,15 @@ function renderTables() {
         safeSet('j-ldg-detail', '');
         
         // Clear Fuel/Load specific to that leg
-        ['j-uplift-w', 'j-uplift-vol', 'j-init', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw'].forEach(id => safeSet(id, ''));
+        ['j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw'].forEach(id => safeSet(id, ''));
         
+        // Mobe Shutdown Fuel to Inital Fuel on the next leg
+        if (transferFuel) {
+            safeSet('j-init', transferFuel);
+        } else {
+            safeSet('j-init', '');
+        }
+
         // Reset Calculated Displays
         safeText('j-block', '00:00');
         safeText('j-flight', '00:00');
@@ -1385,51 +1414,100 @@ function renderTables() {
     let journeyLog = [];
     // Journey Log Leg Management
     window.addLeg = function() {
-        if(dailyLegs.length >= 4) return alert("Max 4 legs.");
-        if(dailyLegs.length === 0 && !dutyStartTime) {
-            // Try to calc it one more time just in case
-            calcDutyLogic();
-            if(!dutyStartTime) return alert("Please ensure STD is set in Summary to calculate Duty Start.");
+    if(dailyLegs.length >= 4) return alert("Max 4 legs.");
+
+    // ============================================================
+    // 1. NEW: LOCK DUTY START TIME (If this is the First Leg)
+    // ============================================================
+    // We do this BEFORE calculating FDP so the FDP math works immediately.
+    if (dailyLegs.length === 0) {
+        // A. Get the STD from the input (This leg's STD)
+        const stdVal = el('j-std')?.value || ""; 
+        
+        if (stdVal && /\d/.test(stdVal)) {
+            const stdMins = parseTimeString(stdVal);
+
+            // B. Get Reporting Offset (default 90 if missing)
+            const reportOffset = parseInt(el('j-report-type')?.value || 90);
+
+            // C. Calculate FC Start
+            let fcStart = stdMins - reportOffset;
+            if(fcStart < 0) fcStart += 1440;
+
+            // D. Calculate CC Start
+            let ccStart = fcStart - (reportOffset === 60 ? 0 : 15);
+            if(ccStart < 0) ccStart += 1440;
+
+            // E. LOCK IT: Write to UI and Global Variable
+            safeText('j-duty-start', minsToTime(fcStart));
+            safeText('j-cc-duty-start', minsToTime(ccStart));
+            dutyStartTime = fcStart; // <--- Critical for FDP calc below
+        } else {
+            return alert("Please enter STD for this leg to calculate Duty Start.");
         }
+    }
+
+    // ============================================================
+    // 2. FDP CHECK
+    // ============================================================
+    const onBlock = el('j-in')?.value;
+    let fdp = "", alertFdp = false;
+    
+    // Check if onBlock exists AND dutyStartTime is now valid
+    if(onBlock && dutyStartTime !== null && dutyStartTime !== undefined) {
+        let m = parseTimeString(onBlock) - dutyStartTime;
         
-        // FDP Check
-        const onBlock = el('j-in')?.value;
-        let fdp = "", alertFdp = false;
-        if(onBlock && dutyStartTime !== null) {
-            let m = parseTimeString(onBlock) - dutyStartTime;
-            if(m<0) m+=1440;
-            fdp = minsToTime(m);
-            const limit = parseTimeString(el('j-max-fdp')?.value||'13:00');
-            if(m > limit) alertFdp = true;
-        }
+        // Handle next day crossing (e.g. Duty start 22:00, In 02:00)
+        // If the flight is short but crosses midnight, m will be negative.
+        // We assume flights < 24h.
+        if (m < 0) m += 1440; 
 
-        const d = {};
-        
-        const getValue = (id) => {
-            const e = el(id);
-            if (!e) return "";
-            return (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') 
-                   ? e.value : e.innerText;
-        };
+        fdp = minsToTime(m);
+        const limit = parseTimeString(el('j-max-fdp')?.value || '13:00');
+        if(m > limit) alertFdp = true;
+    }
 
-        ['j-flt','j-reg','j-dep','j-dest','j-altn','j-out','j-off','j-on','j-in','j-block','j-flight', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail', 'j-init','j-uplift-w', 'j-calc-ramp', 'j-act-ramp','j-shut','j-burn', 'j-uplift-vol', 'j-slip', 'j-slip-2', 'j-disc','j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw','j-date'].forEach(k => {
-            d[k] = getValue(k);
-        });
-
-        d.fdp = fdp; d.fdpAlert = alertFdp;
-        
-        dailyLegs.push(d);
-        renderJourneyList();
-        validateInputs();
-
-        calcDutyLogic(); // Recalculate night duty now that we have a new leg/end time
-
-        // AUTO CLEAR & PRE-FILL NEXT LEG ---
-        const previousDest = d['j-dest']; // Remember where we landed
-        clearJourneyInputs();             // Clear inputs
-        safeSet('j-dep', previousDest);   // Set Dep to previous Dest
-        safeSet('j-dest', '');            // Clear Dest
+    // ============================================================
+    // 3. CAPTURE DATA
+    // ============================================================
+    const d = {};
+    const getValue = (id) => {
+        const e = el(id);
+        if (!e) return "";
+        return (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') 
+                ? e.value : e.innerText;
     };
+
+    ['j-flt','j-reg','j-dep','j-dest','j-altn','j-out','j-off','j-on','j-in','j-block','j-flight', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail', 'j-init','j-uplift-w', 'j-calc-ramp', 'j-act-ramp','j-shut','j-burn', 'j-uplift-vol', 'j-slip', 'j-slip-2', 'j-disc','j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw','j-date', 'j-std'].forEach(k => {
+        d[k] = getValue(k);
+    });
+
+    // NOTE: I added 'j-std' to the list above so we save the STD of the leg!
+
+    d.fdp = fdp; 
+    d.fdpAlert = alertFdp;
+    
+    dailyLegs.push(d);
+    renderJourneyList();
+    validateInputs();
+
+    // Trigger logic to update Night Duty overlap now that we have an "In" time
+    calcDutyLogic(); 
+
+    // ============================================================
+    // 4. PREPARE NEXT LEG
+    // ============================================================
+    // AUTO CLEAR & PRE-FILL NEXT LEG ---
+    const nextInitFuel = d['j-shut'];
+    
+    clearJourneyInputs(nextInitFuel);
+    
+    safeSet('j-dep', '');   
+    safeSet('j-dest', '');
+    
+    // Auto-save immediately
+    saveState();
+};
 
     window.removeLeg = function(i) {
         dailyLegs.splice(i,1);
@@ -1442,7 +1520,21 @@ function renderTables() {
     };
     
     window.clearLegs = function() {
-        if(confirm("Clear All Legs?")) { dailyLegs=[]; removeLeg(0); }
+        if(!confirm("Clear Journey Log?")) return;
+        
+        dailyLegs = [];
+        renderJourneyList();
+        
+        // --- RESET DUTY FIELDS ---
+        safeText('j-duty-start', "00:00");
+        safeText('j-cc-duty-start', "00:00");
+        safeSet('j-max-fdp', "");
+        safeSet('j-night-calc', "");
+        
+        // Reset global
+        dutyStartTime = 0;
+        
+        saveState();
     };
 
     window.renderJourneyList = function() {
@@ -1648,7 +1740,7 @@ function renderTables() {
     // ==========================================
     // 8. PDF GENERATION (JOURNEY LOG)
     // ==========================================
-    window.downloadJourneyLog = async function(mode = 'download') {
+window.downloadJourneyLog = async function(mode = 'download') {
         if (!journeyLogTemplateBytes) return alert("Please upload Journey Log first.");
         if (dailyLegs.length === 0) return alert("No legs to print.");
 
@@ -1656,10 +1748,12 @@ function renderTables() {
             const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
             const page = pdfDoc.getPages()[0];
             const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+            
+            // Check for iPad mode rotation
             const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
             if(!isIpadMode) page.setRotation(PDFLib.degrees(0));
 
-            // --- HEADERS & LEG DATA (Same as before) ---
+            // --- 1. HEADERS & LEG DATA ---
             const headers = JOURNEY_CONFIG.headers;
             Object.keys(headers).forEach(id => {
                 const val = el(id)?.value;
@@ -1669,10 +1763,8 @@ function renderTables() {
 
             const cols = JOURNEY_CONFIG.cols;
             const fuelKeys = JOURNEY_CONFIG.fuelKeys;
-            let totalNightMins = 0;
-
+            
             dailyLegs.forEach((leg, idx) => {
-                if(leg['j-night']) totalNightMins += parseTimeString(leg['j-night']);
                 Object.keys(leg).forEach(key => {
                     const colX = cols[key];
                     if(colX) {
@@ -1687,107 +1779,116 @@ function renderTables() {
                 });
             });
 
-            // --- SIGNATURE DRAWING SECTION ---
-            // 1. Check if the signature exists and isn't empty
+            // --- 2. SIGNATURE DRAWING SECTION ---
             if (signaturePad && !signaturePad.isEmpty()) {
                 try {
-                    // 2. Get the Base64 image data (PNG format)
                     const sigImageBase64 = signaturePad.toDataURL();
-                    
-                    // 3. Embed the PNG into the PDF
                     const sigImage = await pdfDoc.embedPng(sigImageBase64);
                     
-                    // 4. Set the position and size (Adjust x, y, width, height as needed)
-                    // Usually signatures go near the bottom right of the Journey Log
-                    const sigDims = sigImage.scale(0.5); // Scales image to 50% size
-                    
                     page.drawImage(sigImage, {
-                        x: 570,        // Horizontal position (Adjust for your PDF)
-                        y: 120,         // Vertical position (Adjust for your PDF)
-                        width: 200,    // Signature width
-                        height: 50,    // Signature height
+                        x: 570,        
+                        y: 120,        
+                        width: 200,    
+                        height: 50,    
                     });
                 } catch (sigError) {
                     console.error("Signature Embedding Error:", sigError);
                 }
             }
 
-            // --- CREW DATA SECTION (UPDATED) ---
+            // --- 3. CREW DUTY DATA (CORRECTED) ---
             const crewStart = 333; 
             const crewGap = 17;    
             
-            // Get Counts
             const numFC = parseInt(el('j-fc-count')?.value || 2);
             const numCC = parseInt(el('j-cc-count')?.value || 4);
             const totalRows = numFC + numCC;
 
-            // Get Duty Calculation Vars
-            const lastLeg = dailyLegs[dailyLegs.length - 1];
-            const onBlocksMins = lastLeg ? parseTimeString(lastLeg['j-in']) : 0;
-            const nCalcEl = el('j-night-calc');
-            const nightDutyStr = nCalcEl ? (nCalcEl.value || nCalcEl.innerText || "") : "";
-            const maxFDP = el('j-max-fdp')?.value || ""; 
-
-            // Get Duty Starts (calculated in calcDutyLogic)
+            // A. Get Start Times (FC vs CC)
             const fcDutyStartStr = el('j-duty-start')?.innerText || "00:00";
             const ccDutyStartStr = el('j-cc-duty-start')?.innerText || "00:00";
-            
             const fcStartMins = parseTimeString(fcDutyStartStr);
             const ccStartMins = parseTimeString(ccDutyStartStr);
 
-            // Helper to calc FDP for specific crew type
+            // B. Get End Time (Last Leg In-Block)
+            const lastLeg = dailyLegs[dailyLegs.length - 1];
+            const onBlocksMins = lastLeg ? parseTimeString(lastLeg['j-in']) : 0;
+            const maxFDP = el('j-max-fdp')?.value || ""; 
+
+            // --- HELPER 1: Calculate FDP based on Start Time ---
             const getFDP = (startMins) => {
                 if(!onBlocksMins) return "";
                 let diff = onBlocksMins - startMins;
-                if(diff < 0) diff += 1440;
+                if(diff < 0) diff += 1440; // Handle midnight crossing
                 return minsToTime(diff);
             };
 
-            const calculatedNightDuty = el('j-night-calc')?.value || (el('j-night-calc')?.innerText) || "";
+            // --- HELPER 2: Calculate Night Overlap based on Start Time ---
+            const getNightOverlap = (startMins) => {
+                if(!onBlocksMins) return "";
+                
+                // Determine absolute End Mins relative to Start
+                let endMins = onBlocksMins;
+                if(endMins < startMins) endMins += 1440;
 
+                // Night Window: 21:00 UTC (1260) to 23:59 UTC (1439)
+                // (Matches your calcDutyLogic)
+                const wStart = 1260; 
+                const wEnd = 1439;
+                
+                let overlap = 0;
+                // Overlap Day 1
+                overlap += Math.max(0, Math.min(endMins, wEnd) - Math.max(startMins, wStart));
+                // Overlap Day 2 (if flight goes very long or starts late)
+                overlap += Math.max(0, Math.min(endMins, wEnd + 1440) - Math.max(startMins, wStart + 1440));
+
+                return overlap > 0 ? minsToTime(overlap) : "";
+            };
+
+            // C. Draw Rows
             for(let i = 0; i < totalRows; i++) {
                 const y = crewStart - (i * crewGap);
                 
-                // Determine if this row is Flight Crew or Cabin Crew
+                // Determine Row Type
                 const isFlightCrew = (i < numFC);
                 
-                // Select correct FDP
-                const myFDP = isFlightCrew ? getFDP(fcStartMins) : getFDP(ccStartMins);
+                // Select Inputs based on Crew Type
+                // If Flight Crew -> Use FC Start | If Cabin Crew -> Use CC Start
+                const myStart = isFlightCrew ? fcStartMins : ccStartMins;
+                
+                const myFDP = getFDP(myStart);
+                const myNight = getNightOverlap(myStart);
 
-                // 1. OP (Always)
+                // Draw OP (Always)
                 if(cols['j-duty-operating']) 
                     page.drawText("OP", { x: cols['j-duty-operating'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
 
-                // 2. Duty Time (Calculated per row type)
+                // Draw Duty Time
                 if(myFDP && cols['j-duty-time']) 
                     page.drawText(myFDP, { x: cols['j-duty-time'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
 
-                // 3. Night Duty
-                if(calculatedNightDuty && cols['j-duty-night']) {
-                    page.drawText(calculatedNightDuty, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
+                // Draw Night Duty (Unique to this crew type)
+                if(myNight && cols['j-duty-night']) {
+                    page.drawText(myNight, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
                 }
 
-                // 4. Allowed FDP (Input box)
+                // Draw Max FDP
                 if(maxFDP && cols['j-duty-allowed']) 
                     page.drawText(maxFDP, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font });
             }
 
-            const out = await pdfDoc.save(); 
-            
-            // 2. Construct the filename
+            // --- 4. SAVE & DOWNLOAD ---
+            const out = await pdfDoc.save();
             const flt = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
             const filename = `JOURNEY_LOG_${flt}.pdf`;
             
-            // 3. Device detection
             const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || 
                              (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
 
             if (mode === 'email' && isMobile) {
                 const subject = `Journey Log: ${flt}`;
-                // Error was here: you must pass 'out' because that's where the data is
                 await sharePdf(out, filename, subject, "Journey Log attached.");
             } else {
-                // Error was here: you must pass 'out'
                 downloadBlob(out, filename);
             }
 
