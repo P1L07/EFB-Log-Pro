@@ -1,4 +1,6 @@
 (function() {
+
+const APP_VERSION = "1.1";
     // ==========================================
     // 1. CONFIGURATION
     // ==========================================
@@ -2342,4 +2344,13 @@ function loadState() {
         tx.objectStore("files").delete("currentOFP");
     }
 
+    window.addEventListener('load', function() {
+    setTimeout(() => {
+        const verEl = document.getElementById('app-version-display');
+        if (verEl && typeof APP_VERSION !== 'undefined') {
+            verEl.innerText = `v${APP_VERSION}`;
+            verEl.style.color = '#007aff'; // Turn blue so we know JS touched it
+        }
+    }, 500); // Wait 0.5s just to be sure
+});
 })();
