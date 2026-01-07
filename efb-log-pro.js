@@ -7,7 +7,8 @@ const APP_VERSION = "1.1";
     // Only register if we are on HTTP or HTTPS (prevents 'null' origin error)
 if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
     
-    navigator.serviceWorker.register('/sw.js').then(reg => {
+    navigator.serviceWorker.register('sw.js')
+    .then(reg => {
         // Check for updates every time the app is opened
         reg.update();
 
