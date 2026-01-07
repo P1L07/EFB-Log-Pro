@@ -18,11 +18,11 @@
 
 <style>
 
+/* Signature */
 .signature-container {
     width: 100%;
     margin-top: 10px;
 }
-
 
 #sig-canvas {
     width: 100%;
@@ -259,7 +259,31 @@ td{padding:12px;border-bottom:1px solid var(--border);font-size:14px}
 canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px solid var(--border)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
 
-/* Added styles for the Navigation Status block you requested */
+.btn-icon {
+    background: #e5e5ea; /* Light grey iOS style */
+    border: none;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #333;
+    margin: 0 2px;
+}
+
+.btn-action {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    color: white;
+}
+
+.modify { background-color: #007aff; } /* Apple Blue */
+.delete { background-color: #ff3b30; } /* Apple Red */
+
+/* Added styles for the Navigation Status block */
 #nav-status-block {
     flex-shrink: 0;
     padding: 10px 5px; /* Aligned with buttons */

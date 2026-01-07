@@ -2,7 +2,9 @@
     // ==========================================
     // 1. CONFIGURATION
     // ==========================================
-    if ('serviceWorker' in navigator) {
+    // Only register if we are on HTTP or HTTPS (prevents 'null' origin error)
+if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
+    
     navigator.serviceWorker.register('/sw.js').then(reg => {
         // Check for updates every time the app is opened
         reg.update();
@@ -12,11 +14,14 @@
             installingWorker.onstatechange = () => {
                 if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
                     // New version found! Force a reload.
-                    alert("New version available! Reloading...");
-                    window.location.reload();
+                    if(confirm("New version available! Reload now?")) {
+                        window.location.reload();
+                    }
                 }
             };
         };
+    }).catch(err => {
+        console.warn("SW Register failed (usually expected on localhost):", err);
     });
 }
     // --- JOURNEY LOG PDF MAPPING ---
@@ -1034,7 +1039,7 @@ window.runCalc = function() {
     // 4. EASA MAX FDP CALCULATION
     // (This now only runs if dailyLegs.length > 0)
     // ==========================================
-    const sectors = Math.max(dailyLegs.length + 1, 1);
+    const sectors = Math.max(dailyLegs.length, 1);
     
     // Convert to Local Time (Assume UTC+5 for Base)
     let localStartMins = startMins + 300; 
@@ -1432,6 +1437,16 @@ function renderTables() {
     let journeyLog = [];
     // Journey Log Leg Management
     window.addLeg = function() {
+    // 1. Validation: Prevent adding empty legs
+    const dest = el('j-dest')?.value;
+    const dep = el('j-dep')?.value;
+    
+    // If Destination is empty, stop immediately.
+    if (!dest || !dep) {
+        return alert("Please upload the OFP.");
+    }
+
+    // Maximum 4 legs
     if(dailyLegs.length >= 4) return alert("Max 4 legs.");
 
     // ============================================================
@@ -1500,7 +1515,6 @@ function renderTables() {
         d[k] = getValue(k);
     });
 
-    // NOTE: I added 'j-std' to the list above so we save the STD of the leg!
 
     d.fdp = fdp; 
     d.fdpAlert = alertFdp;
@@ -1555,11 +1569,99 @@ function renderTables() {
         saveState();
     };
 
+    // --- MOVE LEG (Re-order Sequence) ---
+window.moveLeg = function(index, direction) {
+    const newIndex = index + direction;
+    
+    // Safety check boundaries
+    if (newIndex < 0 || newIndex >= dailyLegs.length) return;
+
+    // Swap the elements in the array
+    const temp = dailyLegs[index];
+    dailyLegs[index] = dailyLegs[newIndex];
+    dailyLegs[newIndex] = temp;
+
+    // IMPORTANT: If we changed the first leg (index 0), 
+    // we must re-calculate the Duty Start based on the new Leg 1.
+    if (index === 0 || newIndex === 0) {
+        // Unlock duty start to allow re-calculation
+        // (You might need to clear dutyStartTime global var here depending on your logic)
+        calcDutyLogic(); 
+    }
+
+    renderJourneyList();
+    saveState();
+};
+
+// --- MODIFY LEG (Edit Data) ---
+window.modifyLeg = function(index) {
+    const leg = dailyLegs[index];
+    if (!leg) return;
+
+    // 1. Load data back into inputs
+    Object.keys(leg).forEach(key => {
+        const e = el(key);
+        if (e) {
+            if (e.tagName === 'INPUT' || e.tagName === 'SELECT') e.value = leg[key];
+            else e.innerText = leg[key];
+        }
+    });
+
+    // 2. Remove from list so "Add Leg" updates it instead of duplicating
+    dailyLegs.splice(index, 1);
+    
+    renderJourneyList();
+    
+    // 3. Reset duty logic if we are editing the first leg
+    if (index === 0) {
+        // Clear the locked start time so the edited STD can generate a new one
+        safeText('j-duty-start', '00:00'); 
+        dutyStartTime = null; 
+    }
+    
+    alert("Leg loaded. Make changes and click '+ Add Leg'.");
+};
+
     window.renderJourneyList = function() {
-        const tb = el('journey-list-body');
-        if(!tb) return;
-        if(dailyLegs.length === 0) tb.innerHTML = '<tr><td colspan="5" style="text-align:center;">No legs added.</td></tr>';
-        else tb.innerHTML = dailyLegs.map((l,i) => `<tr><td>${i+1}</td><td>${l['j-flt']}</td><td>${l['j-dep']}-${l['j-dest']}</td><td style="${l.fdpAlert?'color:red':''}">${l.fdp}</td><td><button onclick="removeLeg(${i})">Del</button></td></tr>`).join('');
+    const tb = el('journey-list-body');
+    if(!tb) return;
+
+    if(dailyLegs.length === 0) {
+        tb.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 15px; color: #888;">No legs added.</td></tr>';
+    } else {
+        tb.innerHTML = dailyLegs.map((l, i) => {
+            // Check if we can move Up or Down
+            const canMoveUp = i > 0; 
+            const canMoveDown = i < dailyLegs.length - 1;
+
+            return `
+            <tr>
+                <td style="text-align:center; font-weight:bold;">${i+1}</td>
+                <td>${l['j-flt']}</td>
+                <td>${l['j-dep']} - ${l['j-dest']}</td>
+                <td style="${l.fdpAlert ? 'color:red; font-weight:bold;' : ''}">${l.fdp || '-'}</td>
+                
+                <td style="white-space: nowrap; text-align: right;">
+                    <button onclick="moveLeg(${i}, -1)" class="btn-icon" ${!canMoveUp ? 'disabled style="opacity:0.3"' : ''} title="Move Up">
+                        ▲
+                    </button>
+                    
+                    <button onclick="moveLeg(${i}, 1)" class="btn-icon" ${!canMoveDown ? 'disabled style="opacity:0.3"' : ''} title="Move Down">
+                        ▼
+                    </button>
+
+                    <button onclick="modifyLeg(${i})" class="btn-action modify" style="margin-left: 8px;">
+                        Edit
+                    </button>
+                    
+                    <button onclick="removeLeg(${i})" class="btn-action delete" style="margin-left: 5px;">
+                        Del
+                    </button>
+                </td>
+            </tr>
+            `;
+        }).join('');
+    }
     };
 
     window.showTab = function(id, btn) {
@@ -1962,8 +2064,7 @@ async function sharePdf(pdfBytes, filename, subject, body) {
     // 2. Copy the target email to clipboard automatically
     try {
         await navigator.clipboard.writeText("ofp@airastana.com");
-        // Optional: Alert the user so they know
-        // alert("Email 'ofp@airastana.com' copied to clipboard! Paste it in the To: field.");
+        alert("Email 'ofp@airastana.com' copied to clipboard! Paste it in the To: field.");
     } catch (err) {
         console.log("Clipboard write failed", err);
     }
