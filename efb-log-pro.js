@@ -757,7 +757,22 @@ async function runAnalysis(fileOrEvent) {
 window.runCalc = function() {
     const atd = el('ofp-atd-in')?.value;
     
-    // 1. Find the LATEST ATO (Actual Time Over) entered by the pilot
+    // ==========================================
+    // 1. FIND TAXI FUEL (FROM PARSED DATA)
+    // ==========================================
+    let taxiFuel = 200; // Default fallback
+    
+    // Check if fuelData exists and has the TAXI entry
+    if (typeof fuelData !== 'undefined' && Array.isArray(fuelData)) {
+        const taxiEntry = fuelData.find(item => item.name === "TAXI");
+        if (taxiEntry && taxiEntry.fuel) {
+            taxiFuel = parseInt(taxiEntry.fuel);
+        }
+    }
+
+    // ==========================================
+    // 2. FIND LATEST ATO (Actual Time Over)
+    // ==========================================
     let lastAtoMins = -1;
     let lastAtoIndex = -1;
 
@@ -767,31 +782,44 @@ window.runCalc = function() {
             const [h, m] = atoInput.value.split(':').map(Number);
             lastAtoMins = h * 60 + m;
             lastAtoIndex = i;
-            break; // We found the most recent actual time
+            break; 
         }
     }
 
-    // 2. Determine Baseline & Start Fuel (Your existing fuel logic)
+    // ==========================================
+    // 3. DETERMINE START FUEL (PIC - TAXI)
+    // ==========================================
     const pdfTakeoffFuel = waypoints[0] ? (waypoints[0].baseFuel || parseInt(waypoints[0].fob)) : 0;
+    
     let startFuelInput = el('o-f-0');
+    
+    // Get PIC Block Fuel (from the box or the variable)
+    const picBlock = parseInt(el('view-pic-block')?.value || el('view-pic-block')?.innerText) || blockFuelValue || 0;
+    
+    // Logic: If user typed a value in Waypoint 0 (Takeoff), use it.
+    // Otherwise calculate: PIC BLOCK - TAXI FUEL
     let currentStartFuel = (startFuelInput && startFuelInput.value) 
         ? parseInt(startFuelInput.value) 
-        : (parseInt(el('view-pic-block')?.value) || blockFuelValue || 0) - 200;
+        : (picBlock - taxiFuel); 
+
     const delta = currentStartFuel - pdfTakeoffFuel;
 
-    // 3. Update Waypoints Loop
+    // ==========================================
+    // 4. UPDATE WAYPOINTS LOOP
+    // ==========================================
     waypoints.forEach((wp, index) => {
         // --- FUEL CALC ---
         if (wp.baseFuel === undefined) wp.baseFuel = parseInt(wp.fob) || 0;
+        
+        // Apply delta
         if (wp.baseFuel > 0) wp.fuel = wp.baseFuel + delta;
 
-        // --- TIME CALC (The Ripple Fix) ---
+        // --- TIME CALC ---
         if (index === 0 && wp.name === "TAKEOFF") {
             wp.eto = atd ? atd.replace(':', '') : "";
         } 
         else if (lastAtoIndex !== -1 && index > lastAtoIndex) {
-            // If we are AFTER the latest actual waypoint, calculate ETO based on that ATO
-            // New ETO = Latest ATO + (This WP Planned Leg Time - Latest WP Planned Leg Time)
+            // Ripple Calculation
             const minutesFromLatest = wp.totalMins - waypoints[lastAtoIndex].totalMins;
             const newEtoMins = lastAtoMins + minutesFromLatest;
             
@@ -800,7 +828,7 @@ window.runCalc = function() {
             wp.eto = h + m;
         } 
         else {
-            // Default: Calculate from Original ATD (Standard OFP profile)
+            // Standard Calculation
             if(!atd) wp.eto = "";
             else {
                 const [h, m] = atd.split(':').map(Number);
@@ -819,7 +847,7 @@ window.runCalc = function() {
     });
     
     updateAlternateETOs();
-    updateFuelMonitor(); // This will now compare the NEW Destination ETO vs STA
+    updateFuelMonitor();
     syncLastWaypoint();
 };
 
@@ -2168,17 +2196,18 @@ async function sharePdf(pdfBytes, filename, subject, body) {
         agl: el(`o-agl-${i}`)?.value || ""
     }));
 
+    let savedTaxi = 200;
+    if (typeof fuelData !== 'undefined') {
+        const t = fuelData.find(x => x.name === 'TAXI');
+        if(t) savedTaxi = t.fuel;
+    }
+
     const state = {
         inputs: {},
         dailyLegs: dailyLegs, 
         dutyStartTime: dutyStartTime,
-        
-        // --- CRITICAL FIX ---
-        // Save the Route Structure (Names, Distances, Frequencies)
-        // This ensures the calculator has data to work with on reload.
+        savedTaxiValue: savedTaxi,
         routeStructure: waypoints, 
-        
-        // Save the typed values separately
         waypointUserValues: userInputs 
     };
 
@@ -2198,7 +2227,15 @@ function loadState() {
 
     try {
         const state = JSON.parse(raw);
-        
+
+        if (state.savedTaxiValue) {
+            if (typeof fuelData === 'undefined') fuelData = [];
+            // Only push if not already there
+            if (!fuelData.find(x => x.name === 'TAXI')) {
+                fuelData.push({ name: "TAXI", fuel: state.savedTaxiValue });
+            }
+        }
+            
         // 1. Restore Simple Inputs
         if(state.inputs) {
             Object.keys(state.inputs).forEach(id => {
@@ -2219,7 +2256,7 @@ function loadState() {
             calcDutyLogic(); 
         }
 
-        // 4. RESTORE ROUTE & CALCULATE (The Fix)
+        // 4. RESTORE ROUTE & CALCULATE
         if(state.routeStructure && Array.isArray(state.routeStructure) && state.routeStructure.length > 0) {
             // Restore the backbone of the flight plan
             waypoints = state.routeStructure;
@@ -2230,7 +2267,6 @@ function loadState() {
             }
 
             // Re-draw the HTML table using the restored route
-            // (This ensures the input fields exist before we calculate)
             if (typeof renderTables === 'function') {
                 renderTables(); 
             }
