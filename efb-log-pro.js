@@ -932,82 +932,78 @@ window.runCalc = function() {
 
     // --- 2. MAIN LOGIC: Duty & Night Calc ---
     window.calcDutyLogic = function() {
-    const stdSources = ['j-std', 'view-std-text', 'ofp-std-in'];
-    let stdStr = "";
+    let referenceStdStr = "";
 
-    for (let id of stdSources) {
-        const element = el(id);
-        if (element) {
-            // Priority: .value (input), then .innerText (span/div), then .textContent
-            let val = (element.value || element.innerText || element.textContent || "").trim();
-            // Basic check to ensure it looks like a time (HH:MM or HHMM)
-            if (val && val !== "-" && val !== "----" && /\d/.test(val)) {
-                stdStr = val;
-                break; 
+    // ==========================================
+    // 1. DETERMINE REFERENCE STD (ANCHOR)
+    // ==========================================
+    if (dailyLegs.length > 0) {
+        // CASE A: We have legs. Duty Start is FIXED to the FIRST leg's STD.
+        // This ensures it doesn't shift when you type in Leg 2, 3, etc.
+        referenceStdStr = dailyLegs[0]['j-std']; 
+    } else {
+        // CASE B: No legs yet. Look for OFP or Manual Input to give a preview.
+        const stdSources = ['j-std', 'view-std-text', 'ofp-std-in'];
+        for (let id of stdSources) {
+            const element = el(id);
+            if (element) {
+                let val = (element.value || element.innerText || element.textContent || "").trim();
+                if (val && val !== "-" && val !== "----" && /\d/.test(val)) {
+                    referenceStdStr = val;
+                    break; 
+                }
             }
         }
     }
 
-    if (!stdStr) {
+    // IF NO DATA -> RESET TO 00:00
+    if (!referenceStdStr) {
+        safeText('j-duty-start', "00:00");
+        safeText('j-cc-duty-start', "00:00");
+        safeSet('j-max-fdp', ""); // Clear FDP limit if no time
+        safeSet('j-night-calc', "");
         return; 
     }
-
-    // Update global variable for addLeg validation
-    // Ensure this matches the time string exactly
-    const stdMinsForVariable = parseTimeString(stdStr);
-
-    // 2. Handle Reporting Type Selection
-    // We force a refresh of the detection logic here
-    const detectedOffset = detectReportOffset();
-    const select = el('j-report-type');
-    
-    // Only auto-change if user hasn't manually selected something else 
-    // or if we are during the initial OFP load
-    if(select && dailyLegs.length === 0) {
-        select.value = detectedOffset;
-    }
-
-    const reportOffset = parseInt(select?.value || 90);
-    
-    // Get Sectors (Default to 2 if not found)
-    const sectorsInput = el('j-sectors');
-    const sectors = Math.max(dailyLegs.length + 1, 1);
 
     // ==========================================
     // 2. CALCULATE DUTY START (UTC)
     // ==========================================
-    const stdMins = parseTimeString(stdStr);
-    let startMins = stdMins - reportOffset;
-    if(startMins < 0) startMins += 1440; // Normalize to 0-1439 UTC
+    const stdMins = parseTimeString(referenceStdStr);
     
-    dutyStartTime = startMins; // <--- ADD THIS LINE TO FIX THE addLeg ERROR
-    // Update UI for Start Times
+    // Reporting Offset Logic
+    const detectedOffset = detectReportOffset();
+    const select = el('j-report-type');
+    if(select && dailyLegs.length === 0) {
+        select.value = detectedOffset;
+    }
+    const reportOffset = parseInt(select?.value || 90);
+    
+    // Calculate Start
+    let startMins = stdMins - reportOffset;
+    if(startMins < 0) startMins += 1440; 
+    
+    dutyStartTime = startMins; // Update global
     safeText('j-duty-start', minsToTime(startMins)); 
     
+    // CC Start (usually 15min later or same)
     let ccStart = startMins - (reportOffset === 60 ? 0 : 15);
     if(ccStart < 0) ccStart += 1440;
     safeText('j-cc-duty-start', minsToTime(ccStart));
 
     // ==========================================
-    // 3. EASA MAX FDP CALCULATION (NEW!)
+    // 3. EASA MAX FDP CALCULATION
     // ==========================================
+    // Use stored legs count if available, otherwise 1
+    const sectors = Math.max(dailyLegs.length + 1, 1);
     
-    // We need Local Time for the table lookup.
-    // Your location (KZ) is UTC+5. 
-    // If you fly elsewhere, this logic might need a 'Timezone' input, 
-    // but for now we assume Base Time = UTC+5 as per previous context.
-    
-    let localStartMins = startMins + 300; // +5 hours in minutes
+    // Convert to Local Time (Assume UTC+5 for Base)
+    let localStartMins = startMins + 300; 
     if (localStartMins >= 1440) localStartMins -= 1440;
 
-    // Convert minutes to HHMM integer for easy table lookup (e.g. 0630)
     const hh = Math.floor(localStartMins / 60);
     const mm = localStartMins % 60;
     const timeVal = (hh * 100) + mm;
 
-    // The EASA Table Data
-    // Format: [Start, End, Limit_1-2, Limit_3, Limit_4]
-    // Note: 1700-0459 is handled as a catch-all else/if block
     const limits = [
         { s: 500,  e: 514,  v: ["12:00", "11:30", "11:00"] },
         { s: 515,  e: 529,  v: ["12:15", "11:45", "11:15"] },
@@ -1023,13 +1019,10 @@ window.runCalc = function() {
         { s: 1630, e: 1659, v: ["11:15", "10:45", "10:15"] }
     ];
 
-    let maxFDP = "11:00"; // Default to the lowest night value (1700-0459) for 1-2 sectors
-
-    // 1. Check the specific day ranges
+    let maxFDP = "11:00"; 
     let found = false;
     for (let r of limits) {
         if (timeVal >= r.s && timeVal <= r.e) {
-            // Index 0 = 1-2 sectors, 1 = 3 sectors, 2 = 4 sectors
             let idx = (sectors === 3) ? 1 : (sectors === 4) ? 2 : 0;
             maxFDP = r.v[idx];
             found = true;
@@ -1037,35 +1030,29 @@ window.runCalc = function() {
         }
     }
 
-    // 2. If not found, it falls into the 1700 - 0459 Night Block
     if (!found) {
         if (sectors === 3) maxFDP = "10:30";
         else if (sectors === 4) maxFDP = "10:00";
-        else maxFDP = "11:00"; // 1-2 sectors
+        else maxFDP = "11:00"; 
     }
 
-    // Set the Max FDP Input
     safeSet('j-max-fdp', maxFDP);
 
-
     // ==========================================
-    // 4. NIGHT DUTY CALCULATION (UTC 21:00-23:59)
+    // 4. NIGHT DUTY CALCULATION
     // ==========================================
-    // Calculate Duty End (UTC) based on actual legs or default
     let lastInStr = el('j-in')?.value; 
     if (!lastInStr && dailyLegs.length > 0) {
         lastInStr = dailyLegs[dailyLegs.length - 1]['j-in'];
     }
 
-    let endMins = startMins + 600; // Default 10h
+    let endMins = startMins + 600; 
     if (lastInStr) {
         const inMins = parseTimeString(lastInStr);
-        // Linear logic: If In < Start, it's next day
         if (inMins < startMins) endMins = inMins + 1440;
         else endMins = inMins;
     }
 
-    // Check overlap with 21:00-23:59 UTC (Day 1 and Day 2)
     const wStart = 1260; const wEnd = 1439;
     let overlap = 0;
     overlap += Math.max(0, Math.min(endMins, wEnd) - Math.max(startMins, wStart));
