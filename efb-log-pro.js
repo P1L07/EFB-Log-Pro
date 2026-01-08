@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.1";
+const APP_VERSION = "1.1.2";
     // ==========================================
     // 1. CONFIGURATION
     // ==========================================
@@ -2353,5 +2353,22 @@ function loadState() {
             verEl.style.color = '#007aff'; // Turn blue so we know JS touched it
         }
     }, 500); // Wait 0.5s just to be sure
+
+    window.addEventListener('load', function() {
+        setTimeout(() => {
+            const verEl = document.getElementById('app-version-display');
+            if (verEl) {
+                // Check if APP_VERSION is defined
+                if (typeof APP_VERSION !== 'undefined') {
+                    verEl.innerText = `v${APP_VERSION}`;
+                    verEl.style.color = '#007aff'; 
+                } else {
+                    // If offline/error and variable is missing
+                    verEl.innerText = " (Offline)";
+                    verEl.style.color = '#8e8e93';
+                }
+            }
+        }, 500);
+    });
 });
 })();
