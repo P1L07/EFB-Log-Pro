@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.1.9"; // <--- Update this to match
+const APP_VERSION = "1.1.10"; // <--- Update this to match
 
 // ==========================================
 // 1. CONFIGURATION & UPDATE LOGIC
@@ -1551,7 +1551,7 @@ function renderTables() {
     
     // If Destination is empty, stop immediately.
     if (!dest || !dep) {
-        return alert("Please upload the OFP.");
+        return alert("No legs to insert");
     }
 
     // Maximum 4 legs
@@ -1665,7 +1665,9 @@ window.removeLeg = function(i) {
 window.clearLegs = async function() {
     if(!confirm("Warning: This will delete ALL data (OFP, Flight Log, and Journey Log). Continue?")) return;
 
-    // 1. RESET GLOBAL VARIABLES
+    // ===========================================
+    // 1. RESET INTERNAL VARIABLES
+    // ===========================================
     dailyLegs = [];
     waypoints = [];
     alternateWaypoints = [];
@@ -1676,37 +1678,88 @@ window.clearLegs = async function() {
     savedSignatureData = null;
     window.cutoffPageIndex = -1;
 
-    // 2. CLEAR TABLES & VISUALS
-    renderJourneyList(); 
+    // ===========================================
+    // 2. CLEAR TABLES (VISUALS)
+    // ===========================================
+    renderJourneyList(); // Wipes Journey Log table
     
-    // Manually clear Flight Log tables if renderTables() relies on waypoints being populated to clear them
+    // Wipe Flight Log & Fuel Table
     ['ofp-tbody', 'altn-tbody', 'fuel-tbody'].forEach(id => {
         const tb = document.getElementById(id);
         if(tb) tb.innerHTML = '';
     });
-
-    // 3. CLEAR INPUT FIELDS
-    // Use your existing helper to clear OFP specific inputs
-    if (typeof clearOFPInputs === 'function') clearOFPInputs();
     
-    // Use your existing helper to clear Journey Leg inputs
-    if (typeof clearJourneyInputs === 'function') clearJourneyInputs();
+    // Set Fuel Table to "Empty" state
+    const fuelTb = document.getElementById('fuel-tbody');
+    if(fuelTb) fuelTb.innerHTML = '<tr><td colspan="4" style="text-align:center;">No Fuel Data</td></tr>';
 
-    // Reset Duty specific fields
+    // ===========================================
+    // 3. CLEAR TEXT DISPLAYS (spans/divs)
+    // ===========================================
+    // These are the fields you mentioned were sticking around
+    const textIDs = [
+        'view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 
+        'view-std-text', 'view-sta-text', 'view-altn', 'view-ci',
+        'view-dest-route', 'view-altn-route', 
+        'view-min-block', 'view-pic-block', // Fuel Headers
+        // Weights
+        'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 
+        'view-dow', 'view-tow', 'view-lw', 'view-zfw'
+    ];
+    
+    textIDs.forEach(id => {
+        const e = document.getElementById(id);
+        if(e) {
+            // If it's an input, clear value; otherwise clear text
+            if(e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') e.value = "";
+            else e.innerText = "-"; 
+        }
+    });
+
+    // ===========================================
+    // 4. CLEAR INPUT FIELDS (Values)
+    // ===========================================
+    const inputIDs = [
+        // Front Page & OFP Inputs
+        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 
+        'front-extra-kg', 'front-extra-reason', 'ofp-atd-in',
+        
+        // Hidden/Sync Inputs (Crucial for syncing)
+        'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std',
+        
+        // Journey Log Inputs
+        'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
+        'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
+        'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
+        'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw'
+    ];
+
+    inputIDs.forEach(id => {
+        const e = document.getElementById(id);
+        if(e) e.value = "";
+    });
+
+    // ===========================================
+    // 5. RESET DUTY & DEFAULTS
+    // ===========================================
     safeSet('j-duty-start', "00:00");
     safeSet('j-cc-duty-start', "00:00");
     safeSet('j-max-fdp', "");
-    safeSet('j-night-calc', "");
-    safeSet('j-fc-count', "2");
+    safeSet('j-fc-count', "2"); 
     safeSet('j-cc-count', "4");
 
+    // Reset Signature Pad
     if (window.signaturePad) {
         window.signaturePad.clear();
     }
     
+    // Reset File Input (allows re-uploading same file)
     const fileInput = document.getElementById('ofp-file-in');
     if(fileInput) fileInput.value = "";
     
+    // ===========================================
+    // 6. CLEAR STORAGE & VALIDATION
+    // ===========================================
     localStorage.removeItem('efb_log_state');
     
     try {
@@ -1718,7 +1771,7 @@ window.clearLegs = async function() {
     }
 
     if (typeof validateInputs === 'function') validateInputs();
-
+    
     console.log("App completely reset.");
 };
 
