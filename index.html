@@ -13,7 +13,7 @@
 <script src="pdf.min.js"></script>
 <script src="signature_pad.umd.min.js"></script>
 
-<script src="efb-log-pro.js?v=1.1.2"></script>
+<script src="efb-log-pro.js?v=1.1.5"></script>
 
 
 <style>
@@ -572,46 +572,34 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
                 </div>
 
                 <div style="margin-top:30px; border-top:1px solid var(--border); padding-top:20px;">
-    <h3>Duty Settings & Crew</h3>
-    <div class="grid-row">
-        <div class="field">
-            <label>Reporting Type (AUTO DETECT)</label>
-            <select id="j-report-type" class="input" onchange="calcDutyLogic()">
-                <option value="75">Air Astana Domestic (1:15)</option>
-                <option value="90">Air Astana International (1:30)</option>
-                <option value="60">FlyArystan / Int'l Return (1:00)</option>
-            </select>
-        </div>
-
-        <div class="field">
-            <label>Max FDP (AUTO DETECT)</label>
-            <input type="time" id="j-max-fdp" class="input" style="color:var(--accent); font-weight:bold;">
-        </div>
-        <div class="field">
-            <label>Night Duty (AUTO DETECT)</label>
-           <input type="time" id="j-night-calc" class="input" style="color:var(--accent); font-weight:bold;">
-        </div>
+<h3>Duty Settings & Crew</h3>
+<div class="grid-row">
+    <div class="field">
+        <label>FC Report Time</label>
+        <input type="time" id="j-duty-start" class="input" style="color:var(--accent); font-weight:bold;"> 
     </div>
 
-    <div class="grid-row" style="margin-top:15px;">
-        <div class="field">
-            <label># Flight Crew</label>
-            <input type="number" id="j-fc-count" class="input" value="2" min="1" max="4">
-        </div>
-        <div class="field">
-            <label># Cabin Crew</label>
-            <input type="number" id="j-cc-count" class="input" value="4" min="0" max="10">
-        </div>
-        <div class="field">
-            <label>FC Duty Start</label>
-            <div id="j-duty-start" class="data-box">-</div>
-        </div>
-        <div class="field">
-            <label>CC Duty Start</label>
-            <div id="j-cc-duty-start" class="data-box">-</div>
-        </div>
+    <div class="field">
+        <label>CC Report Time</label>
+        <input type="time" id="j-cc-duty-start" class="input" style="color:var(--accent); font-weight:bold;">
+    </div>
+
+    <div class="field">
+        <label>Max FDP</label>
+        <input type="time" id="j-max-fdp" class="input" style="color:var(--accent); font-weight:bold;">
     </div>
 </div>
+
+<div class="grid-row" style="margin-top:15px;">
+    <div class="field">
+        <label># Flight Crew(AUTO)</label>
+        <input type="number" id="j-fc-count" class="input" value="2" min="1" max="4">
+    </div>
+    <div class="field">
+        <label># Cabin Crew(AUTO)</label>
+        <input type="number" id="j-cc-count" class="input" value="4" min="0" max="10">
+    </div>
+    </div>
 <div class="panel">
     <div class="field" margin-top:10px;>
         <label>Upload Journey Log</label>

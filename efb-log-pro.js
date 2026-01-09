@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.1.2";
+const APP_VERSION = "1.1.5";
     // ==========================================
     // 1. CONFIGURATION
     // ==========================================
@@ -327,293 +327,229 @@ window.getSignatureDataURL = getSignatureDataURL;
     // ==========================================
     // 4. OFP PARSING LOGIC
     // ==========================================
+// ==========================================
+// 4. OFP PARSING LOGIC (FIXED)
+// ==========================================
+// Global variable (make sure this is at the top level of your script or outside the function)
+window.cutoffPageIndex = -1; 
+
 async function runAnalysis(fileOrEvent) {
     let blob = null;
     let isAutoLoad = false;
 
     if (fileOrEvent instanceof Blob) {
-        // Auto-load on startup
         blob = fileOrEvent;
         isAutoLoad = true; 
     } else {
-        // Manual Upload via Button
         const fileInput = el('ofp-file-in');
         if (fileInput && fileInput.files.length > 0) {
             blob = fileInput.files[0];
             savePdfToDB(blob); 
             
-            // --- SMART RESET LOGIC ---
-            // We want to clear old OFP inputs but KEEP the Journey Log legs.
-            
-            // 1. Read current saved data
+            // Smart Reset
             let stored = {};
             try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
-            
-            // 2. Wipe ONLY the OFP inputs and Waypoints
             stored.inputs = {}; 
             stored.waypoints = [];
-            // NOTE: We do NOT touch 'stored.dailyLegs'. They are safe!
-            
-            // 3. Save the cleaned state back to storage
             localStorage.setItem('efb_log_state', JSON.stringify(stored));
-            
-            // 4. Clear the memory variable so old data doesn't ghost in
             window.savedWaypointData = [];
         }
     }
 
     if (!blob) return;
 
-    // Only clear visual inputs if it's a MANUAL upload
     if (!isAutoLoad) {
         clearOFPInputs();
-        const headersToReset = [
-            'view-pic-block', 'view-flt', 'view-reg', 'view-date', 
-            'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn'
-        ];
-    
-        headersToReset.forEach(id => {
+        ['view-pic-block', 'view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn'].forEach(id => {
             const e = document.getElementById(id);
-            if(e) {
-                // Handle both Input fields and Text spans
-                if (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') e.value = "";
-                else e.innerText = "-";
-            }
+            if(e) { (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') ? e.value = "" : e.innerText = "-"; }
         });
     }
 
-    // 3. Process the file
     originalFileName = blob.name || "Logged_OFP.pdf";
     ofpPdfBytes = await blob.arrayBuffer();
-
     const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
         
-        // --- NEW: RENDER PDF FOR IPAD (Canvas Method) ---
-        const container = document.getElementById('pdf-render-container');
-        const fallback = document.getElementById('pdf-fallback');
-        
-        if (container && pdf) {
-            // Hide fallback
-            if(fallback) fallback.style.display = 'none';
-            
-            // Clear any old pages
-            container.innerHTML = '';
-
-            // Loop through ALL pages
-            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                try {
-                    const page = await pdf.getPage(pageNum);
-                    
-                    // Scale 1.5 makes it crisp on Retina screens
-                    const scale = 1.5;
-                    const viewport = page.getViewport({ scale });
-
-                    // Create a canvas for this page
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-                    canvas.height = viewport.height;
-                    canvas.width = viewport.width;
-                    
-                    // Style it to fit the screen width
-                    canvas.style.width = '100%'; 
-                    canvas.style.height = 'auto';
-                    canvas.style.maxWidth = '800px'; // Prevent it from getting too huge
-                    canvas.style.marginBottom = '20px';
-                    canvas.style.boxShadow = '0 4px 10px rgba(0,0,0,0.5)'; // Nice shadow
-                    
-                    container.appendChild(canvas);
-
-                    // Render the page
-                    await page.render({
-                        canvasContext: context,
-                        viewport: viewport
-                    }).promise;
-                    
-                } catch (err) {
-                    console.error("Error rendering page " + pageNum, err);
-                }
-            }
-        }
-
-        waypoints = []; alternateWaypoints = []; fuelData = []; blockFuelValue = 0;
-        
-        function extractFrontCoords(items) {
-            items.forEach(item => {
-                const raw = item.str.toUpperCase();
-                const t = raw.trim();
-                if (t.includes('ATIS')) frontCoords.atis = item;
-                if (t.includes('CLRNC')) frontCoords.atcLabel = item;
-                if (t.includes('ALT M1') || (t.includes('ALT') && t.includes('1'))) frontCoords.altm1 = item;
-                if (t.includes('STBY')) frontCoords.stby = item;
-                if (t.includes('ALT M2') || (t.includes('ALT') && t.includes('2'))) frontCoords.altm2 = item;
-                if (t.includes('PIC') && t.includes('BLOCK')) frontCoords.picBlockLabel = item;
-                if (t.includes('REASON')) frontCoords.reasonLabel = item;
-            });
-        }
-        
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const content = await page.getTextContent();
-            const items = content.items;
-
-            if (i === 1) {
-                extractFrontCoords(items);
-                const textContent = items.map(x=>x.str).join(' ');
-                
-                // --- FIXED REGEX FOR STA ---
-                // Replaced strict \d{4} with \S+ (non-whitespace) for block times
-                // This handles cases like "05:30" or "----" between the times
-                const match2 = textContent.match(/([A-Z]{3}\d{3,4})\s+([A-Z0-9-]{3,7})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s+([A-Z]{4})\s+CI(\w+)\s+(\d{4})\s+\S+\s+(\d{4})\s+\S+\s+([A-Z]{4})/);
-
-                if(match2) {
-                    const flt=match2[1], reg=match2[2], date=match2[3], dep=match2[4], dest=match2[5], ci=match2[6];
-                    const stdRaw=match2[7], staRaw=match2[8], altn=match2[9];
-                    
-                    const stdFmt = stdRaw.length===4 ? stdRaw.substring(0,2)+":"+stdRaw.substring(2,4) : stdRaw;
-                    const staFmt = staRaw.length===4 ? staRaw.substring(0,2)+":"+staRaw.substring(2,4) : staRaw;
-                    
-                    safeText('view-flt', flt); safeText('view-reg', reg); safeText('view-date', date);
-                    safeText('view-dep', dep); safeText('view-dest', dest); safeText('view-ci', 'CI'+ci);
-                    safeText('view-std-text', stdFmt); safeText('view-sta-text', staFmt);
-                    safeText('view-altn', altn);
-                    
-                    safeSet('j-flt', flt); safeSet('j-reg', reg); safeSet('j-date', date);
-                    safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
-
-                    if (dailyLegs.length === 0) {
-                        safeSet('j-std', stdFmt)
-                        calcDutyLogic();
-                    }
-                    
-                    calcDutyLogic();
-                    extractRoutes(textContent);
-                    extractFuelDataSimple(textContent);
-                    extractWeights(textContent);
-                }
-            }
-            
-            if (i >= 2) {
-                const rows = buildRows(items);
-                rows.sort((a,b) => b.y - a.y); 
-                
-                let headerY = null;
-                for(const row of rows) {
-                    const rowText = row.items.map(item => item.str).join(' ');
-                    let headerCount = 0;
-                    if(rowText.includes("TO") || rowText.includes("TO:")) headerCount++;
-                    if(rowText.includes("AWY") || rowText.includes("AWY:")) headerCount++;
-                    if(rowText.includes("ET") || rowText.includes("ETE")) headerCount++;
-                    if(rowText.includes("FUEL") || rowText.includes("FOB")) headerCount++;
-                    if(headerCount >= 2) { headerY = row.y; break; }
-                }
-                
-                if(!headerY) continue; 
-                
-                for(let r = 0; r < rows.length; r++) {
-                    const row = rows[r];
-                    if(row.y >= headerY) continue;
-                    if(row.items.length < 3) continue;
-                    
-                    let timeValue = null, fuelValue = null;
-                    
-                    for(const item of row.items) {
-                        const str = item.str.trim();
-                        if(/^\d+[\.:]\d{2}$/.test(str)) timeValue = str;
-                        if(/^\d{3,5}$/.test(str) && !str.includes('.') && !str.includes(':')) {
-                            const num = parseInt(str);
-                            if(num >= 100 && num <= 50000) {
-                                const ctx = row.items.map(i=>i.str).join(' ');
-                                if(!ctx.includes('FL ') && !/^\s*\d{3}\s*$/.test(str)) fuelValue = str;
-                            }
-                        }
-                    }
-                    
-                    if(timeValue && fuelValue) {
-                        let data = { name: "?", awy: "-", level: "-", track: "-", wind: "-", tas: "-", gs: "-" };
-                        
-                        if(r > 0) {
-                            const prevRow = rows[r-1];
-                            if(Math.abs(row.y - prevRow.y) < 25) {
-                                const fullString = prevRow.items.map(x => x.str).join(' ');
-                                const parts = fullString.trim().split(/\s+/);
-                                if (parts.length >= 7) {
-                                    data.name = parts[0];
-                                    data.awy = parts[1];
-                                    data.level = parts[2];
-                                    data.track = parts[3];
-                                    data.wind = parts[4];
-                                    data.tas = parts[5];
-                                    data.gs = parts[6];
-                                } else if (parts.length > 0) {
-                                    data.name = parts[0];
-                                }
-                            }
-                        }
-
-                        if(data.name !== "?") {
-                            const absTime = parseTimeString(timeValue);
-                            const fobValue = parseInt(fuelValue) || 0;
-                            const wpObj = {
-                                ...data,
-                                totalMins: absTime,
-                                eto: "",
-                                fob: fobValue,
-                                page: i-1,
-                                y_anchor: row.y,
-                                isTakeoff: false,
-                                isAlternate: false,
-                                rawTime: timeValue
-                            };
-                            waypoints.push(wpObj); 
-                        }
-                    }
-                }
-            }
-        } 
-        
-        waypoints.forEach(wp => {
-            // Your parser uses 'fob' to store the PDF value, 
-            // so we save that into 'baseFuel' for our math.
-            wp.baseFuel = parseInt(wp.fob) || 0; 
-            wp.fuel = wp.baseFuel; // Set initial estimated fuel
-        });
-
-        processWaypointsList();
-        
-        // --- AUTO-FILL PIC BLOCK ---
-        // Ensure the input field shows the OFP block fuel immediately
-        // --- AUTO-FILL PIC BLOCK ---
-        if (el('view-pic-block')) {
-            const elPic = el('view-pic-block');
-            const val = blockFuelValue || 0;
-            
-            // Check type to assign correctly
-            if(elPic.tagName === 'INPUT') elPic.value = val;
-            else elPic.innerText = val; // <--- CORRECT for spans/divs
-        }
-
-        runCalc(); 
-        validateInputs();
-        renderFuelTable();
-        renderTables();
-
-        // RESTORE USER INPUTS (Keep the rest of your logic below)
-        loadState();
-        
-        // Also re-apply the Waypoint Table data specifically
-        if (window.savedWaypointData && window.savedWaypointData.length > 0) {
-            window.savedWaypointData.forEach((data, i) => {
-                if (i < waypoints.length) {
-                    if(data.ato) safeSet(`o-a-${i}`, data.ato);
-                    if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                    if(data.notes) safeSet(`o-n-${i}`, data.notes);
-                    if(data.agl) safeSet(`o-agl-${i}`, data.agl);
-                }
-            });
-        syncLastWaypoint();
-        updateAlternateETOs();
+    // --- RENDER PREVIEW ---
+    const container = document.getElementById('pdf-render-container');
+    const fallback = document.getElementById('pdf-fallback');
+    if (container && pdf) {
+        if(fallback) fallback.style.display = 'none';
+        container.innerHTML = '';
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const scale = 1.5;
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            canvas.style.width = '100%'; canvas.style.height = 'auto'; canvas.style.maxWidth = '800px'; canvas.style.marginBottom = '20px';
+            container.appendChild(canvas);
+            await page.render({ canvasContext: context, viewport: viewport }).promise;
         }
     }
+
+    // --- RESET ---
+    waypoints = []; alternateWaypoints = []; fuelData = []; blockFuelValue = 0;
+    
+    // RESET THE CUTOFF INDEX
+    window.cutoffPageIndex = -1; 
+
+    function extractFrontCoords(items) {
+        items.forEach(item => {
+            const raw = item.str.toUpperCase();
+            if (raw.includes('ATIS')) frontCoords.atis = item;
+            if (raw.includes('CLRNC')) frontCoords.atcLabel = item;
+            if (raw.includes('ALT M1')) frontCoords.altm1 = item;
+            if (raw.includes('STBY')) frontCoords.stby = item;
+            if (raw.includes('ALT M2')) frontCoords.altm2 = item;
+            if (raw.includes('PIC') && raw.includes('BLOCK')) frontCoords.picBlockLabel = item;
+            if (raw.includes('REASON')) frontCoords.reasonLabel = item;
+        });
+    }
+    
+    // --- PARSE PAGES ---
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const items = content.items;
+        
+        // Join text with spaces to ensure words are separated
+        const textContent = items.map(x=>x.str).join(' ');
+
+        // =========================================================
+        // 1. IMPROVED DETECTION LOGIC (Regex)
+        // =========================================================
+        if (window.cutoffPageIndex === -1) {
+            // Regex matches:
+            // "END OF THE ICAO FLIGHT PLAN" (Case insensitive, any spacing)
+            // "END OF OFP"
+            // "END OF FLIGHT PLAN"
+            const endPattern = /END\s+OF\s+(THE\s+)?(ICAO\s+)?(FLIGHT\s+PLAN|OFP)/i;
+            
+            if (endPattern.test(textContent)) {
+                window.cutoffPageIndex = i - 1; // Store 0-based index of this page
+                console.log("Found End of OFP at Page:", i);
+            }
+        }
+
+        if (i === 1) {
+            extractFrontCoords(items);
+            const match2 = textContent.match(/([A-Z]{3}\d{3,4})\s+([A-Z0-9-]{3,7})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s+([A-Z]{4})\s+CI(\w+)\s+(\d{4})\s+\S+\s+(\d{4})\s+\S+\s+([A-Z]{4})/);
+
+            if(match2) {
+                const flt=match2[1], reg=match2[2], date=match2[3], dep=match2[4], dest=match2[5], ci=match2[6];
+                const stdRaw=match2[7], staRaw=match2[8], altn=match2[9];
+                const stdFmt = stdRaw.length===4 ? stdRaw.substring(0,2)+":"+stdRaw.substring(2,4) : stdRaw;
+                const staFmt = staRaw.length===4 ? staRaw.substring(0,2)+":"+staRaw.substring(2,4) : staRaw;
+                
+                safeText('view-flt', flt); safeText('view-reg', reg); safeText('view-date', date);
+                safeText('view-dep', dep); safeText('view-dest', dest); safeText('view-ci', 'CI'+ci);
+                safeText('view-std-text', stdFmt); safeText('view-sta-text', staFmt);
+                safeText('view-altn', altn);
+                
+                safeSet('j-flt', flt); safeSet('j-reg', reg); safeSet('j-date', date);
+                safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
+                safeSet('j-std', stdFmt);
+
+                calcDutyLogic();
+                extractRoutes(textContent);
+                extractFuelDataSimple(textContent);
+                extractWeights(textContent);
+            }
+        }
+        
+        if (i >= 2) {
+            const rows = buildRows(items);
+            rows.sort((a,b) => b.y - a.y); 
+            
+            let headerY = null;
+            for(const row of rows) {
+                const rowText = row.items.map(item => item.str).join(' ');
+                let headerCount = 0;
+                if(rowText.includes("TO") || rowText.includes("TO:")) headerCount++;
+                if(rowText.includes("AWY") || rowText.includes("AWY:")) headerCount++;
+                if(rowText.includes("ET") || rowText.includes("ETE")) headerCount++;
+                if(rowText.includes("FUEL") || rowText.includes("FOB")) headerCount++;
+                if(headerCount >= 2) { headerY = row.y; break; }
+            }
+            
+            if(!headerY) continue; 
+            
+            for(let r = 0; r < rows.length; r++) {
+                const row = rows[r];
+                if(row.y >= headerY) continue;
+                if(row.items.length < 3) continue;
+                
+                let timeValue = null, fuelValue = null;
+                
+                for(const item of row.items) {
+                    const str = item.str.trim();
+                    if(/^\d+[\.:]\d{2}$/.test(str)) timeValue = str;
+                    if(/^\d{3,5}$/.test(str) && !str.includes('.') && !str.includes(':')) {
+                        const num = parseInt(str);
+                        if(num >= 100 && num <= 50000) {
+                            const ctx = row.items.map(i=>i.str).join(' ');
+                            if(!ctx.includes('FL ') && !/^\s*\d{3}\s*$/.test(str)) fuelValue = str;
+                        }
+                    }
+                }
+                
+                if(timeValue && fuelValue) {
+                    let data = { name: "?", awy: "-", level: "-", track: "-", wind: "-", tas: "-", gs: "-" };
+                    if(r > 0) {
+                        const prevRow = rows[r-1];
+                        if(Math.abs(row.y - prevRow.y) < 25) {
+                            const fullString = prevRow.items.map(x => x.str).join(' ');
+                            const parts = fullString.trim().split(/\s+/);
+                            if (parts.length >= 7) {
+                                data.name = parts[0]; data.awy = parts[1]; data.level = parts[2];
+                                data.track = parts[3]; data.wind = parts[4]; data.tas = parts[5]; data.gs = parts[6];
+                            } else if (parts.length > 0) { data.name = parts[0]; }
+                        }
+                    }
+
+                    if(data.name !== "?") {
+                        const absTime = parseTimeString(timeValue);
+                        const fobValue = parseInt(fuelValue) || 0;
+                        const wpObj = {
+                            ...data,
+                            totalMins: absTime, eto: "", fob: fobValue,
+                            page: i-1, 
+                            y_anchor: row.y,
+                            isTakeoff: false, isAlternate: false, rawTime: timeValue
+                        };
+                        waypoints.push(wpObj); 
+                    }
+                }
+            }
+        }
+    } 
+    
+    waypoints.forEach(wp => { wp.baseFuel = parseInt(wp.fob) || 0; wp.fuel = wp.baseFuel; });
+    processWaypointsList();
+    if (el('view-pic-block')) {
+        const elPic = el('view-pic-block');
+        const val = blockFuelValue || 0;
+        if(elPic.tagName === 'INPUT') elPic.value = val; else elPic.innerText = val; 
+    }
+    runCalc(); validateInputs(); renderFuelTable(); renderTables();
+
+    if (isAutoLoad) { loadState(); } else { saveState(); }
+    
+    if (isAutoLoad && window.savedWaypointData && window.savedWaypointData.length > 0) {
+        window.savedWaypointData.forEach((data, i) => {
+            if (i < waypoints.length) {
+                if(data.ato) safeSet(`o-a-${i}`, data.ato);
+                if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                if(data.notes) safeSet(`o-n-${i}`, data.notes);
+                if(data.agl) safeSet(`o-agl-${i}`, data.agl);
+            }
+        });
+        syncLastWaypoint(); updateAlternateETOs();
+    }
+}
 
     // --- PARSING HELPERS ---
     
@@ -756,6 +692,123 @@ async function runAnalysis(fileOrEvent) {
         if(mStr && mStr.length === 1 && separator === '.') m *= 10; 
         return h*60 + m;
     }
+
+window.runDownload = async function(mode = 'download') {
+    if(!ofpPdfBytes) return;
+    try {
+        const pdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
+        
+        // ===============================================
+        // 1. TRUNCATION LOGIC (Robust)
+        // ===============================================
+        // Use the global variable detected during analysis
+        const cutoff = window.cutoffPageIndex; 
+
+        if (cutoff !== -1 && cutoff !== undefined) {
+            const pageCount = pdf.getPageCount();
+            
+            // Loop backwards from the last page down to (cutoff + 1)
+            // Example: 20 pages. Cutoff is 3 (keep 0,1,2,3).
+            // Loop k=19 down to 4. Remove all of them.
+            for (let k = pageCount - 1; k > cutoff; k--) {
+                pdf.removePage(k);
+            }
+        }
+        
+        const pages = pdf.getPages();
+        const fontB = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        const fontR = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+
+        // ===============================================
+        // 2. FRONT PAGE (Always Page 0)
+        // ===============================================
+        if (pages.length > 0) {
+            const frontItems = [ 
+                {id:'front-atis', offset:40, coord:frontCoords.atis}, 
+                {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
+            ];
+            frontItems.forEach(f => {
+                const v = el(f.id)?.value;
+                if(f.coord && v) pages[0].drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
+            });
+
+            const picBlockText = el('view-pic-block')?.innerText || "";
+            if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
+                pages[0].drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
+            }
+            const reasonText = el('front-extra-reason')?.value || "";
+            if(frontCoords.reasonLabel && reasonText) {
+                pages[0].drawText(reasonText.toUpperCase(), { 
+                    x: frontCoords.reasonLabel.transform[4] + 175, 
+                    y: frontCoords.reasonLabel.transform[5] + V_LIFT, 
+                    size: 12, font: fontB 
+                });
+            }
+
+            ['altm1','stby','altm2'].forEach(k => {
+                const v = el('front-'+k)?.value;
+                if(frontCoords[k] && v) {
+                    pages[0].drawText(v, { x: frontCoords[k].transform[4] + (k==='stby'?40:50), y: frontCoords[k].transform[5] + V_LIFT, size: 12, font: fontB });
+                }
+            });
+
+            if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
+                try {
+                    const sigImageBase64 = signaturePad.toDataURL();
+                    const sigImage = await pdf.embedPng(sigImageBase64);
+                    pages[0].drawImage(sigImage, {
+                        x: frontCoords.reasonLabel.transform[4], 
+                        y: frontCoords.reasonLabel.transform[5] + 40, 
+                        width: 100, height: 35
+                    });
+                } catch (sigError) { console.error("Signature Error:", sigError); }
+            }
+        }
+
+        // ===============================================
+        // 3. WAYPOINTS
+        // ===============================================
+        const draw = (list, pre) => {
+            list.forEach((wp, i) => {
+                if (wp.isTakeoff) return;
+                
+                // CRITICAL CHECK: Does this page still exist?
+                if (wp.page >= 0 && wp.page < pages.length) {
+                    const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
+                    const f = el(`${pre}-f-${i}`)?.value || "";
+                    const n = el(`${pre}-n-${i}`)?.value || "";
+                    const agl = el(`${pre}-agl-${i}`)?.value || ""; 
+                    
+                    const page = pages[wp.page];
+                    const mainY = wp.y_anchor;
+
+                    if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
+                    if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
+                    if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                }
+            });
+        };
+        
+        draw(waypoints, 'o'); 
+        draw(alternateWaypoints, 'a');
+
+        const bytes = await pdf.save();
+        const filename = originalFileName.replace(".pdf", "_Logged.pdf");
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+        if (mode === 'email' && isMobile) {
+            const flt = el('j-flt')?.value || "FLT";
+            const date = el('j-date')?.value || "DATE";
+            const subject = `OFP: ${flt} ${date}`;
+            await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
+        } else {
+            downloadBlob(bytes, filename);
+        }
+        
+    } catch (error) { console.error(error); alert("Error saving PDF: " + error.message); }
+};
 
 window.runCalc = function() {
     const atd = el('ofp-atd-in')?.value;
@@ -985,157 +1038,162 @@ window.runCalc = function() {
     };
 
     // --- 2. MAIN LOGIC: Duty & Night Calc ---
-    window.calcDutyLogic = function() {
-    let referenceStdStr = "";
+window.calcDutyLogic = function() {
+    // 1. GATHER DATA
+    // We prioritize the INPUT fields on the screen because that's what you are looking at.
+    // Only look at dailyLegs if we are calculating FDP for a multi-leg day.
+    let flt = (el('j-flt')?.value || "").trim();
+    let dep = (el('j-dep')?.value || "").trim();
+    let dest = (el('j-dest')?.value || "").trim();
+    let std = (el('j-std')?.value || "").trim();
 
-    // ==========================================
-    // 1. DETERMINE REFERENCE STD (ANCHOR)
-    // ==========================================
-    if (dailyLegs.length > 0) {
-        // CASE A: Lock to First Leg
-        referenceStdStr = dailyLegs[0]['j-std']; 
-    } else {
-        // CASE B: Preview Mode (OFP/Input)
-        const stdSources = ['j-std', 'view-std-text', 'ofp-std-in'];
-        for (let id of stdSources) {
-            const element = el(id);
-            if (element) {
-                let val = (element.value || element.innerText || element.textContent || "").trim();
-                if (val && val !== "-" && val !== "----" && /\d/.test(val)) {
-                    referenceStdStr = val;
-                    break; 
-                }
-            }
-        }
+    // Fallback: If inputs are empty (rare), try looking at the first saved leg
+    if ((!std || !flt) && dailyLegs.length > 0) {
+        flt = (dailyLegs[0]['j-flt'] || "").trim();
+        dep = (dailyLegs[0]['j-dep'] || "").trim();
+        dest = (dailyLegs[0]['j-dest'] || "").trim();
+        std = (dailyLegs[0]['j-std'] || "").trim();
     }
 
-    // IF NO DATA AT ALL -> RESET AND STOP
-    if (!referenceStdStr) {
-        safeText('j-duty-start', "00:00");
-        safeText('j-cc-duty-start', "00:00");
-        safeSet('j-max-fdp', ""); 
-        safeSet('j-night-calc', "");
-        return; 
-    }
+    if (!std) return; // Cannot calc without STD
 
-    // ==========================================
-    // 2. CALCULATE DUTY START (Internal Math)
-    // ==========================================
-    const stdMins = parseTimeString(referenceStdStr);
+    // 2. IDENTIFY AIRLINE & ROUTE
+    const fltUpper = flt.toUpperCase();
+    const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
+    const isAYN = fltUpper.includes('AYN') || fltUpper.includes('KQA'); 
     
-    // Reporting Offset Logic
-    const detectedOffset = detectReportOffset();
-    const select = el('j-report-type');
-    if(select && dailyLegs.length === 0) {
-        select.value = detectedOffset;
-    }
-    const reportOffset = parseInt(select?.value || 90);
-    
-    // Calculate Start Time
-    let startMins = stdMins - reportOffset;
-    if(startMins < 0) startMins += 1440; 
-    
-    // Calculate CC Start
-    let ccStart = startMins - (reportOffset === 60 ? 0 : 15);
-    if(ccStart < 0) ccStart += 1440;
+    // Check if Departure/Destination is in Kazakhstan (ICAO code starts with UA)
+    const isDepUA = dep.toUpperCase().startsWith('UA');  
+    const isDestUA = dest.toUpperCase().startsWith('UA');
 
-    // ==========================================
-    // 3. UI UPDATE & CONTROL FLOW (The Fix)
-    // ==========================================
-    if (dailyLegs.length > 0) {
-        // --- CASE: ACTIVE FLIGHT LOG ---
-        // Update global
-        dutyStartTime = startMins; 
+    // 3. CALCULATE FC OFFSET (Minutes before STD)
+    let fcOffset = 60; // Default: 1h (Inbound/Return)
 
-        // Update UI if empty (Safety check)
-        if(el('j-duty-start').innerText === "00:00" || el('j-duty-start').innerText === "") {
-             safeText('j-duty-start', minsToTime(startMins));
-             safeText('j-cc-duty-start', minsToTime(ccStart));
+    if (isDepUA) { 
+        // OUTBOUND from Kazakhstan
+        if (isKZR) {
+            // Air Astana
+            if (!isDestUA) fcOffset = 90; // Int'l -> 1h 30m
+            else fcOffset = 75;           // Domestic -> 1h 15m
+        } 
+        else if (isAYN) {
+            // FlyArystan
+            if (!isDestUA) fcOffset = 75; // Int'l -> 1h 15m
+            else fcOffset = 60;           // Domestic -> 1h 00m
         }
     } 
-    else {
-        // --- CASE: EMPTY LOG (RESET) ---
-        // 1. Clear the UI
-        safeText('j-duty-start', "00:00");
-        safeText('j-cc-duty-start', "00:00");
-        safeSet('j-max-fdp', "");
-        safeSet('j-night-calc', "");
-        
-        // 2. IMPORTANT: STOP HERE!
-        // Do not calculate FDP or Night Duty if we haven't started a log yet.
-        return; 
-    }
 
-    // ==========================================
-    // 4. EASA MAX FDP CALCULATION
-    // (This now only runs if dailyLegs.length > 0)
-    // ==========================================
-    const sectors = Math.max(dailyLegs.length, 1);
+    // 4. CALCULATE FC START TIME
+    const stdMins = parseTimeString(std);
+    let fcStartMins = stdMins - fcOffset;
+    if (fcStartMins < 0) fcStartMins += 1440;
+
+    // 5. CALCULATE CC START TIME (Relative to FC)
+    // Rule: KZR CC reports 15m earlier. AYN CC reports same time.
+    let ccDiff = 0;
+    if (isKZR) {
+        ccDiff = 15; // KZR: Cabin Crew report 15 mins BEFORE Flight Crew
+    }
     
-    // Convert to Local Time (Assume UTC+5 for Base)
-    let localStartMins = startMins + 300; 
-    if (localStartMins >= 1440) localStartMins -= 1440;
+    let ccStartMins = fcStartMins - ccDiff;
+    if (ccStartMins < 0) ccStartMins += 1440;
 
-    const hh = Math.floor(localStartMins / 60);
-    const mm = localStartMins % 60;
-    const timeVal = (hh * 100) + mm;
+    // 6. UPDATE UI (Only if the field exists)
+    safeSet('j-duty-start', minsToTime(fcStartMins));
+    safeSet('j-cc-duty-start', minsToTime(ccStartMins));
 
-    const limits = [
-        { s: 500,  e: 514,  v: ["12:00", "11:30", "11:00"] },
-        { s: 515,  e: 529,  v: ["12:15", "11:45", "11:15"] },
-        { s: 530,  e: 544,  v: ["12:30", "12:00", "11:30"] },
-        { s: 545,  e: 559,  v: ["12:45", "12:15", "11:45"] },
-        { s: 600,  e: 1329, v: ["13:00", "12:30", "12:00"] },
-        { s: 1330, e: 1359, v: ["12:45", "12:15", "11:45"] },
-        { s: 1400, e: 1429, v: ["12:30", "12:00", "11:30"] },
-        { s: 1430, e: 1459, v: ["12:15", "11:45", "11:15"] },
-        { s: 1500, e: 1529, v: ["12:00", "11:30", "11:00"] },
-        { s: 1530, e: 1559, v: ["11:45", "11:15", "10:45"] },
-        { s: 1600, e: 1629, v: ["11:30", "11:00", "10:30"] },
-        { s: 1630, e: 1659, v: ["11:15", "10:45", "10:15"] }
-    ];
-
-    let maxFDP = "11:00"; 
-    let found = false;
-    for (let r of limits) {
-        if (timeVal >= r.s && timeVal <= r.e) {
-            let idx = (sectors === 3) ? 1 : (sectors === 4) ? 2 : 0;
-            maxFDP = r.v[idx];
-            found = true;
-            break;
-        }
-    }
-
-    if (!found) {
-        if (sectors === 3) maxFDP = "10:30";
-        else if (sectors === 4) maxFDP = "10:00";
-        else maxFDP = "11:00"; 
-    }
-
-    safeSet('j-max-fdp', maxFDP);
-
-    // ==========================================
-    // 5. NIGHT DUTY CALCULATION
-    // ==========================================
-    let lastInStr = el('j-in')?.value; 
-    if (!lastInStr && dailyLegs.length > 0) {
-        lastInStr = dailyLegs[dailyLegs.length - 1]['j-in'];
-    }
-
-    let endMins = startMins + 600; 
-    if (lastInStr) {
-        const inMins = parseTimeString(lastInStr);
-        if (inMins < startMins) endMins = inMins + 1440;
-        else endMins = inMins;
-    }
-
-    const wStart = 1260; const wEnd = 1439;
-    let overlap = 0;
-    overlap += Math.max(0, Math.min(endMins, wEnd) - Math.max(startMins, wStart));
-    overlap += Math.max(0, Math.min(endMins, wEnd + 1440) - Math.max(startMins, wStart + 1440));
-
-    safeSet('j-night-calc', minsToTime(overlap));
+    // Update Global Duty Start
+    dutyStartTime = fcStartMins;
+    
+    // Recalculate Max FDP
+    if(typeof recalcMaxFDP === 'function') recalcMaxFDP();
 };
+
+window.recalcMaxFDP = function() {
+    // 1. Get FC Start Time
+    const fcTimeStr = el('j-duty-start')?.value;
+    if (!fcTimeStr) return;
+
+    // Update global for other functions
+    const fcMins = parseTimeString(fcTimeStr);
+    dutyStartTime = fcMins; 
+
+    // 2. Count Sectors
+    // We use the greater of: Legs currently in the table OR 1
+    const sectors = Math.max(dailyLegs.length, 1);
+
+    // 3. EASA ORO.FTL.205 Table Lookup
+    let maxFDP = 0;
+
+    // --- TIME BAND LOGIC (Start Time in UTC/Local based on your input) ---
+    // 06:00 - 13:29
+    if (fcMins >= 360 && fcMins <= 809) {
+        maxFDP = 780; // 13:00
+    }
+    // 13:30 - 13:59
+    else if (fcMins >= 810 && fcMins <= 839) {
+        maxFDP = 765; // 12:45
+    }
+    // 14:00 - 14:29
+    else if (fcMins >= 840 && fcMins <= 869) {
+        maxFDP = 750; // 12:30
+    }
+    // 14:30 - 14:59
+    else if (fcMins >= 870 && fcMins <= 899) {
+        maxFDP = 735; // 12:15
+    }
+    // 15:00 - 15:29
+    else if (fcMins >= 900 && fcMins <= 929) {
+        maxFDP = 720; // 12:00
+    }
+    // 15:30 - 15:59
+    else if (fcMins >= 930 && fcMins <= 959) {
+        maxFDP = 705; // 11:45
+    }
+    // 16:00 - 16:29
+    else if (fcMins >= 960 && fcMins <= 989) {
+        maxFDP = 690; // 11:30
+    }
+    // 16:30 - 16:59
+    else if (fcMins >= 990 && fcMins <= 1019) {
+        maxFDP = 675; // 11:15
+    }
+    // 17:00 - 04:59 (Night)
+    else if (fcMins >= 1020 || fcMins <= 299) {
+        maxFDP = 660; // 11:00
+    }
+    // 05:00 - 05:14
+    else if (fcMins >= 300 && fcMins <= 314) {
+        maxFDP = 720; // 12:00
+    }
+    // 05:15 - 05:29
+    else if (fcMins >= 315 && fcMins <= 329) {
+        maxFDP = 735; // 12:15
+    }
+    // 05:30 - 05:44
+    else if (fcMins >= 330 && fcMins <= 344) {
+        maxFDP = 750; // 12:30
+    }
+    // 05:45 - 05:59
+    else if (fcMins >= 345 && fcMins <= 359) {
+        maxFDP = 765; // 12:45
+    }
+
+    // 4. Apply Sector Reductions
+    if (sectors === 3) {
+        maxFDP -= 30; // 3 Sectors: -30 mins
+    } 
+    else if (sectors === 4) {
+        maxFDP -= 60; // 4 Sectors: -60 mins
+    } 
+    else if (sectors >= 5) {
+        maxFDP -= 90; // 5+ Sectors: -90 mins
+    }
+
+    // 5. Update the Input Field
+    safeSet('j-max-fdp', minsToTime(maxFDP));
+};
+
 
     function minsToTime(m) {
         if(m<0) m+=1440;
@@ -1481,34 +1539,22 @@ function renderTables() {
     if(dailyLegs.length >= 4) return alert("Max 4 legs.");
 
     // ============================================================
-    // 1. NEW: LOCK DUTY START TIME (If this is the First Leg)
+    // 1. AUTO-CALCULATE DUTY (READ ONCE ON LEG 1)
     // ============================================================
-    // We do this BEFORE calculating FDP so the FDP math works immediately.
     if (dailyLegs.length === 0) {
-        // A. Get the STD from the input (This leg's STD)
-        const stdVal = el('j-std')?.value || ""; 
+        // This is the FIRST leg. We populate the Duty fields now.
+        const std = el('j-std')?.value || "";
+        const flt = el('j-flt')?.value || "";
         
-        if (stdVal && /\d/.test(stdVal)) {
-            const stdMins = parseTimeString(stdVal);
-
-            // B. Get Reporting Offset (default 90 if missing)
-            const reportOffset = parseInt(el('j-report-type')?.value || 90);
-
-            // C. Calculate FC Start
-            let fcStart = stdMins - reportOffset;
-            if(fcStart < 0) fcStart += 1440;
-
-            // D. Calculate CC Start
-            let ccStart = fcStart - (reportOffset === 60 ? 0 : 15);
-            if(ccStart < 0) ccStart += 1440;
-
-            // E. LOCK IT: Write to UI and Global Variable
-            safeText('j-duty-start', minsToTime(fcStart));
-            safeText('j-cc-duty-start', minsToTime(ccStart));
-            dutyStartTime = fcStart; // <--- Critical for FDP calc below
-        } else {
-            return alert("Please enter STD for this leg to calculate Duty Start.");
-        }
+        const dutyValues = calculateDutyValues(std, flt, dep, dest);
+        
+        // Write to inputs
+        safeSet('j-duty-start', dutyValues.fc);
+        safeSet('j-cc-duty-start', dutyValues.cc);
+        safeSet('j-max-fdp', dutyValues.max);
+        
+        // Set global for immediate FDP check
+        dutyStartTime = parseTimeString(dutyValues.fc);
     }
 
     // ============================================================
@@ -1572,14 +1618,19 @@ function renderTables() {
     saveState();
 };
 
-    window.removeLeg = function(i) {
-        dailyLegs.splice(i,1);
-        if(dailyLegs.length === 0) { 
-            calcDutyLogic(); 
-        }
+window.removeLeg = function(i) {
+    dailyLegs.splice(i,1);
+    
+    // If we deleted the last leg, reset the duty fields
+    if(dailyLegs.length === 0) { 
+        safeSet('j-duty-start', "00:00");
+        safeSet('j-cc-duty-start', "00:00");
+        safeSet('j-max-fdp', "00:00");
+        dutyStartTime = null;
+    }
         renderJourneyList(); 
         validateInputs();
-        calcDutyLogic(); // Recalculate based on remaining legs
+        saveState();
     };
     
     window.clearLegs = function() {
@@ -1755,6 +1806,57 @@ window.modifyLeg = function(index) {
 }
 };
 
+// Helper: Calculates the values based on a specific leg's data
+window.calculateDutyValues = function(std, flt, dep, dest) {
+    if (!std) return { fc: "00:00", cc: "00:00", max: "00:00" };
+
+    // 1. Identify Airline & Route
+    const fltUpper = (flt || "").toUpperCase();
+    const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
+    const isAYN = fltUpper.includes('AYN') || fltUpper.includes('KQA'); 
+    
+    const isDepUA = (dep || "").toUpperCase().startsWith('UA');
+    const isDestUA = (dest || "").toUpperCase().startsWith('UA');
+
+    // 2. FC Offset Logic
+    let fcOffset = 60; // Default (International Return)
+    if (isDepUA) { 
+        if (isKZR) fcOffset = (!isDestUA) ? 90 : 75; // KZR: 90 Int'l, 75 Dom
+        else if (isAYN) fcOffset = (!isDestUA) ? 75 : 60; // AYN: 75 Int'l, 60 Dom
+    } 
+
+    // 3. FC Start Time
+    const stdMins = parseTimeString(std);
+    let fcStartMins = stdMins - fcOffset;
+    if (fcStartMins < 0) fcStartMins += 1440;
+
+    // 4. CC Start Time
+    let ccDiff = (isKZR) ? 15 : 0; // KZR CC reports 15m earlier
+    let ccStartMins = fcStartMins - ccDiff;
+    if (ccStartMins < 0) ccStartMins += 1440;
+
+    // 5. Max FDP (Initial calculation assuming 1 sector)
+    // We use the EASA table based on the calculated FC Start Time
+    let maxFDP = 780; // Base 13:00
+    // Simple EASA Logic (Time Bands)
+    if (fcStartMins >= 360 && fcStartMins <= 809) maxFDP = 780; // 06:00-13:29
+    else if (fcStartMins >= 810 && fcStartMins <= 839) maxFDP = 765;
+    else if (fcStartMins >= 840 && fcStartMins <= 869) maxFDP = 750;
+    else if (fcStartMins >= 870 && fcStartMins <= 899) maxFDP = 735;
+    else if (fcStartMins >= 900 && fcStartMins <= 929) maxFDP = 720;
+    else if (fcStartMins >= 930 && fcStartMins <= 959) maxFDP = 705;
+    else if (fcStartMins >= 960 && fcStartMins <= 989) maxFDP = 690;
+    else if (fcStartMins >= 990 && fcStartMins <= 1019) maxFDP = 675;
+    else if (fcStartMins >= 1020 || fcStartMins <= 299) maxFDP = 660; // Night
+    else if (fcStartMins >= 300 && fcStartMins <= 359) maxFDP = 720; // Early Morning
+
+    return {
+        fc: minsToTime(fcStartMins),
+        cc: minsToTime(ccStartMins),
+        max: minsToTime(maxFDP)
+    };
+};
+
 
     window.toggleTheme = function() {
         const b = document.body;
@@ -1764,293 +1866,387 @@ window.modifyLeg = function(index) {
     // ==========================================
     // 7. PDF GENERATION (OFP)
     // ==========================================
-    window.runDownload = async function(mode = 'download') {
-        if(!ofpPdfBytes) return;
-        try {
-            const pdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
-            const pages = pdf.getPages();
-            const fontB = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
-            const fontR = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+ // Global variable to store where the OFP ends
+let cutoffPageIndex = -1; 
 
-            // 1. Front Page (ATIS, Altimeter, PIC Block)
-            const frontItems = [ 
-                {id:'front-atis', offset:40, coord:frontCoords.atis}, 
-                {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
-            ];
-            frontItems.forEach(f => {
-                const v = el(f.id)?.value;
-                if(f.coord && v) pages[0].drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
-            });
+async function runAnalysis(fileOrEvent) {
+    let blob = null;
+    let isAutoLoad = false;
 
-            // PIC Block
-            const picBlockText = el('view-pic-block')?.innerText || "";
-            if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
-                pages[0].drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
-            }
+    if (fileOrEvent instanceof Blob) {
+        blob = fileOrEvent;
+        isAutoLoad = true; 
+    } else {
+        const fileInput = el('ofp-file-in');
+        if (fileInput && fileInput.files.length > 0) {
+            blob = fileInput.files[0];
+            savePdfToDB(blob); 
             
-            // Reason for Extra Fuel
-            const reasonText = el('front-extra-reason')?.value || "";
-            if(frontCoords.reasonLabel && reasonText) {
-                // Draw 30px to the right of the "REASON" label
-                pages[0].drawText(reasonText.toUpperCase(), { 
-                    x: frontCoords.reasonLabel.transform[4] + 175, 
-                    y: frontCoords.reasonLabel.transform[5] + V_LIFT, 
-                    size: 12, 
-                    font: fontB 
-                });
+            // Smart Reset
+            let stored = {};
+            try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
+            stored.inputs = {}; 
+            stored.waypoints = [];
+            localStorage.setItem('efb_log_state', JSON.stringify(stored));
+            window.savedWaypointData = [];
+        }
+    }
+
+    if (!blob) return;
+
+    if (!isAutoLoad) {
+        clearOFPInputs();
+        // Clear summary headers...
+        ['view-pic-block', 'view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn'].forEach(id => {
+            const e = document.getElementById(id);
+            if(e) { (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') ? e.value = "" : e.innerText = "-"; }
+        });
+    }
+
+    originalFileName = blob.name || "Logged_OFP.pdf";
+    ofpPdfBytes = await blob.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
+        
+    // --- RENDER PREVIEW (Canvas) ---
+    const container = document.getElementById('pdf-render-container');
+    const fallback = document.getElementById('pdf-fallback');
+    
+    if (container && pdf) {
+        if(fallback) fallback.style.display = 'none';
+        container.innerHTML = '';
+
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const scale = 1.5;
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            canvas.style.width = '100%'; 
+            canvas.style.height = 'auto';
+            canvas.style.maxWidth = '800px';
+            canvas.style.marginBottom = '20px';
+            container.appendChild(canvas);
+            await page.render({ canvasContext: context, viewport: viewport }).promise;
+        }
+    }
+
+    // --- RESET DATA ---
+    waypoints = []; alternateWaypoints = []; fuelData = []; blockFuelValue = 0;
+    cutoffPageIndex = -1; // Reset cutoff
+
+    function extractFrontCoords(items) {
+        items.forEach(item => {
+            const raw = item.str.toUpperCase();
+            if (raw.includes('ATIS')) frontCoords.atis = item;
+            if (raw.includes('CLRNC')) frontCoords.atcLabel = item;
+            if (raw.includes('ALT M1')) frontCoords.altm1 = item;
+            if (raw.includes('STBY')) frontCoords.stby = item;
+            if (raw.includes('ALT M2')) frontCoords.altm2 = item;
+            if (raw.includes('PIC') && raw.includes('BLOCK')) frontCoords.picBlockLabel = item;
+            if (raw.includes('REASON')) frontCoords.reasonLabel = item;
+        });
+    }
+    
+    // --- PARSE PAGES ---
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const items = content.items;
+        const textContent = items.map(x=>x.str).join(' ');
+
+        // 1. Detect End of OFP (Truncation Logic)
+        if (cutoffPageIndex === -1) {
+            // Adjust this keyword if your airline uses a different phrase
+            if (textContent.includes("END OF THE ICAO FLIGHT PLAN") || textContent.includes("End of OFP")) {
+                cutoffPageIndex = i - 1; // Store 0-based index
             }
+        }
 
-            // Altimeters
-            ['altm1','stby','altm2'].forEach(k => {
-                const v = el('front-'+k)?.value;
-                if(frontCoords[k] && v) {
-                    pages[0].drawText(v, { x: frontCoords[k].transform[4] + (k==='stby'?40:50), y: frontCoords[k].transform[5] + V_LIFT, size: 12, font: fontB });
-                }
-            });
+        if (i === 1) {
+            extractFrontCoords(items);
+            const match2 = textContent.match(/([A-Z]{3}\d{3,4})\s+([A-Z0-9-]{3,7})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s+([A-Z]{4})\s+CI(\w+)\s+(\d{4})\s+\S+\s+(\d{4})\s+\S+\s+([A-Z]{4})/);
 
-            // Signature
-            if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
-                try {
-                    const sigImageBase64 = signaturePad.toDataURL();
-                    const sigImage = await pdf.embedPng(sigImageBase64);
-
-                    // We use the same 'reasonLabel' coordinates as the text above
-                    // but push it further right (+350) to be next to the text
-                    pages[0].drawImage(sigImage, {
-                        x: frontCoords.reasonLabel.transform[4], 
-                        y: frontCoords.reasonLabel.transform[5] + 40, // Slight downward adjustment to center with text
-                        width: 100, 
-                        height: 35
-                    });
-                    const now = new Date().toISOString().substring(11, 16) + "Z";
-                    pages[0].drawText(now, {
-                        x: frontCoords.reasonLabel.transform[4],
-                        y: frontCoords.reasonLabel.transform[5] + 40,
-                        size: 6,
-                        font: fontR
-                    });
-
-                } catch (sigError) {
-                    console.error("Signature Error:", sigError);
-                }
-            }
-
-            // 2. Waypoints
-            const draw = (list, pre) => {
-                list.forEach((wp, i) => {
-                    if (wp.isTakeoff) return;
-                    
-                    const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
-                    const f = el(`${pre}-f-${i}`)?.value || "";
-                    const n = el(`${pre}-n-${i}`)?.value || "";
-                    // FIX: Define the variable 'agl' here by reading the input
-                    const agl = el(`${pre}-agl-${i}`)?.value || ""; 
-                    
-                    if (wp.page >= 0 && wp.page < pages.length) {
-                        const page = pages[wp.page];
-                        const mainY = wp.y_anchor;
-
-                        // ETO (Shifted UP)
-                        if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
-                        // ATO (Main Row)
-                        if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
-                        // Fuel (Main Row, Size 10)
-                        if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                        // Notes (Main Row, Size 10)
-                        if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                        // Actual FL 
-                        if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                    }
-                });
-            };
-            
-            draw(waypoints, 'o'); 
-            draw(alternateWaypoints, 'a');
-
-            const bytes = await pdf.save();
-            const filename = originalFileName.replace(".pdf", "_Logged.pdf");
-
-            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-            // Logic: Even if 'email' mode is requested, force 'download' for computers
-            if (mode === 'email' && isMobile) {
-                // SHARING/EMAIL (iPad/Mobile only)
-                const flt = el('j-flt')?.value || "FLT";
-                const date = el('j-date')?.value || "DATE";
-                const subject = `OFP: ${flt} ${date}`;
+            if(match2) {
+                // ... (Same regex logic as before) ...
+                const flt=match2[1], reg=match2[2], date=match2[3], dep=match2[4], dest=match2[5], ci=match2[6];
+                const stdRaw=match2[7], staRaw=match2[8], altn=match2[9];
+                const stdFmt = stdRaw.length===4 ? stdRaw.substring(0,2)+":"+stdRaw.substring(2,4) : stdRaw;
+                const staFmt = staRaw.length===4 ? staRaw.substring(0,2)+":"+staRaw.substring(2,4) : staRaw;
                 
-                await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
-            } else {
-                // DOWNLOAD (Computers or manual download mode)
-                downloadBlob(bytes, filename);
+                safeText('view-flt', flt); safeText('view-reg', reg); safeText('view-date', date);
+                safeText('view-dep', dep); safeText('view-dest', dest); safeText('view-ci', 'CI'+ci);
+                safeText('view-std-text', stdFmt); safeText('view-sta-text', staFmt);
+                safeText('view-altn', altn);
+                
+                safeSet('j-flt', flt); safeSet('j-reg', reg); safeSet('j-date', date);
+                safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
+                safeSet('j-std', stdFmt);
+
+                calcDutyLogic();
+                extractRoutes(textContent);
+                extractFuelDataSimple(textContent);
+                extractWeights(textContent);
+            }
+        }
+        
+        if (i >= 2) {
+            // ... (Same row building logic as before) ...
+            const rows = buildRows(items);
+            rows.sort((a,b) => b.y - a.y); 
+            
+            let headerY = null;
+            for(const row of rows) {
+                const rowText = row.items.map(item => item.str).join(' ');
+                let headerCount = 0;
+                if(rowText.includes("TO") || rowText.includes("TO:")) headerCount++;
+                if(rowText.includes("AWY") || rowText.includes("AWY:")) headerCount++;
+                if(rowText.includes("ET") || rowText.includes("ETE")) headerCount++;
+                if(rowText.includes("FUEL") || rowText.includes("FOB")) headerCount++;
+                if(headerCount >= 2) { headerY = row.y; break; }
             }
             
-        } catch (error) { console.error(error); alert("Error saving PDF: " + error.message); }
-    };
+            if(!headerY) continue; 
+            
+            for(let r = 0; r < rows.length; r++) {
+                const row = rows[r];
+                if(row.y >= headerY) continue;
+                if(row.items.length < 3) continue;
+                
+                let timeValue = null, fuelValue = null;
+                
+                for(const item of row.items) {
+                    const str = item.str.trim();
+                    if(/^\d+[\.:]\d{2}$/.test(str)) timeValue = str;
+                    if(/^\d{3,5}$/.test(str) && !str.includes('.') && !str.includes(':')) {
+                        const num = parseInt(str);
+                        if(num >= 100 && num <= 50000) {
+                            const ctx = row.items.map(i=>i.str).join(' ');
+                            if(!ctx.includes('FL ') && !/^\s*\d{3}\s*$/.test(str)) fuelValue = str;
+                        }
+                    }
+                }
+                
+                if(timeValue && fuelValue) {
+                    let data = { name: "?", awy: "-", level: "-", track: "-", wind: "-", tas: "-", gs: "-" };
+                    // ... (Same waypoint name logic) ...
+                    if(r > 0) {
+                        const prevRow = rows[r-1];
+                        if(Math.abs(row.y - prevRow.y) < 25) {
+                            const fullString = prevRow.items.map(x => x.str).join(' ');
+                            const parts = fullString.trim().split(/\s+/);
+                            if (parts.length >= 7) {
+                                data.name = parts[0];
+                                data.awy = parts[1];
+                                data.level = parts[2];
+                                data.track = parts[3];
+                                data.wind = parts[4];
+                                data.tas = parts[5];
+                                data.gs = parts[6];
+                            } else if (parts.length > 0) { data.name = parts[0]; }
+                        }
+                    }
+
+                    if(data.name !== "?") {
+                        const absTime = parseTimeString(timeValue);
+                        const fobValue = parseInt(fuelValue) || 0;
+                        const wpObj = {
+                            ...data,
+                            totalMins: absTime,
+                            eto: "",
+                            fob: fobValue,
+                            page: i-1, // 0-based page index
+                            y_anchor: row.y,
+                            isTakeoff: false,
+                            isAlternate: false,
+                            rawTime: timeValue
+                        };
+                        waypoints.push(wpObj); 
+                    }
+                }
+            }
+        }
+    } 
+    
+    waypoints.forEach(wp => { wp.baseFuel = parseInt(wp.fob) || 0; wp.fuel = wp.baseFuel; });
+    processWaypointsList();
+    if (el('view-pic-block')) {
+        const elPic = el('view-pic-block');
+        const val = blockFuelValue || 0;
+        if(elPic.tagName === 'INPUT') elPic.value = val; else elPic.innerText = val; 
+    }
+    runCalc(); validateInputs(); renderFuelTable(); renderTables();
+
+    // Logic for loading state vs saving new state
+    if (isAutoLoad) { loadState(); } else { saveState(); }
+    
+    if (isAutoLoad && window.savedWaypointData && window.savedWaypointData.length > 0) {
+        window.savedWaypointData.forEach((data, i) => {
+            if (i < waypoints.length) {
+                if(data.ato) safeSet(`o-a-${i}`, data.ato);
+                if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                if(data.notes) safeSet(`o-n-${i}`, data.notes);
+                if(data.agl) safeSet(`o-agl-${i}`, data.agl);
+            }
+        });
+        syncLastWaypoint(); updateAlternateETOs();
+    }
+}
 
     // ==========================================
     // 8. PDF GENERATION (JOURNEY LOG)
     // ==========================================
 window.downloadJourneyLog = async function(mode = 'download') {
-        if (!journeyLogTemplateBytes) return alert("Please upload Journey Log first.");
-        if (dailyLegs.length === 0) return alert("No legs to print.");
+    if (!journeyLogTemplateBytes) return alert("Please upload Journey Log first.");
+    if (dailyLegs.length === 0) return alert("No legs to print.");
 
-        try {
-            const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
-            const page = pdfDoc.getPages()[0];
-            const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
-            
-            // Check for iPad mode rotation
-            const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
-            if(!isIpadMode) page.setRotation(PDFLib.degrees(0));
+    try {
+        const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
+        const page = pdfDoc.getPages()[0];
+        const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        
+        // Check for iPad mode rotation
+        const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
+        if(!isIpadMode) page.setRotation(PDFLib.degrees(0));
 
-            // --- 1. HEADERS & LEG DATA ---
-            const headers = JOURNEY_CONFIG.headers;
-            Object.keys(headers).forEach(id => {
-                const val = el(id)?.value;
-                const cfg = headers[id];
-                if(val && cfg) page.drawText(String(val).toUpperCase(), { x: cfg.x, y: cfg.y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
-            });
+        // --- 1. HEADERS & LEG DATA ---
+        const headers = JOURNEY_CONFIG.headers;
+        Object.keys(headers).forEach(id => {
+            const val = el(id)?.value;
+            const cfg = headers[id];
+            if(val && cfg) page.drawText(String(val).toUpperCase(), { x: cfg.x, y: cfg.y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
+        });
 
-            const cols = JOURNEY_CONFIG.cols;
-            const fuelKeys = JOURNEY_CONFIG.fuelKeys;
-            
-            dailyLegs.forEach((leg, idx) => {
-                Object.keys(leg).forEach(key => {
-                    const colX = cols[key];
-                    if(colX) {
-                        let startRow = JOURNEY_CONFIG.rowStartMain;
-                        if (fuelKeys.includes(key)) startRow = JOURNEY_CONFIG.rowStartFuel;
-                        const rowY = startRow - (idx * JOURNEY_CONFIG.rowGap);
-                        const val = leg[key];
-                        if(val !== undefined && val !== null && val !== "") {
-                            page.drawText(String(val).toUpperCase(), { x: colX, y: rowY, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
-                        }
+        const cols = JOURNEY_CONFIG.cols;
+        const fuelKeys = JOURNEY_CONFIG.fuelKeys;
+        
+        dailyLegs.forEach((leg, idx) => {
+            Object.keys(leg).forEach(key => {
+                const colX = cols[key];
+                if(colX) {
+                    let startRow = JOURNEY_CONFIG.rowStartMain;
+                    if (fuelKeys.includes(key)) startRow = JOURNEY_CONFIG.rowStartFuel;
+                    const rowY = startRow - (idx * JOURNEY_CONFIG.rowGap);
+                    const val = leg[key];
+                    if(val !== undefined && val !== null && val !== "") {
+                        page.drawText(String(val).toUpperCase(), { x: colX, y: rowY, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
                     }
-                });
+                }
             });
+        });
 
-            // --- 2. SIGNATURE DRAWING SECTION ---
-            if (signaturePad && !signaturePad.isEmpty()) {
-                try {
-                    const sigImageBase64 = signaturePad.toDataURL();
-                    const sigImage = await pdfDoc.embedPng(sigImageBase64);
-                    
-                    page.drawImage(sigImage, {
-                        x: 570,        
-                        y: 120,        
-                        width: 200,    
-                        height: 50,    
-                    });
-                } catch (sigError) {
-                    console.error("Signature Embedding Error:", sigError);
-                }
+        // --- 2. SIGNATURE DRAWING SECTION ---
+        if (signaturePad && !signaturePad.isEmpty()) {
+            try {
+                const sigImageBase64 = signaturePad.toDataURL();
+                const sigImage = await pdfDoc.embedPng(sigImageBase64);
+                
+                page.drawImage(sigImage, {
+                    x: 570,        
+                    y: 120,        
+                    width: 200,    
+                    height: 50,    
+                });
+            } catch (sigError) {
+                console.error("Signature Embedding Error:", sigError);
+            }
+        }
+
+        // --- 3. CREW DUTY DATA (CORRECTED) ---
+        const crewStart = 333; 
+        const crewGap = 17;    
+        
+        const numFC = parseInt(el('j-fc-count')?.value || 2);
+        const numCC = parseInt(el('j-cc-count')?.value || 4);
+        const totalRows = numFC + numCC;
+
+        // --- FIX: STRICTLY READ MANUAL INPUTS ---
+        // We do NOT re-calculate here. We trust the input boxes.
+        const fcDutyStartStr = el('j-duty-start')?.value || "00:00";
+        const ccDutyStartStr = el('j-cc-duty-start')?.value || "00:00";
+        const maxFDPStr = el('j-max-fdp')?.value || "00:00"; 
+
+        // Convert strings to minutes for math
+        const fcStartMins = parseTimeString(fcDutyStartStr);
+        const ccStartMins = parseTimeString(ccDutyStartStr);
+
+        // Get End Time from the LAST leg to calculate Duty Duration
+        const lastLeg = dailyLegs[dailyLegs.length - 1];
+        const onBlocksMins = lastLeg ? parseTimeString(lastLeg['j-in']) : 0;
+
+        // HELPER: Calculate FDP Duration
+        const getFDP = (startMins) => {
+            if(!onBlocksMins && onBlocksMins !== 0) return ""; 
+            let diff = onBlocksMins - startMins;
+            if(diff < 0) diff += 1440; 
+            return minsToTime(diff);
+        };
+
+        // HELPER: Calculate Night Overlap
+        const getNightOverlap = (startMins) => {
+            if(!onBlocksMins && onBlocksMins !== 0) return "00:00"; 
+            
+            let endMins = onBlocksMins;
+            if(endMins < startMins) endMins += 1440;
+
+            const wStart = 1260; // 21:00 UTC
+            const wEnd = 1439;   // 23:59 UTC
+            
+            let overlap = 0;
+            overlap += Math.max(0, Math.min(endMins, wEnd) - Math.max(startMins, wStart));
+            overlap += Math.max(0, Math.min(endMins, wEnd + 1440) - Math.max(startMins, wStart + 1440));
+
+            return minsToTime(overlap);
+        };
+
+        // DRAW ROWS
+        for(let i = 0; i < totalRows; i++) {
+            const y = crewStart - (i * crewGap);
+            const isFlightCrew = (i < numFC);
+            
+            // Select Start Time based on role
+            const myStart = isFlightCrew ? fcStartMins : ccStartMins;
+            
+            // Calculate Duration & Night based on that start time
+            const myFDP = getFDP(myStart);
+            const myNight = getNightOverlap(myStart);
+
+            // 1. OP (Always)
+            if(cols['j-duty-operating']) 
+                page.drawText("OP", { x: cols['j-duty-operating'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
+
+            // 2. Duty Time (Duration)
+            if(myFDP && cols['j-duty-time']) 
+                page.drawText(myFDP, { x: cols['j-duty-time'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
+
+            // 3. Night Duty
+            if(myNight !== null && myNight !== undefined && cols['j-duty-night']) {
+                page.drawText(myNight, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
             }
 
-            // --- 3. CREW DUTY DATA (CORRECTED) ---
-            const crewStart = 333; 
-            const crewGap = 17;    
-            
-            const numFC = parseInt(el('j-fc-count')?.value || 2);
-            const numCC = parseInt(el('j-cc-count')?.value || 4);
-            const totalRows = numFC + numCC;
+            // 4. Allowed FDP (READ DIRECTLY FROM INPUT)
+            if(maxFDPStr && cols['j-duty-allowed']) 
+                page.drawText(maxFDPStr, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
+        }
 
-            // --- FIX 1: ROBUST TIME EXTRACTION ---
-            // Helper to get value from Input OR Div/Span
-            const getTextOrValue = (id) => {
-                const e = el(id);
-                if (!e) return "";
-                return (e.value || e.innerText || e.textContent || "").trim();
-            };
+        // --- 4. SAVE & DOWNLOAD ---
+        const out = await pdfDoc.save();
+        const flt = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
+        const filename = `JOURNEY_LOG_${flt}.pdf`;
+        
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || 
+                         (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
 
-            const fcDutyStartStr = getTextOrValue('j-duty-start') || "00:00";
-            const ccDutyStartStr = getTextOrValue('j-cc-duty-start') || "00:00";
-            
-            // Console check to ensure we are reading the times
-            console.log("PDF Crew Start Times:", { FC: fcDutyStartStr, CC: ccDutyStartStr });
+        if (mode === 'email' && isMobile) {
+            const subject = `Journey Log: ${flt}`;
+            await sharePdf(out, filename, subject, "Journey Log attached.");
+        } else {
+            downloadBlob(out, filename);
+        }
 
-            const fcStartMins = parseTimeString(fcDutyStartStr);
-            const ccStartMins = parseTimeString(ccDutyStartStr);
-
-            // --- FIX 2: ENSURE END TIME EXISTS ---
-            const lastLeg = dailyLegs[dailyLegs.length - 1];
-            // If Last Leg exists, use its 'j-in'. If not, 0.
-            const onBlocksMins = lastLeg ? parseTimeString(lastLeg['j-in']) : 0;
-            const maxFDP = el('j-max-fdp')?.value || ""; 
-
-            // HELPER: Calculate FDP
-            const getFDP = (startMins) => {
-                // If we don't have an "In" time yet, we can't calculate duration
-                if(!onBlocksMins && onBlocksMins !== 0) return ""; 
-                let diff = onBlocksMins - startMins;
-                if(diff < 0) diff += 1440; 
-                return minsToTime(diff);
-            };
-
-            // HELPER: Calculate Night Overlap
-            const getNightOverlap = (startMins) => {
-                if(!onBlocksMins && onBlocksMins !== 0) return "";
-                
-                let endMins = onBlocksMins;
-                if(endMins < startMins) endMins += 1440;
-
-                const wStart = 1260; // 21:00 UTC
-                const wEnd = 1439;   // 23:59 UTC
-                
-                let overlap = 0;
-                overlap += Math.max(0, Math.min(endMins, wEnd) - Math.max(startMins, wStart));
-                overlap += Math.max(0, Math.min(endMins, wEnd + 1440) - Math.max(startMins, wStart + 1440));
-
-                return overlap > 0 ? minsToTime(overlap) : "";
-            };
-
-            // DRAW ROWS
-            for(let i = 0; i < totalRows; i++) {
-                const y = crewStart - (i * crewGap);
-                const isFlightCrew = (i < numFC);
-                
-                // Select Start Time based on role
-                const myStart = isFlightCrew ? fcStartMins : ccStartMins;
-                
-                // Calculate
-                const myFDP = getFDP(myStart);
-                const myNight = getNightOverlap(myStart);
-
-                // 1. OP (Always)
-                if(cols['j-duty-operating']) 
-                    page.drawText("OP", { x: cols['j-duty-operating'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
-
-                // 2. Duty Time
-                if(myFDP && cols['j-duty-time']) 
-                    page.drawText(myFDP, { x: cols['j-duty-time'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
-
-                // 3. Night Duty
-                if(myNight && cols['j-duty-night']) {
-                    page.drawText(myNight, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
-                }
-
-                // 4. Allowed FDP
-                if(maxFDP && cols['j-duty-allowed']) 
-                    page.drawText(maxFDP, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
-            }
-
-            // --- 4. SAVE & DOWNLOAD ---
-            const out = await pdfDoc.save();
-            const flt = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
-            const filename = `JOURNEY_LOG_${flt}.pdf`;
-            
-            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || 
-                             (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
-
-            if (mode === 'email' && isMobile) {
-                const subject = `Journey Log: ${flt}`;
-                await sharePdf(out, filename, subject, "Journey Log attached.");
-            } else {
-                downloadBlob(out, filename);
-            }
-
-        } catch(e) { console.error(e); alert("Error generating Log: " + e.message); }
-    };
+    } catch(e) { console.error(e); alert("Error generating Log: " + e.message); }
+};
 
     function downloadBlob(bytes, name) {
         const link = document.createElement('a');
@@ -2086,7 +2282,6 @@ window.downloadJourneyLog = async function(mode = 'download') {
     }
     };
 
-    // New Helper: Share PDF natively on iPad without the Blob URL
 async function sharePdf(pdfBytes, filename, subject, body) {
     // 1. Create a "File" object from the PDF bytes
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
@@ -2095,7 +2290,6 @@ async function sharePdf(pdfBytes, filename, subject, body) {
     // 2. Copy the target email to clipboard automatically
     try {
         await navigator.clipboard.writeText("ofp@airastana.com");
-        alert("Email 'ofp@airastana.com' copied to clipboard! Paste it in the To: field.");
     } catch (err) {
         console.log("Clipboard write failed", err);
     }
@@ -2107,7 +2301,6 @@ async function sharePdf(pdfBytes, filename, subject, body) {
                 files: [file],
                 title: subject,
                 text: body || subject
-                // CRITICAL: We do NOT add a 'url' property here, which stops the blob link appearing
             });
         } catch (err) {
             console.log("Share cancelled or failed", err);

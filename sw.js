@@ -1,4 +1,4 @@
-const CACHE_NAME = 'efb-log-pro-v1.1.2';
+const CACHE_NAME = 'efb-log-pro-v1.1.5';
 const ASSETS = [
   './',
   './index.html',
