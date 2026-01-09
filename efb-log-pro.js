@@ -1,10 +1,7 @@
 (function() {
 
-const APP_VERSION = "1.1.10"; // <--- Update this to match
+const APP_VERSION = "1.2";
 
-// ==========================================
-// 1. CONFIGURATION & UPDATE LOGIC
-// ==========================================
 // ==========================================
 // 1. CONFIGURATION & UPDATE LOGIC
 // ==========================================
@@ -27,10 +24,6 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
             const installingWorker = reg.installing;
             installingWorker.onstatechange = () => {
                 if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                    
-                    // We found an update!
-                    // Since we used "NetworkFirst" in the SW, this prompt is a fallback 
-                    // for when the user had the app open while the update was released.
                     if(confirm("New version available! Reload now?")) {
                         installingWorker.postMessage({ type: 'SKIP_WAITING' });
                         // Provide a small fallback reload in case controllerchange misses
@@ -57,7 +50,7 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
         rowGap: 17, 
         
         // Signature Position
-        sig: { x: 570, y: 120, width: 200, height: 50 },
+        sig: { x: 570, y: 125, width: 200, height: 50 },
 
 
         headers: {
@@ -146,9 +139,9 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
         if(e) e.innerText = val || ''; 
     }
 
-    // ==========================================
-    // 3. INITIALIZATION & LISTENERS
-    // ==========================================
+// ==========================================
+// 3. INITIALIZATION & LISTENERS
+// ==========================================
 
 
 // Clear signature function
@@ -190,8 +183,6 @@ function getSignatureBlob() {
 
 window.saveSignatureToMemory = function() {
     if (signaturePad && !signaturePad.isEmpty()) {
-        // We save the raw point data instead of an image 
-        // This is much safer against shrinking!
         savedSignatureData = signaturePad.toDataURL(); 
     }
 };
@@ -200,45 +191,42 @@ window.addEventListener('resize', function() {
     if (signaturePad) {
         const canvas = document.getElementById('sig-canvas');
         canvas.width = canvas.offsetWidth;
-        signaturePad.clear(); // Clearing redraws with new dimensions
+        signaturePad.clear();
     }
 });
 
 // Make functions available globally if needed
 window.clearSignature = clearSignature;
 window.getSignatureDataURL = getSignatureDataURL;
+    
+// --- VALIDATION HELPERS ---
+window.validateAltimeter = function(el) {
+    // Allow only 4 digits
+    el.value = el.value.replace(/[^0-9]/g, '').substring(0, 4);
+    validateInputs();
+};
 
+window.validateExtraFuel = function(el) {
+    // Allow only digits
+    el.value = el.value.replace(/[^0-9]/g, '');
+    // Update calculations immediately
+    calculatePICBlock(); 
+    renderTables(); // Re-render table to update FOB figures
+    validateInputs();
+};
 
-    // --- VALIDATION HELPERS ---
-    window.validateAltimeter = function(el) {
-        // Allow only 4 digits
-        el.value = el.value.replace(/[^0-9]/g, '').substring(0, 4);
-        validateInputs(); // Re-check the "Confirm" tab status
-    };
-
-    window.validateExtraFuel = function(el) {
-        // Allow only digits
-        el.value = el.value.replace(/[^0-9]/g, '');
-        // Update calculations immediately
-        calculatePICBlock(); 
-        renderTables(); // Re-render table to update FOB figures
-        validateInputs();
-    };
-
-    window.calculateExtraFromTotal = function() {
+window.calculateExtraFromTotal = function() {
     const totalInput = el('view-pic-block');
     const extraInput = el('front-extra-kg');
     
     // Ensure we have the base Block Fuel from the OFP
-    // (blockFuelValue is the global variable set when parsing the PDF)
     if (typeof blockFuelValue === 'undefined' || blockFuelValue === 0) return;
-
-    const picTotal = parseInt(totalInput.value) || 0;
+        const picTotal = parseInt(totalInput.value) || 0;
     
     // Calculation: Extra = User Total - OFP Block
     let diff = picTotal - blockFuelValue;
     
-    // Optional: Don't allow negative extra (unless you want to undercut block fuel)
+    // Optional: Don't allow negative extra
     if (diff < 0) diff = 0;
 
     extraInput.value = diff;
@@ -246,19 +234,17 @@ window.getSignatureDataURL = getSignatureDataURL;
     // Update the Flight Log Table immediately ---
     runCalc();
     validateInputs();
-    };
+};
 
     
-    window.onload = async function() {
+window.onload = async function() {
+    if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
+    }
         
-        if (typeof pdfjsLib !== 'undefined') {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
-        }
-        
-        // OFP Upload
-        const ofpFileInput = el('ofp-file-in');
-        if (ofpFileInput) ofpFileInput.onchange = runAnalysis;
-
+    // OFP Upload
+    const ofpFileInput = el('ofp-file-in');
+    if (ofpFileInput) ofpFileInput.onchange = runAnalysis;
         // Journey Log Template Upload
         const journeyLogFile = el('journey-log-file');
         if (journeyLogFile) {
@@ -270,51 +256,50 @@ window.getSignatureDataURL = getSignatureDataURL;
             });
         }
         
-        // --- REAL-TIME CALCULATION LISTENERS ---
+    // --- REAL-TIME CALCULATION LISTENERS ---
+
+    // 1. Time fields
+    ['j-out','j-off','j-on','j-in'].forEach(id => {
+        const e = el(id);
+        if (e) e.addEventListener('input', calcJourneyTimes);
+    });
         
-        // 1. Time fields
-        ['j-out','j-off','j-on','j-in'].forEach(id => {
-            const e = el(id);
-            if (e) e.addEventListener('input', calcJourneyTimes);
+    // 2. Fuel fields
+    ['j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 'j-burn', 'j-uplift-vol', 'j-disc', 'j-slip', 'j-slip-2'].forEach(id => {
+        const e = el(id);
+        if (e) e.addEventListener('input', calcFuel);
+    });
+
+    // 3. Loadsheet fields
+    ['j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw'].forEach(id => {
+        const e = el(id);
+        if (e) e.addEventListener('input', calcFuel);
+    });
+
+     // 4. OFP Sync
+    const ofpAtdInput = el('ofp-atd-in');
+    if (ofpAtdInput) {
+        ofpAtdInput.addEventListener('input', (e) => {
+            safeSet('j-off', e.target.value); 
+            runCalc(); 
+            calcJourneyTimes();
+            validateInputs();
         });
+    }
         
-        // 2. Fuel fields
-        ['j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 'j-burn', 'j-uplift-vol', 'j-disc', 'j-slip', 'j-slip-2'].forEach(id => {
-            const e = el(id);
-            if (e) e.addEventListener('input', calcFuel);
+    // 5. Extra Fuel Sync
+    const extraKgInput = el('front-extra-kg');
+    if (extraKgInput) {
+        extraKgInput.addEventListener('input', function() {
+           calculatePICBlock();
+            renderTables();
+            validateInputs(); 
         });
+    }
 
-        // 3. Loadsheet fields
-        ['j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw'].forEach(id => {
-            const e = el(id);
-            if (e) e.addEventListener('input', calcFuel);
-        });
-
-        // 4. OFP Sync
-        const ofpAtdInput = el('ofp-atd-in');
-        if (ofpAtdInput) {
-            ofpAtdInput.addEventListener('input', (e) => {
-                safeSet('j-off', e.target.value); 
-                runCalc(); 
-                calcJourneyTimes();
-                validateInputs();
-            });
-        }
-        
-        // 5. Extra Fuel Sync
-        const extraKgInput = el('front-extra-kg');
-        if (extraKgInput) {
-            extraKgInput.addEventListener('input', function() {
-                calculatePICBlock();
-                renderTables();
-                validateInputs(); 
-            });
-        }
-
-        // 6. Validation Triggers
-        const altm1Input = el('front-altm1');
-        if(altm1Input) altm1Input.addEventListener('input', validateInputs);
-
+    // 6. Validation Triggers
+    const altm1Input = el('front-altm1');
+    if(altm1Input) altm1Input.addEventListener('input', validateInputs);
         ['j-flt', 'j-date'].forEach(id => {
             const e = el(id);
             if(e) e.addEventListener('input', validateInputs);
@@ -329,11 +314,9 @@ window.getSignatureDataURL = getSignatureDataURL;
             
             if (savedPdf) {
                 console.log("Auto-loading saved PDF...");
-                // If found, run analysis on the blob. 
-                // NOTE: runAnalysis() now calls loadState() internally at the end.
                 await runAnalysis(savedPdf); 
             } else {
-                // 2. If no PDF, just load the text inputs from LocalStorage
+                // If no PDF, just load the text inputs from LocalStorage
                 loadState();
             }
         } catch (e) {
@@ -343,13 +326,10 @@ window.getSignatureDataURL = getSignatureDataURL;
         }
     };
 
-    // ==========================================
-    // 4. OFP PARSING LOGIC
-    // ==========================================
 // ==========================================
-// 4. OFP PARSING LOGIC (FIXED)
+// 4. OFP PARSING LOGIC
 // ==========================================
-// Global variable (make sure this is at the top level of your script or outside the function)
+
 window.cutoffPageIndex = -1; 
 
 async function runAnalysis(fileOrEvent) {
@@ -698,11 +678,11 @@ async function runAnalysis(fileOrEvent) {
         }
     }
 
-    // ==========================================
-    // 5. CALCULATION LOGIC
-    // ==========================================
-    function parseTimeString(timeStr) {
-        if(!timeStr) return 0;
+// ==========================================
+// 5. CALCULATION LOGIC
+// ==========================================
+function parseTimeString(timeStr) {
+    if(!timeStr) return 0;
         const separator = timeStr.includes(':') ? ':' : '.';
         const [hStr, mStr] = timeStr.split(separator);
         let h = parseInt(hStr)||0;
@@ -719,7 +699,6 @@ window.runDownload = async function(mode = 'download') {
         // ===============================================
         // 1. TRUNCATION LOGIC (Robust)
         // ===============================================
-        // Use the global variable detected during analysis
         const cutoff = window.cutoffPageIndex; 
 
         if (cutoff !== -1 && cutoff !== undefined) {
@@ -878,9 +857,9 @@ window.runCalc = function() {
 
     const delta = currentStartFuel - pdfTakeoffFuel;
 
-    // ==========================================
-    // 4. UPDATE WAYPOINTS LOOP
-    // ==========================================
+// ==========================================
+// 4. UPDATE WAYPOINTS LOOP
+// ==========================================
     waypoints.forEach((wp, index) => {
         // --- FUEL CALC ---
         if (wp.baseFuel === undefined) wp.baseFuel = parseInt(wp.fob) || 0;
@@ -925,34 +904,32 @@ window.runCalc = function() {
     syncLastWaypoint();
 };
 
-    function calculatePICBlock() {
-        const extra = parseInt(el('front-extra-kg')?.value) || 0;
-        if(blockFuelValue > 0 || extra > 0) {
-            safeText('view-pic-block', (blockFuelValue + extra) + " kg");
-        } else {
-            safeText('view-pic-block', '-');
+function calculatePICBlock() {
+    const extra = parseInt(el('front-extra-kg')?.value) || 0;
+    if(blockFuelValue > 0 || extra > 0) {
+        safeText('view-pic-block', (blockFuelValue + extra) + " kg");
+    } else {
+        safeText('view-pic-block', '-');
         }
     }
 
-    // --- Journey Log Calculations ---
-    window.calcJourneyTimes = function() {
-        const outT = el('j-out')?.value;
-        const inT = el('j-in')?.value;
-        const offT = el('j-off')?.value;
-        const onT = el('j-on')?.value;
+// --- Journey Log Calculations ---
+window.calcJourneyTimes = function() {
+    const outT = el('j-out')?.value;
+    const inT = el('j-in')?.value;
+    const offT = el('j-off')?.value;
+    const onT = el('j-on')?.value;
 
-        if(outT && inT) safeSet('j-block', getDiff(outT, inT));
+    if(outT && inT) safeSet('j-block', getDiff(outT, inT));
         else safeSet('j-block', ''); // Clear if inputs missing
         
-        if(offT && onT) safeSet('j-flight', getDiff(offT, onT));
+    if(offT && onT) safeSet('j-flight', getDiff(offT, onT));
         else safeSet('j-flight', '');
-
         calcDutyLogic();
     };
 
-    window.updateCruiseLevel = function() {
-    let finalLevel = "";
-
+window.updateCruiseLevel = function() {
+let finalLevel = "";
     // 1. Default: Find Planned Level from OFP
     if(waypoints.length > 0) {
         const cruiseWP = waypoints.find(w => /^\d{3}$/.test(w.level) && w.level !== "000");
@@ -972,7 +949,7 @@ window.runCalc = function() {
         finalLevel = "FL" + maxAct;
     }
 
-    // 3. Update the Journey Log Summary
+    // 3. Update the Journey Log FL
         safeSet('j-flt-alt', finalLevel);
     };
 
@@ -1024,48 +1001,10 @@ window.runCalc = function() {
         return `${Math.floor(diff/60).toString().padStart(2,'0')}:${(diff%60).toString().padStart(2,'0')}`;
     }
 
-    // --- DUTY CALCULATION LOGIC ---
-    // --- 1. HELPER: Auto-Detect Report Time ---
-    window.detectReportOffset = function() {
-        const flt = el('j-flt')?.value || "";
-        const dep = el('j-dep')?.value || "";
-        const dest = el('j-dest')?.value || "";
-        
-        if (!flt || !dep) return 90; // Default fallback
-
-        // 1. FlyArystan (AYN) -> Always 60
-        if (flt.startsWith("AYN")) return 60;
-
-        // 2. Air Astana (KZR)
-        const depIsKZ = dep.startsWith("UA");
-        
-        if (!depIsKZ) {
-            // Dep is NOT KZ (e.g. EGLL) -> Int'l Return -> 60
-            return 60; 
-        } else {
-            // Dep IS KZ (e.g. UAAA) -> Check Dest
-            const destIsKZ = dest.startsWith("UA");
-            if (destIsKZ) {
-                // Dest IS KZ -> Domestic -> 75
-                return 75;
-            } else {
-                // Dest NOT KZ -> Int'l Outbound -> 90
-                return 90;
-            }
-        }
-    };
-
-    // --- 2. MAIN LOGIC: Duty & Night Calc ---
+// --- DUTY CALCULATION LOGIC ---
 window.calcDutyLogic = function() {
-    // 1. GATHER DATA
-    // We prioritize the INPUT fields on the screen because that's what you are looking at.
-    // Only look at dailyLegs if we are calculating FDP for a multi-leg day.
-    let flt = (el('j-flt')?.value || "").trim();
-    let dep = (el('j-dep')?.value || "").trim();
-    let dest = (el('j-dest')?.value || "").trim();
-    let std = (el('j-std')?.value || "").trim();
 
-    // Fallback: If inputs are empty (rare), try looking at the first saved leg
+    // Try looking at the first saved leg
     if ((!std || !flt) && dailyLegs.length > 0) {
         flt = (dailyLegs[0]['j-flt'] || "").trim();
         dep = (dailyLegs[0]['j-dep'] || "").trim();
@@ -1078,7 +1017,7 @@ window.calcDutyLogic = function() {
     // 2. IDENTIFY AIRLINE & ROUTE
     const fltUpper = flt.toUpperCase();
     const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
-    const isAYN = fltUpper.includes('AYN') || fltUpper.includes('KQA'); 
+    const isAYN = fltUpper.includes('AYN') || fltUpper.includes('FS'); 
     
     // Check if Departure/Destination is in Kazakhstan (ICAO code starts with UA)
     const isDepUA = dep.toUpperCase().startsWith('UA');  
@@ -1213,14 +1152,14 @@ window.recalcMaxFDP = function() {
 };
 
 
-    function minsToTime(m) {
-        if(m<0) m+=1440;
+function minsToTime(m) {
+    if(m<0) m+=1440;
         return `${Math.floor(m/60).toString().padStart(2,'0')}:${(m%60).toString().padStart(2,'0')}`;
-    }
+}
 
-    // ==========================================
-    // 6. UI RENDERING & VALIDATION
-    // ==========================================
+// ==========================================
+// 6. UI RENDERING & VALIDATION
+// ==========================================
 function renderTables() {
     // IMPORTANT: Calculate the latest fuel/times BEFORE drawing the HTML
     runCalc(); 
@@ -1280,7 +1219,7 @@ function renderTables() {
     updateCruiseLevel();
 }
 
-    window.updateLevel = function(type, index, value) {
+window.updateLevel = function(type, index, value) {
     // 1. Update the internal data model (Keep this)
     if(type === 'o' && waypoints[index]) waypoints[index].level = value;
     if(type === 'a' && alternateWaypoints[index]) alternateWaypoints[index].level = value;
@@ -1289,11 +1228,11 @@ function renderTables() {
     if(type === 'o') {
         updateCruiseLevel();
     }
-    };
+};
 
-    function renderFuelTable() {
-        const tb = el('fuel-tbody');
-        if(!tb) return;
+function renderFuelTable() {
+    const tb = el('fuel-tbody');
+    if(!tb) return;
         if(fuelData.length === 0) {
             tb.innerHTML = '<tr><td colspan="4" style="text-align:center;">No Fuel Data</td></tr>';
             return;
@@ -1308,17 +1247,16 @@ function renderTables() {
         tb.innerHTML = sorted.map(i => `<tr><td>${i.name}</td><td>${i.time}</td><td>${i.fuel}</td><td>${i.remarks}</td></tr>`).join('');
     }
 
-    window.validateInputs = function() {
+window.validateInputs = function() {
         const flt = el('j-flt')?.value;
         const date = el('j-date')?.value;
         const alt1 = el('front-altm1')?.value;
         const summaryOK = !!flt && !!date && !!alt1;
         
         const extra = el('front-extra-kg')?.value;
-        const fuelOK = (blockFuelValue > 0) && (extra !== "");
+        const fuelOK = (blockFuelValue > 0);
         
-        const atd = el('ofp-atd-in')?.value;
-        const flightLogOK = (waypoints.length > 0) && !!atd;
+        const flightLogOK = (waypoints.length > 0);
         
         const journeyOK = dailyLegs.length > 0;
 
@@ -1490,27 +1428,27 @@ function renderTables() {
 };
 
 
-    function clearOFPInputs() {
-        // 1. Clear Front Page / Summary Inputs
-        ['front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'front-extra-kg', 'front-extra-reason'].forEach(id => safeSet(id, ''));
+function clearOFPInputs() {
+    // 1. Clear Front Page / Summary Inputs
+    ['front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'front-extra-kg', 'front-extra-reason'].forEach(id => safeSet(id, ''));
         
-        // 2. Clear Time / ATD Input
-        safeSet('ofp-atd-in', '');
+    // 2. Clear Time / ATD Input
+    safeSet('ofp-atd-in', '');
         
-        // 3. Reset internal calculated variables
-        waypoints = []; 
-        alternateWaypoints = []; 
-        fuelData = []; 
-        blockFuelValue = 0;
+    // 3. Reset internal calculated variables
+    waypoints = []; 
+    alternateWaypoints = []; 
+    fuelData = []; 
+    blockFuelValue = 0;
         
-        // 4. Clear the UI tables immediately (so they don't show old data while processing)
-        const tables = ['ofp-tbody', 'altn-tbody', 'fuel-tbody'];
-        tables.forEach(id => {
-            const tb = el(id);
-            if(tb) tb.innerHTML = '';
-        });
+    // 4. Clear the UI tables immediately (so they don't show old data while processing)
+    const tables = ['ofp-tbody', 'altn-tbody', 'fuel-tbody'];
+    tables.forEach(id => {
+        const tb = el(id);
+        if(tb) tb.innerHTML = '';
+    });
 
-        // 5. Reset Summary Text placeholders
+    // 5. Reset Summary Text placeholders
         ['view-flt', 'view-reg', 'view-dep', 'view-dest'].forEach(id => safeText(id, '-'));
     }
 
@@ -1543,8 +1481,8 @@ function renderTables() {
 
     let journeyLog = [];
 
-    // Journey Log Leg Management
-    window.addLeg = function() {
+// Journey Log Leg Management
+window.addLeg = function() {
     // Validation: Prevent adding empty legs
     const dest = el('j-dest')?.value;
     const dep = el('j-dep')?.value;
@@ -1645,6 +1583,9 @@ function renderTables() {
     
     // Auto-save immediately
     saveState();
+
+    //Hide the form
+    document.getElementById('leg-input-form').style.display = 'none';
 };
 
 window.removeLeg = function(i) {
@@ -1739,12 +1680,12 @@ window.clearLegs = async function() {
         if(e) e.value = "";
     });
 
-    // ===========================================
-    // 5. RESET DUTY & DEFAULTS
-    // ===========================================
+// ===========================================
+// 5. RESET DUTY & DEFAULTS
+// ===========================================
     safeSet('j-duty-start', "00:00");
     safeSet('j-cc-duty-start', "00:00");
-    safeSet('j-max-fdp', "");
+    safeSet('j-max-fdp', "00:00");
     safeSet('j-fc-count', "2"); 
     safeSet('j-cc-count', "4");
 
@@ -1857,6 +1798,12 @@ window.modifyLeg = function(index) {
         safeText('j-duty-start', '00:00'); 
         dutyStartTime = null; 
     }
+
+    // SHOW THE FORM
+    document.getElementById('leg-input-form').style.display = 'block';
+
+    // Scroll to the form so the user sees it
+    document.getElementById('leg-input-form').scrollIntoView({ behavior: 'smooth' });
     
     alert("Leg loaded. Make changes and click '+ Add Leg'.");
 };
@@ -1970,7 +1917,7 @@ window.calculateDutyValues = function(std, flt, dep, dest) {
     // 1. Identify Airline & Route
     const fltUpper = (flt || "").toUpperCase();
     const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
-    const isAYN = fltUpper.includes('AYN') || fltUpper.includes('KQA'); 
+    const isAYN = fltUpper.includes('AYN') || fltUpper.includes('FS'); 
     
     const isDepUA = (dep || "").toUpperCase().startsWith('UA');
     const isDestUA = (dest || "").toUpperCase().startsWith('UA');
@@ -2248,11 +2195,15 @@ async function runAnalysis(fileOrEvent) {
         });
         syncLastWaypoint(); updateAlternateETOs();
     }
+
+    // SHOW THE JOURNEY LOG FORM
+    const form = document.getElementById('leg-input-form');
+    if(form) form.style.display = 'block';
 }
 
-    // ==========================================
-    // 8. PDF GENERATION (JOURNEY LOG)
-    // ==========================================
+// ==========================================
+// 8. PDF GENERATION (JOURNEY LOG)
+// ==========================================
 window.downloadJourneyLog = async function(mode = 'download') {
     if (!journeyLogTemplateBytes) return alert("Please upload Journey Log first.");
     if (dailyLegs.length === 0) return alert("No legs to print.");
@@ -2317,8 +2268,6 @@ window.downloadJourneyLog = async function(mode = 'download') {
         const numCC = parseInt(el('j-cc-count')?.value || 4);
         const totalRows = numFC + numCC;
 
-        // --- FIX: STRICTLY READ MANUAL INPUTS ---
-        // We do NOT re-calculate here. We trust the input boxes.
         const fcDutyStartStr = el('j-duty-start')?.value || "00:00";
         const ccDutyStartStr = el('j-cc-duty-start')?.value || "00:00";
         const maxFDPStr = el('j-max-fdp')?.value || "00:00"; 
@@ -2413,7 +2362,7 @@ window.downloadJourneyLog = async function(mode = 'download') {
         document.body.removeChild(link);
     }
 
-    window.detectReportOffset = function() {
+window.detectReportOffset = function() {
     // Helper to get value from input OR text from span
     const getVal = (id) => {
         const e = el(id);

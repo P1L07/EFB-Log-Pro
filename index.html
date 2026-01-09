@@ -13,7 +13,7 @@
 <script src="pdf.min.js"></script>
 <script src="signature_pad.umd.min.js"></script>
 
-<script src="efb-log-pro.js?v=1.1.10"></script>
+<script src="efb-log-pro.js?v=1.2"></script>
 
 
 <style>
@@ -317,9 +317,9 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
         <button class="nav-btn" onclick="showTab('altn',this)">Alternate Route</button>
         <button class="nav-btn" onclick="showTab('weather',this)">Weather</button>
         <button class="nav-btn" onclick="showTab('notams',this)">NOTAMS</button>
-        <button class="nav-btn" onclick="showTab('journey',this)">Journey Log</button>
         <button class="nav-btn" onclick="showTab('paper',this)">Paper Flight Plan</button>
-        <button class="nav-btn" onclick="showTab('confirm',this)">Confirm</button>
+        <button class="nav-btn" onclick="showTab('journey',this)">Journey Log</button>
+        <button class="nav-btn" onclick="showTab('confirm',this)">OFP Confirm</button>
     </div>
         <div class="sidebar-footer">
             <button class="theme-toggle" onclick="toggleTheme()">Day/Night</button>
@@ -505,56 +505,57 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
             <input type="hidden" id="j-std">
             <input type="hidden" id="j-flt-alt" class="input">
 
+            <div id="leg-input-form">
+                <div class="panel">
+                    <div class="grid-row">
+                        <div class="field"><label>Off Block</label><input type="time" id="j-out" class="input"></div>
+                        <div class="field"><label>Takeoff</label><input type="time" id="j-off" class="input"style="color:var(--accent); font-weight:bold"></div>
+                        <div class="field"><label>Landing</label><input type="time" id="j-on" class="input" style="color:var(--accent); font-weight:bold"></div>
+                        <div class="field"><label>On Block</label><input type="time" id="j-in" class="input"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                        <div class="field"><label>Block Time</label><div id="j-block" class="data-box">00:00</div></div>
+                        <div class="field"><label>Flight Time</label><div id="j-flight" class="data-box">00:00</div></div>
+                        <div class="field"><label>Night Block</label><input type="time" id="j-night" class="input"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                        <div class="field"><label>TO</label><input type="number" id="j-to" class="input"></div>
+                        <div class="field"><label>LDG</label><input type="number" id="j-ldg" class="input"></div>
+                        <div class="field"><label>Manual/Automatic</label><input id="j-ldg-type" class="input"></div>
+                        <div class="field"><label>DETAILS</label><input id="j-ldg-detail" class="input"></div>
+                    </div>
+                </div>
 
-            <div class="panel">
-                <div class="grid-row">
-                    <div class="field"><label>Off Block</label><input type="time" id="j-out" class="input"></div>
-                    <div class="field"><label>Takeoff</label><input type="time" id="j-off" class="input"style="color:var(--accent); font-weight:bold"></div>
-                    <div class="field"><label>Landing</label><input type="time" id="j-on" class="input" style="color:var(--accent); font-weight:bold"></div>
-                    <div class="field"><label>On Block</label><input type="time" id="j-in" class="input"></div>
-                </div>
-                <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-                    <div class="field"><label>Block Time</label><div id="j-block" class="data-box">00:00</div></div>
-                    <div class="field"><label>Flight Time</label><div id="j-flight" class="data-box">00:00</div></div>
-                    <div class="field"><label>Night Block</label><input type="time" id="j-night" class="input"></div>
-                </div>
-                <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-                    <div class="field"><label>TO</label><input type="number" id="j-to" class="input"></div>
-                    <div class="field"><label>LDG</label><input type="number" id="j-ldg" class="input"></div>
-                    <div class="field"><label>Manual/Automatic</label><input id="j-ldg-type" class="input"></div>
-                    <div class="field"><label>DETAILS</label><input id="j-ldg-detail" class="input"></div>
-                </div>
-            </div>
-
-            <div class="panel">
-                <h3>Fuel & Load</h3>
-                <div class="grid-row">
-                    <div class="field"><label>Init</label><input type="number" id="j-init" class="input"></div>
-                    <div class="field"><label>Uplift Weight</label><input type="number" id="j-uplift-w" class="input"></div>
-                    <div class="field"><label>Uplift Vol</label><input type="number" id="j-uplift-vol" class="input"></div>
-                    <div class="field"><label>Calc Ramp</label><div id="j-calc-ramp" class="data-box">0</div></div>
-                </div>
-                <div class="grid-row" style="margin-top:15px">
-                    <div class="field"><label>Act Ramp</label><input type="number" id="j-act-ramp" class="input"></div>
-                    <div class="field"><label>Shutdown</label><input type="number" id="j-shut" class="input" style="color:var(--accent); font-weight:bold"></div>
-                    <div class="field"><label>Trip Burn</label><div id="j-burn" class="data-box">0</div></div>
-                    <div class="field"><label>Discrepancy</label><div id="j-disc" class="data-box">0</div></div>
-                    <div class="field"><label>Slip</label><input type="number" id="j-slip" class="input"></div>
-                    <div class="field"><label>Slip2</label><input type="number" id="j-slip-2" class="input"></div>
-                </div>
-                <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-                     <div class="field"><label>ADL</label><input id="j-adl" class="input" type="number"></div>
-                     <div class="field"><label>CHL</label><input id="j-chl" class="input" type="number"></div>
-                     <div class="field"><label>INF</label><input id="j-inf" class="input" type="number"></div>
-                     <div class="field"><label>Cargo</label><input id="j-cargo" class="input" type="number"></div>
-                     <div class="field"><label>Mail</label><input id="j-mail" class="input" type="number"></div>
-                     <div class="field"><label>Bag</label><input id="j-bag" class="input" type="number"></div>
-                </div>
-                <div class="grid-row" style="margin-top:15px">
-                     <div class="field"><label>ZFW</label><input type="number" id="j-zfw" class="input" type="number"></div>
-                </div>
-                <div class="btn-group">
-                    <button class="btn btn-email" onclick="addLeg()">+ Add Leg</button>
+                <div class="panel">
+                    <h3>Fuel & Load</h3>
+                    <div class="grid-row">
+                        <div class="field"><label>Init</label><input type="number" id="j-init" class="input"></div>
+                        <div class="field"><label>Uplift Weight</label><input type="number" id="j-uplift-w" class="input"></div>
+                        <div class="field"><label>Uplift Vol</label><input type="number" id="j-uplift-vol" class="input"></div>
+                        <div class="field"><label>Calc Ramp</label><div id="j-calc-ramp" class="data-box">0</div></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px">
+                        <div class="field"><label>Act Ramp</label><input type="number" id="j-act-ramp" class="input"></div>
+                        <div class="field"><label>Shutdown</label><input type="number" id="j-shut" class="input" style="color:var(--accent); font-weight:bold"></div>
+                        <div class="field"><label>Trip Burn</label><div id="j-burn" class="data-box">0</div></div>
+                        <div class="field"><label>Discrepancy</label><div id="j-disc" class="data-box">0</div></div>
+                        <div class="field"><label>Slip</label><input type="number" id="j-slip" class="input"></div>
+                        <div class="field"><label>Slip2</label><input type="number" id="j-slip-2" class="input"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                        <div class="field"><label>ADL</label><input id="j-adl" class="input" type="number"></div>
+                        <div class="field"><label>CHL</label><input id="j-chl" class="input" type="number"></div>
+                        <div class="field"><label>INF</label><input id="j-inf" class="input" type="number"></div>
+                        <div class="field"><label>Cargo</label><input id="j-cargo" class="input" type="number"></div>
+                        <div class="field"><label>Mail</label><input id="j-mail" class="input" type="number"></div>
+                        <div class="field"><label>Bag</label><input id="j-bag" class="input" type="number"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px">
+                        <div class="field"><label>ZFW</label><input type="number" id="j-zfw" class="input" type="number"></div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-email" onclick="addLeg()">+ Add Leg</button>
+                    </div>
                 </div>
             </div>
 
