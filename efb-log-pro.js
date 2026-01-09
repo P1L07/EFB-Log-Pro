@@ -1,30 +1,40 @@
 (function() {
 
-const APP_VERSION = "1.1.5";
-    // ==========================================
-    // 1. CONFIGURATION
-    // ==========================================
-    // Only register if we are on HTTP or HTTPS (prevents 'null' origin error)
+const APP_VERSION = "1.1.3"; // <--- Update this to match
+
+// ==========================================
+// 1. CONFIGURATION & UPDATE LOGIC
+// ==========================================
 if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
     
     navigator.serviceWorker.register('sw.js')
     .then(reg => {
-        // Check for updates every time the app is opened
+        
+        // 1. Check for updates immediately
         reg.update();
 
+        // 2. Listen for a new worker being found
         reg.onupdatefound = () => {
             const installingWorker = reg.installing;
+            
             installingWorker.onstatechange = () => {
+                // If it reached 'installed' state, it's ready to take over
                 if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                    // New version found! Force a reload.
+                    
+                    // Prompt the user
                     if(confirm("New version available! Reload now?")) {
-                        window.location.reload();
+                        // CRITICAL: Tell the new worker to skip waiting
+                        installingWorker.postMessage({ type: 'SKIP_WAITING' });
                     }
                 }
             };
         };
-    }).catch(err => {
-        console.warn("SW Register failed (usually expected on localhost):", err);
+    });
+
+    // 3. RELOAD ONLY WHEN THE NEW WORKER TAKES CONTROL
+    // This ensures we don't reload too early while the old code is still active
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+        window.location.reload();
     });
 }
     // --- JOURNEY LOG PDF MAPPING ---
@@ -453,7 +463,6 @@ async function runAnalysis(fileOrEvent) {
                 safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
                 safeSet('j-std', stdFmt);
 
-                calcDutyLogic();
                 extractRoutes(textContent);
                 extractFuelDataSimple(textContent);
                 extractWeights(textContent);
@@ -1542,19 +1551,29 @@ function renderTables() {
     // 1. AUTO-CALCULATE DUTY (READ ONCE ON LEG 1)
     // ============================================================
     if (dailyLegs.length === 0) {
-        // This is the FIRST leg. We populate the Duty fields now.
-        const std = el('j-std')?.value || "";
-        const flt = el('j-flt')?.value || "";
+        // Check if user has ALREADY entered a manual time
+        const currentFC = el('j-duty-start')?.value;
+        const currentCC = el('j-cc-duty-start')?.value;
+
+        // Only auto-calculate if fields are empty or "00:00"
+        // This allows you to type a manual time BEFORE clicking Add Leg
+        if (!currentFC || currentFC === "00:00" || !currentCC || currentCC === "00:00") {
+            
+            const std = el('j-std')?.value || "";
+            const flt = el('j-flt')?.value || "";
+            
+            const dutyValues = calculateDutyValues(std, flt, dep, dest);
+            
+            // Only overwrite if the specific field was empty
+            if (!currentFC || currentFC === "00:00") safeSet('j-duty-start', dutyValues.fc);
+            if (!currentCC || currentCC === "00:00") safeSet('j-cc-duty-start', dutyValues.cc);
+            
+            // Always calc Max FDP if it's empty
+            if (!el('j-max-fdp')?.value) safeSet('j-max-fdp', dutyValues.max);
+        }
         
-        const dutyValues = calculateDutyValues(std, flt, dep, dest);
-        
-        // Write to inputs
-        safeSet('j-duty-start', dutyValues.fc);
-        safeSet('j-cc-duty-start', dutyValues.cc);
-        safeSet('j-max-fdp', dutyValues.max);
-        
-        // Set global for immediate FDP check
-        dutyStartTime = parseTimeString(dutyValues.fc);
+        // Ensure the global variable is synced with whatever ended up in the box
+        dutyStartTime = parseTimeString(el('j-duty-start')?.value);
     }
 
     // ============================================================

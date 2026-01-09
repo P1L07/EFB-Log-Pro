@@ -1,4 +1,4 @@
-const CACHE_NAME = 'efb-log-pro-v1.1.5';
+const CACHE_NAME = 'efb-log-pro-v1.1.6';
 const ASSETS = [
   './',
   './index.html',
@@ -10,10 +10,30 @@ const ASSETS = [
   './pdf.worker.min.js',
 ];
 
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
       return cache.addAll(ASSETS);
+    })
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => {
+      return Promise.all(
+        keys.map((key) => {
+          if (key !== CACHE_NAME) {
+            return caches.delete(key);
+          }
+        })
+      );
     })
   );
 });
