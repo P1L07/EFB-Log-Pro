@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.1.3"; // <--- Update this to match
+const APP_VERSION = "1.1.7"; // <--- Update this to match
 
 // ==========================================
 // 1. CONFIGURATION & UPDATE LOGIC
