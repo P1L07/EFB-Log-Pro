@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.1.7"; // <--- Update this to match
+const APP_VERSION = "1.1.8"; // <--- Update this to match
 
 // ==========================================
 // 1. CONFIGURATION & UPDATE LOGIC
@@ -1533,9 +1533,10 @@ function renderTables() {
     }
 
     let journeyLog = [];
+
     // Journey Log Leg Management
     window.addLeg = function() {
-    // 1. Validation: Prevent adding empty legs
+    // Validation: Prevent adding empty legs
     const dest = el('j-dest')?.value;
     const dep = el('j-dep')?.value;
     
@@ -1556,7 +1557,7 @@ function renderTables() {
         const currentCC = el('j-cc-duty-start')?.value;
 
         // Only auto-calculate if fields are empty or "00:00"
-        // This allows you to type a manual time BEFORE clicking Add Leg
+        // This allows user to type a manual time BEFORE clicking Add Leg
         if (!currentFC || currentFC === "00:00" || !currentCC || currentCC === "00:00") {
             
             const std = el('j-std')?.value || "";
@@ -1652,23 +1653,24 @@ window.removeLeg = function(i) {
         saveState();
     };
     
-    window.clearLegs = function() {
-        if(!confirm("Clear Journey Log?")) return;
-        
-        dailyLegs = [];
-        renderJourneyList();
-        
-        // --- RESET DUTY FIELDS ---
-        safeText('j-duty-start', "00:00");
-        safeText('j-cc-duty-start', "00:00");
-        safeSet('j-max-fdp', "");
-        safeSet('j-night-calc', "");
-        
-        // Reset global
-        dutyStartTime = 0;
-        
-        saveState();
-    };
+window.clearLegs = function() {
+    if(!confirm("Clear Journey Log?")) return;
+    
+    dailyLegs = [];
+    renderJourneyList();
+    
+    // --- RESET DUTY FIELDS ---
+
+    safeSet('j-duty-start', "00:00");
+    safeSet('j-cc-duty-start', "00:00");
+    safeSet('j-max-fdp', "");
+    safeSet('j-night-calc', "");
+    
+    // Reset global variable
+    dutyStartTime = null; 
+
+    saveState();
+};
 
     // --- MOVE LEG (Re-order Sequence) ---
 window.moveLeg = function(index, direction) {
@@ -1677,17 +1679,50 @@ window.moveLeg = function(index, direction) {
     // Safety check boundaries
     if (newIndex < 0 || newIndex >= dailyLegs.length) return;
 
-    // Swap the elements in the array
+    // 1. Swap the elements in the array
     const temp = dailyLegs[index];
     dailyLegs[index] = dailyLegs[newIndex];
     dailyLegs[newIndex] = temp;
 
-    // IMPORTANT: If we changed the first leg (index 0), 
-    // we must re-calculate the Duty Start based on the new Leg 1.
-    if (index === 0 || newIndex === 0) {
-        // Unlock duty start to allow re-calculation
-        // (You might need to clear dutyStartTime global var here depending on your logic)
-        calcDutyLogic(); 
+    // 2. RECALCULATE DUTY LOGIC (Always run this to ensure sync)
+    if (dailyLegs.length > 0) {
+        const firstLeg = dailyLegs[0];
+
+        // A. Calculate new Duty Start/Max based on the NEW first leg's data
+        // We read directly from the saved leg data, not the input boxes
+        const newDutyValues = calculateDutyValues(
+            firstLeg['j-std'], 
+            firstLeg['j-flt'], 
+            firstLeg['j-dep'], 
+            firstLeg['j-dest']
+        );
+
+        // B. Update the screen inputs
+        safeSet('j-duty-start', newDutyValues.fc);
+        safeSet('j-cc-duty-start', newDutyValues.cc);
+        safeSet('j-max-fdp', newDutyValues.max);
+
+        // C. Update the global variable used for calculations
+        dutyStartTime = parseTimeString(newDutyValues.fc);
+        const maxLimitMins = parseTimeString(newDutyValues.max);
+
+        // D. Re-calculate FDP Duration & Alerts for ALL legs
+        // (Because if the start time changed, every leg's FDP duration changes)
+        dailyLegs.forEach(leg => {
+            const onBlockStr = leg['j-in'];
+            if (onBlockStr && dutyStartTime !== null) {
+                let m = parseTimeString(onBlockStr) - dutyStartTime;
+                
+                // Handle midnight crossing (e.g. Start 23:00, In 02:00)
+                if (m < 0) m += 1440; 
+
+                leg.fdp = minsToTime(m);
+                leg.fdpAlert = (m > maxLimitMins);
+            } else {
+                leg.fdp = "";
+                leg.fdpAlert = false;
+            }
+        });
     }
 
     renderJourneyList();
@@ -2003,7 +2038,6 @@ async function runAnalysis(fileOrEvent) {
                 safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
                 safeSet('j-std', stdFmt);
 
-                calcDutyLogic();
                 extractRoutes(textContent);
                 extractFuelDataSimple(textContent);
                 extractWeights(textContent);
