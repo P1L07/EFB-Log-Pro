@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.1";
+const APP_VERSION = "1.4.3";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -1210,90 +1210,65 @@ window.calcDutyLogic = function() {
 };
 
 window.recalcMaxFDP = function() {
-    // 1. Get FC Start Time
+    // 1. Get FC and CC Start Times
     const fcTimeStr = el('j-duty-start')?.value;
+    const ccTimeStr = el('j-cc-duty-start')?.value;
     if (!fcTimeStr) return;
 
     // Update global for other functions
     const fcMins = parseTimeString(fcTimeStr);
+    const ccMins = ccTimeStr ? parseTimeString(ccTimeStr) : fcMins;
     dutyStartTime = fcMins; 
 
     // 2. Count Sectors
-    // We use the greater of: Legs currently in the table OR 1
     const sectors = Math.max(dailyLegs.length, 1);
 
-    // 3. EASA ORO.FTL.205 Table Lookup
-    let maxFDP = 0;
+    // 3. Helper function to calculate max FDP with sector reductions
+    const calculateMaxFDPWithSectors = (startMins) => {
+        let maxFDP = 0;
 
-    // --- TIME BAND LOGIC (Start Time in UTC/Local based on your input) ---
-    // 06:00 - 13:29
-    if (fcMins >= 360 && fcMins <= 809) {
-        maxFDP = 780; // 13:00
-    }
-    // 13:30 - 13:59
-    else if (fcMins >= 810 && fcMins <= 839) {
-        maxFDP = 765; // 12:45
-    }
-    // 14:00 - 14:29
-    else if (fcMins >= 840 && fcMins <= 869) {
-        maxFDP = 750; // 12:30
-    }
-    // 14:30 - 14:59
-    else if (fcMins >= 870 && fcMins <= 899) {
-        maxFDP = 735; // 12:15
-    }
-    // 15:00 - 15:29
-    else if (fcMins >= 900 && fcMins <= 929) {
-        maxFDP = 720; // 12:00
-    }
-    // 15:30 - 15:59
-    else if (fcMins >= 930 && fcMins <= 959) {
-        maxFDP = 705; // 11:45
-    }
-    // 16:00 - 16:29
-    else if (fcMins >= 960 && fcMins <= 989) {
-        maxFDP = 690; // 11:30
-    }
-    // 16:30 - 16:59
-    else if (fcMins >= 990 && fcMins <= 1019) {
-        maxFDP = 675; // 11:15
-    }
-    // 17:00 - 04:59 (Night)
-    else if (fcMins >= 1020 || fcMins <= 299) {
-        maxFDP = 660; // 11:00
-    }
-    // 05:00 - 05:14
-    else if (fcMins >= 300 && fcMins <= 314) {
-        maxFDP = 720; // 12:00
-    }
-    // 05:15 - 05:29
-    else if (fcMins >= 315 && fcMins <= 329) {
-        maxFDP = 735; // 12:15
-    }
-    // 05:30 - 05:44
-    else if (fcMins >= 330 && fcMins <= 344) {
-        maxFDP = 750; // 12:30
-    }
-    // 05:45 - 05:59
-    else if (fcMins >= 345 && fcMins <= 359) {
-        maxFDP = 765; // 12:45
-    }
+        // EASA Time Band Logic
+        if (startMins >= 360 && startMins <= 809) maxFDP = 780;
+        else if (startMins >= 810 && startMins <= 839) maxFDP = 765;
+        else if (startMins >= 840 && startMins <= 869) maxFDP = 750;
+        else if (startMins >= 870 && startMins <= 899) maxFDP = 735;
+        else if (startMins >= 900 && startMins <= 929) maxFDP = 720;
+        else if (startMins >= 930 && startMins <= 959) maxFDP = 705;
+        else if (startMins >= 960 && startMins <= 989) maxFDP = 690;
+        else if (startMins >= 990 && startMins <= 1019) maxFDP = 675;
+        else if (startMins >= 1020 || startMins <= 299) maxFDP = 660;
+        else if (startMins >= 300 && startMins <= 314) maxFDP = 720;
+        else if (startMins >= 315 && startMins <= 329) maxFDP = 735;
+        else if (startMins >= 330 && startMins <= 344) maxFDP = 750;
+        else if (startMins >= 345 && startMins <= 359) maxFDP = 765;
 
-    // 4. Apply Sector Reductions
-    if (sectors === 3) {
-        maxFDP -= 30; // 3 Sectors: -30 mins
-    } 
-    else if (sectors === 4) {
-        maxFDP -= 60; // 4 Sectors: -60 mins
-    } 
-    else if (sectors >= 5) {
-        maxFDP -= 90; // 5+ Sectors: -90 mins
-    }
+        // Apply Sector Reductions
+        if (sectors === 3) {
+            maxFDP -= 30; // 3 Sectors: -30 mins
+        } 
+        else if (sectors === 4) {
+            maxFDP -= 60; // 4 Sectors: -60 mins
+        } 
+        else if (sectors >= 5) {
+            maxFDP -= 90; // 5+ Sectors: -90 mins
+        }
 
-    // 5. Update the Input Field
-    safeSet('j-max-fdp', minsToTime(maxFDP));
+        return maxFDP;
+    };
+
+    // 4. Calculate for both FC and CC
+    const fcMax = calculateMaxFDPWithSectors(fcMins);
+    const ccMax = calculateMaxFDPWithSectors(ccMins);
+
+    // 5. Update both fields
+    safeSet('j-max-fdp', minsToTime(fcMax));
+    
+    // Update hidden cabin crew max FDP
+    const ccMaxInput = document.getElementById('j-cc-max-fdp-hidden');
+    if (ccMaxInput) {
+        ccMaxInput.value = minsToTime(ccMax);
+    }
 };
-
 
 function minsToTime(m) {
     if(m<0) m+=1440;
@@ -1653,7 +1628,6 @@ window.addLeg = function() {
         const currentCC = el('j-cc-duty-start')?.value;
 
         // Only auto-calculate if fields are empty or "00:00"
-        // This allows user to type a manual time BEFORE clicking Add Leg
         if (!currentFC || currentFC === "00:00" || !currentCC || currentCC === "00:00") {
             
             const std = el('j-std')?.value || "";
@@ -1666,7 +1640,12 @@ window.addLeg = function() {
             if (!currentCC || currentCC === "00:00") safeSet('j-cc-duty-start', dutyValues.cc);
             
             // Always calc Max FDP if it's empty
-            if (!el('j-max-fdp')?.value) safeSet('j-max-fdp', dutyValues.max);
+            if (!el('j-max-fdp')?.value || el('j-max-fdp')?.value === "00:00") {
+                safeSet('j-max-fdp', dutyValues.max);
+            }
+            
+            // Set the hidden cabin crew max FDP
+            setCCMaxFDP(dutyValues.ccMax);
         }
         
         // Ensure the global variable is synced with whatever ended up in the box
@@ -1674,23 +1653,33 @@ window.addLeg = function() {
     }
 
     // ============================================================
-    // 2. FDP CHECK
+    // 2. FDP CHECK (BOTH FC AND CC)
     // ============================================================
     const onBlock = el('j-in')?.value;
-    let fdp = "", alertFdp = false;
-    
-    // Check if onBlock exists AND dutyStartTime is now valid
-    if(onBlock && dutyStartTime !== null && dutyStartTime !== undefined) {
-        let m = parseTimeString(onBlock) - dutyStartTime;
-        
-        // Handle next day crossing (e.g. Duty start 22:00, In 02:00)
-        // If the flight is short but crosses midnight, m will be negative.
-        // We assume flights < 24h.
-        if (m < 0) m += 1440; 
+    let fdp = "", alertFdp = false, ccFdpAlert = false;
 
-        fdp = minsToTime(m);
-        const limit = parseTimeString(el('j-max-fdp')?.value || '13:00');
-        if(m > limit) alertFdp = true;
+    if(onBlock && dutyStartTime !== null && dutyStartTime !== undefined) {
+        // Get FC duty start
+        const fcStartStr = el('j-duty-start')?.value;
+        const ccStartStr = el('j-cc-duty-start')?.value;
+        
+        if (fcStartStr) {
+            let fcMins = parseTimeString(onBlock) - parseTimeString(fcStartStr);
+            if (fcMins < 0) fcMins += 1440; 
+            fdp = minsToTime(fcMins);
+            const fcLimit = parseTimeString(el('j-max-fdp')?.value || '13:00');
+            if(fcMins > fcLimit) alertFdp = true;
+        }
+        
+        // Check cabin crew FDP
+        if (ccStartStr) {
+            const ccMaxFDPStr = getCCMaxFDP();
+            
+            let ccMins = parseTimeString(onBlock) - parseTimeString(ccStartStr);
+            if (ccMins < 0) ccMins += 1440; 
+            const ccLimit = parseTimeString(ccMaxFDPStr);
+            if(ccMins > ccLimit) ccFdpAlert = true;
+        }
     }
 
     // ============================================================
@@ -1708,9 +1697,9 @@ window.addLeg = function() {
         d[k] = getValue(k);
     });
 
-
     d.fdp = fdp; 
     d.fdpAlert = alertFdp;
+    d.ccFdpAlert = ccFdpAlert; // Add CC FDP alert flag
     
     dailyLegs.push(d);
     renderJourneyList();
@@ -1722,17 +1711,13 @@ window.addLeg = function() {
     // ============================================================
     // 4. PREPARE NEXT LEG
     // ============================================================
-    // AUTO CLEAR & PRE-FILL NEXT LEG ---
     const nextInitFuel = d['j-shut'];
-    
     clearJourneyInputs(nextInitFuel);
-    
     safeSet('j-dep', '');   
     safeSet('j-dest', '');
     
     // Auto-save immediately
     saveState();
-
 };
 
 window.removeLeg = function(i) {
@@ -1743,6 +1728,10 @@ window.removeLeg = function(i) {
         safeSet('j-duty-start', "00:00");
         safeSet('j-cc-duty-start', "00:00");
         safeSet('j-max-fdp', "00:00");
+        const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
+        if (ccMaxHidden) {
+            ccMaxHidden.value = "00:00";
+        }
         dutyStartTime = null;
     }
         renderJourneyList(); 
@@ -1843,6 +1832,11 @@ window.clearLegs = async function() {
     safeSet('j-max-fdp', "00:00");
     safeSet('j-fc-count', "2"); 
     safeSet('j-cc-count', "4");
+    // Reset hidden CC max FDP
+    const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
+    if (ccMaxHidden) {
+        ccMaxHidden.value = "00:00";
+    }
 
     // Reset Signature Pad
     if (window.signaturePad) {
@@ -1870,6 +1864,20 @@ window.clearLegs = async function() {
     
     console.log("App completely reset.");
 };
+
+// Helper to get hidden CC max FDP
+function getCCMaxFDP() {
+    const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
+    return ccMaxHidden ? ccMaxHidden.value : "00:00";
+}
+
+// Helper to set hidden CC max FDP
+function setCCMaxFDP(value) {
+    const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
+    if (ccMaxHidden) {
+        ccMaxHidden.value = value || "00:00";
+    }
+}
 
     // --- MOVE LEG (Re-order Sequence) ---
 window.moveLeg = function(index, direction) {
@@ -1905,6 +1913,12 @@ window.moveLeg = function(index, direction) {
         dutyStartTime = parseTimeString(newDutyValues.fc);
         const maxLimitMins = parseTimeString(newDutyValues.max);
 
+        // Update hidden cabin crew max FDP
+        const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
+        if (ccMaxHidden) {
+            ccMaxHidden.value = newDutyValues.ccMax;
+        }
+
         // D. Re-calculate FDP Duration & Alerts for ALL legs
         // (Because if the start time changed, every leg's FDP duration changes)
         dailyLegs.forEach(leg => {
@@ -1924,6 +1938,8 @@ window.moveLeg = function(index, direction) {
         });
     }
 
+    // Recalculate both max FDPs
+    if (typeof recalcMaxFDP === 'function') recalcMaxFDP();
     renderJourneyList();
     saveState();
 };
@@ -2066,8 +2082,9 @@ window.modifyLeg = function(index) {
 };
 
 // Helper: Calculates the values based on a specific leg's data
+// Helper: Calculates the values based on a specific leg's data
 window.calculateDutyValues = function(std, flt, dep, dest) {
-    if (!std) return { fc: "00:00", cc: "00:00", max: "00:00" };
+    if (!std) return { fc: "00:00", cc: "00:00", max: "00:00", ccMax: "00:00" };
 
     // 1. Identify Airline & Route
     const fltUpper = (flt || "").toUpperCase();
@@ -2094,37 +2111,40 @@ window.calculateDutyValues = function(std, flt, dep, dest) {
     let ccStartMins = fcStartMins - ccDiff;
     if (ccStartMins < 0) ccStartMins += 1440;
 
-    // 5. Max FDP (Initial calculation assuming 1 sector)
-    // We use the EASA table based on the calculated FC Start Time
-    let maxFDP = 780; // Base 13:00
-    // Simple EASA Logic (Time Bands)
-    if (fcStartMins >= 360 && fcStartMins <= 809) maxFDP = 780; // 06:00-13:29
-    else if (fcStartMins >= 810 && fcStartMins <= 839) maxFDP = 765;
-    else if (fcStartMins >= 840 && fcStartMins <= 869) maxFDP = 750;
-    else if (fcStartMins >= 870 && fcStartMins <= 899) maxFDP = 735;
-    else if (fcStartMins >= 900 && fcStartMins <= 929) maxFDP = 720;
-    else if (fcStartMins >= 930 && fcStartMins <= 959) maxFDP = 705;
-    else if (fcStartMins >= 960 && fcStartMins <= 989) maxFDP = 690;
-    else if (fcStartMins >= 990 && fcStartMins <= 1019) maxFDP = 675;
-    else if (fcStartMins >= 1020 || fcStartMins <= 299) maxFDP = 660; // Night
-    else if (fcStartMins >= 300 && fcStartMins <= 359) maxFDP = 720; // Early Morning
+    // 5. Helper function to calculate max FDP based on start time
+    const calculateMaxFDP = (startMins) => {
+        let maxFDP = 780; // Base 13:00
+        
+        // EASA Table based on start time
+        if (startMins >= 360 && startMins <= 809) maxFDP = 780; // 06:00-13:29
+        else if (startMins >= 810 && startMins <= 839) maxFDP = 765;
+        else if (startMins >= 840 && startMins <= 869) maxFDP = 750;
+        else if (startMins >= 870 && startMins <= 899) maxFDP = 735;
+        else if (startMins >= 900 && startMins <= 929) maxFDP = 720;
+        else if (startMins >= 930 && startMins <= 959) maxFDP = 705;
+        else if (startMins >= 960 && startMins <= 989) maxFDP = 690;
+        else if (startMins >= 990 && startMins <= 1019) maxFDP = 675;
+        else if (startMins >= 1020 || startMins <= 299) maxFDP = 660; // Night
+        else if (startMins >= 300 && startMins <= 314) maxFDP = 720; // 05:00-05:14
+        else if (startMins >= 315 && startMins <= 329) maxFDP = 735; // 05:15-05:29
+        else if (startMins >= 330 && startMins <= 344) maxFDP = 750; // 05:30-05:44
+        else if (startMins >= 345 && startMins <= 359) maxFDP = 765; // 05:45-05:59
+
+        return maxFDP;
+    };
+
+    // 6. Calculate max FDP for both FC and CC (without sector reductions - those are applied in recalcMaxFDP)
+    const fcMaxFDP = calculateMaxFDP(fcStartMins);
+    const ccMaxFDP = calculateMaxFDP(ccStartMins);
 
     return {
         fc: minsToTime(fcStartMins),
         cc: minsToTime(ccStartMins),
-        max: minsToTime(maxFDP)
+        max: minsToTime(fcMaxFDP),     // Flight Crew max FDP (base, no sector reduction)
+        ccMax: minsToTime(ccMaxFDP)    // Cabin Crew max FDP (base, no sector reduction)
     };
 };
 
-
-    window.toggleTheme = function() {
-        const b = document.body;
-        b.setAttribute('data-theme', b.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
-    };
-
-// ==========================================
-// 7. PDF GENERATION (OFP)
-// ==========================================
 
 // ==========================================
 // 8. PDF GENERATION (JOURNEY LOG)
@@ -2132,6 +2152,13 @@ window.calculateDutyValues = function(std, flt, dep, dest) {
 window.downloadJourneyLog = async function(mode = 'download') {
     if (!journeyLogTemplateBytes) return alert("Please upload Journey Log first.");
     if (dailyLegs.length === 0) return alert("No legs to print.");
+
+        console.log("=== DEBUG: Starting downloadJourneyLog ===");
+    console.log("fcMaxFDPStr from j-max-fdp:", el('j-max-fdp')?.value);
+    console.log("ccMaxFDPStr from hidden input:", document.getElementById('j-cc-max-fdp-hidden')?.value);
+    console.log("fcDutyStartStr:", el('j-duty-start')?.value);
+    console.log("ccDutyStartStr:", el('j-cc-duty-start')?.value);
+    console.log("dailyLegs length:", dailyLegs.length);
 
     try {
         const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
@@ -2144,16 +2171,12 @@ window.downloadJourneyLog = async function(mode = 'download') {
 
         // --- 1. HEADERS & LEG DATA ---
 
-        const pageWidth = page.getWidth();
-        const pageHeight = page.getHeight();
-        
-        // Adjust these coordinates to fit your specific template exactly
-        // x: pageWidth - 100 puts it near the right edge
-        // y: pageHeight - 30 puts it near the top edge
-        page.drawText("3B          75/125", { 
-            x: pageWidth - 265, 
-            y: pageHeight - 40, 
-            size: 10, // Slightly larger than standard log text
+        const { width, height } = page.getSize();
+
+        page.drawText("75/125", { 
+            x: width - 280, 
+            y: height - 40, 
+            size: 10,
             font: font, 
             color: PDFLib.rgb(0,0,0) 
         });
@@ -2208,9 +2231,16 @@ window.downloadJourneyLog = async function(mode = 'download') {
         const numCC = parseInt(el('j-cc-count')?.value || 4);
         const totalRows = numFC + numCC;
 
+        // Get duty start times
         const fcDutyStartStr = el('j-duty-start')?.value || "00:00";
         const ccDutyStartStr = el('j-cc-duty-start')?.value || "00:00";
-        const maxFDPStr = el('j-max-fdp')?.value || "00:00"; 
+        
+        // Get max FDP values - FIXED VARIABLE NAMES
+        const fcMaxFDPStr = el('j-max-fdp')?.value || "00:00"; 
+        
+        // Get cabin crew max FDP from hidden input
+        const ccMaxFDPInput = document.getElementById('j-cc-max-fdp-hidden');
+        const ccMaxFDPStr = ccMaxFDPInput ? ccMaxFDPInput.value : "00:00";
 
         // Convert strings to minutes for math
         const fcStartMins = parseTimeString(fcDutyStartStr);
@@ -2252,6 +2282,7 @@ window.downloadJourneyLog = async function(mode = 'download') {
             
             // Select Start Time based on role
             const myStart = isFlightCrew ? fcStartMins : ccStartMins;
+            const myMaxFDP = isFlightCrew ? fcMaxFDPStr : ccMaxFDPStr;
             
             // Calculate Duration & Night based on that start time
             const myFDP = getFDP(myStart);
@@ -2270,9 +2301,9 @@ window.downloadJourneyLog = async function(mode = 'download') {
                 page.drawText(myNight, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
             }
 
-            // 4. Allowed FDP (READ DIRECTLY FROM INPUT)
-            if(maxFDPStr && cols['j-duty-allowed']) 
-                page.drawText(maxFDPStr, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
+            // 4. Allowed FDP (READ FROM CORRECT VARIABLE)
+            if(myMaxFDP && cols['j-duty-allowed']) 
+                page.drawText(myMaxFDP, { x: cols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
         }
 
         // --- 4. SAVE & DOWNLOAD ---
@@ -2290,7 +2321,11 @@ window.downloadJourneyLog = async function(mode = 'download') {
             downloadBlob(out, filename);
         }
 
-    } catch(e) { console.error(e); alert("Error generating Log: " + e.message); }
+    } catch(e) { 
+        console.error("Journey Log Generation Error:", e); 
+        console.error("Error stack:", e.stack);
+        alert("Error generating Log: " + e.message); 
+    }
 };
 
     function downloadBlob(bytes, name) {
