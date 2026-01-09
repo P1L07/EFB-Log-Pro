@@ -1,7 +1,10 @@
 (function() {
 
-const APP_VERSION = "1.1.8"; // <--- Update this to match
+const APP_VERSION = "1.1.9"; // <--- Update this to match
 
+// ==========================================
+// 1. CONFIGURATION & UPDATE LOGIC
+// ==========================================
 // ==========================================
 // 1. CONFIGURATION & UPDATE LOGIC
 // ==========================================
@@ -10,33 +13,39 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
     navigator.serviceWorker.register('sw.js')
     .then(reg => {
         
-        // 1. Check for updates immediately
+        // 1. Check on Load
         reg.update();
 
-        // 2. Listen for a new worker being found
+        // 2. AUTO-CHECK: Check for updates every 15 minutes
+        setInterval(() => {
+            console.log("Checking for app updates...");
+            reg.update();
+        }, 15 * 60 * 1000);
+
+        // 3. Listen for a new worker
         reg.onupdatefound = () => {
             const installingWorker = reg.installing;
-            
             installingWorker.onstatechange = () => {
-                // If it reached 'installed' state, it's ready to take over
                 if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
                     
-                    // Prompt the user
+                    // We found an update!
+                    // Since we used "NetworkFirst" in the SW, this prompt is a fallback 
+                    // for when the user had the app open while the update was released.
                     if(confirm("New version available! Reload now?")) {
-                        // CRITICAL: Tell the new worker to skip waiting
                         installingWorker.postMessage({ type: 'SKIP_WAITING' });
+                        // Provide a small fallback reload in case controllerchange misses
+                        setTimeout(() => window.location.reload(), 500);
                     }
                 }
             };
         };
     });
 
-    // 3. RELOAD ONLY WHEN THE NEW WORKER TAKES CONTROL
-    // This ensures we don't reload too early while the old code is still active
     navigator.serviceWorker.addEventListener('controllerchange', () => {
         window.location.reload();
     });
 }
+
     // --- JOURNEY LOG PDF MAPPING ---
     const JOURNEY_CONFIG = {
         fontSize: 10,
@@ -1653,23 +1662,64 @@ window.removeLeg = function(i) {
         saveState();
     };
     
-window.clearLegs = function() {
-    if(!confirm("Clear Journey Log?")) return;
-    
-    dailyLegs = [];
-    renderJourneyList();
-    
-    // --- RESET DUTY FIELDS ---
+window.clearLegs = async function() {
+    if(!confirm("Warning: This will delete ALL data (OFP, Flight Log, and Journey Log). Continue?")) return;
 
+    // 1. RESET GLOBAL VARIABLES
+    dailyLegs = [];
+    waypoints = [];
+    alternateWaypoints = [];
+    fuelData = [];
+    window.savedWaypointData = [];
+    dutyStartTime = null;
+    blockFuelValue = 0;
+    savedSignatureData = null;
+    window.cutoffPageIndex = -1;
+
+    // 2. CLEAR TABLES & VISUALS
+    renderJourneyList(); 
+    
+    // Manually clear Flight Log tables if renderTables() relies on waypoints being populated to clear them
+    ['ofp-tbody', 'altn-tbody', 'fuel-tbody'].forEach(id => {
+        const tb = document.getElementById(id);
+        if(tb) tb.innerHTML = '';
+    });
+
+    // 3. CLEAR INPUT FIELDS
+    // Use your existing helper to clear OFP specific inputs
+    if (typeof clearOFPInputs === 'function') clearOFPInputs();
+    
+    // Use your existing helper to clear Journey Leg inputs
+    if (typeof clearJourneyInputs === 'function') clearJourneyInputs();
+
+    // Reset Duty specific fields
     safeSet('j-duty-start', "00:00");
     safeSet('j-cc-duty-start', "00:00");
     safeSet('j-max-fdp', "");
     safeSet('j-night-calc', "");
-    
-    // Reset global variable
-    dutyStartTime = null; 
+    safeSet('j-fc-count', "2");
+    safeSet('j-cc-count', "4");
 
-    saveState();
+    if (window.signaturePad) {
+        window.signaturePad.clear();
+    }
+    
+    const fileInput = document.getElementById('ofp-file-in');
+    if(fileInput) fileInput.value = "";
+    
+    localStorage.removeItem('efb_log_state');
+    
+    try {
+        if (typeof clearPdfDB === 'function') {
+            await clearPdfDB();
+        }
+    } catch(e) { 
+        console.log("Database clear error:", e); 
+    }
+
+    if (typeof validateInputs === 'function') validateInputs();
+
+    console.log("App completely reset.");
 };
 
     // --- MOVE LEG (Re-order Sequence) ---
