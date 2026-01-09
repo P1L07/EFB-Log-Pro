@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4";
+const APP_VERSION = "1.4.1";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -2143,6 +2143,21 @@ window.downloadJourneyLog = async function(mode = 'download') {
         if(!isIpadMode) page.setRotation(PDFLib.degrees(0));
 
         // --- 1. HEADERS & LEG DATA ---
+
+        const pageWidth = page.getWidth();
+        const pageHeight = page.getHeight();
+        
+        // Adjust these coordinates to fit your specific template exactly
+        // x: pageWidth - 100 puts it near the right edge
+        // y: pageHeight - 30 puts it near the top edge
+        page.drawText("3B          75/125", { 
+            x: pageWidth - 265, 
+            y: pageHeight - 40, 
+            size: 10, // Slightly larger than standard log text
+            font: font, 
+            color: PDFLib.rgb(0,0,0) 
+        });
+
         const headers = JOURNEY_CONFIG.headers;
         Object.keys(headers).forEach(id => {
             const val = el(id)?.value;
