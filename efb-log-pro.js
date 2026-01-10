@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.25";
+const APP_VERSION = "1.4.26";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -2424,7 +2424,7 @@ window.downloadJourneyLog = async function(mode = 'download') {
 };
 
         // HELPER: Calculate Night Overlap
-        const getNightOverlapKZ = (startMinsUTC, endMinsUTC) => {
+    const getNightOverlap = (startMinsUTC, endMinsUTC) => {
     if(!endMinsUTC && endMinsUTC !== 0) return "00:00"; 
     
     // Kazakhstan night: 02:00-04:59 LOCAL = 21:00-23:59 UTC
