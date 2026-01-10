@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.8";
+const APP_VERSION = "1.4.9";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -782,23 +782,25 @@ window.runDownload = async function(mode = 'download') {
         console.log(`[PDF DEBUG] Source Pages: ${totalPages} | Cutoff Index: ${cutoff}`);
 
         // 4. Calculate which pages to Copy
-        // If cutoff is valid AND less than total, we truncate.
-        // Otherwise, we keep everything.
-        let lastPageIndex = totalPages - 1; 
+        let lastPageIndexToCopy = totalPages - 1; // Default: copy all pages
 
-        if (cutoff > 0 && cutoff < totalPages - 1) {
-             console.log(`[PDF DEBUG] Truncating... Keeping pages 0 to ${cutoff}`);
-             lastPageIndex = cutoff;
+        if (cutoff > 0 && cutoff < totalPages) {
+            console.log(`[PDF DEBUG] Truncating... Keeping pages 0 to ${cutoff} (inclusive)`);
+            // If cutoff is 5 (page index 5), we want to keep pages 0,1,2,3,4,5.
+            // This means the last index we copy IS the cutoff index.
+            lastPageIndexToCopy = cutoff;
         } else {
-             console.log(`[PDF DEBUG] Keeping ALL pages (No valid cutoff or file already short).`);
+            console.log(`[PDF DEBUG] Keeping ALL pages (No valid cutoff).`);
         }
 
+        // 5. Build the array of indices to copy: from 0 to lastPageIndexToCopy, inclusive.
         const indicesToCopy = [];
-        for (let i = 0; i <= lastPageIndex; i++) {
+        for (let i = 0; i <= lastPageIndexToCopy; i++) { // Note: <= is correct here
             indicesToCopy.push(i);
         }
+        console.log(`[PDF DEBUG] Will copy indices: [${indicesToCopy}]`);
 
-        // 5. Perform the Copy
+        // 6. Perform the Copy
         const copiedPages = await newPdf.copyPages(sourcePdf, indicesToCopy);
         copiedPages.forEach(page => newPdf.addPage(page));
 
