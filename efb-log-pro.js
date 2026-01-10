@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.27";
+const APP_VERSION = "1.4.28";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -1271,25 +1271,27 @@ window.calculateNightTime = function(offBlockUTC, onBlockUTC) {
     const offMins = parseTimeString(offBlockUTC);
     const onMins = parseTimeString(onBlockUTC);
     
-    // Kazakhstan night: 02:00-04:59 LOCAL TIME (UTC+5)
-    // Convert to UTC: 21:00-23:59 UTC (previous day)
-    const nightStartUTC = 21 * 60;  // 21:00 UTC = 02:00 local
-    const nightEndUTC = 23 * 60 + 59; // 23:59 UTC = 04:59 local
+    // Kazakhstan night: 02:00-04:59 LOCAL TIME = 21:00-23:59 UTC
+    const nightStartUTC = 21 * 60;  // 21:00 UTC
+    const nightEndUTC = 23 * 60 + 59; // 23:59 UTC
     
     let nightMinutes = 0;
-    let current = offMins;
-    const endTime = onMins < offMins ? onMins + 1440 : onMins;
+    
+    // Handle case where onBlock is next day
+    let start = offMins;
+    let end = onMins;
+    if (end < start) {
+        end += 1440; // Add 24 hours if crossing midnight
+    }
     
     // Check each minute of the flight
-    while (current < endTime) {
+    for (let current = start; current < end; current++) {
         const minuteOfDay = current % 1440;
         
-        // Check if current minute is within night window
+        // Check if current minute is within night window (21:00-23:59 UTC)
         if (minuteOfDay >= nightStartUTC && minuteOfDay <= nightEndUTC) {
             nightMinutes++;
         }
-        
-        current++;
     }
     
     return minsToTime(nightMinutes);
@@ -1758,6 +1760,7 @@ window.addLeg = function() {
     
     if (offBlock && onBlock) {
         nightTime = calculateNightTime(offBlock, onBlock);
+        console.log(`Night calc: ${offBlock}-${onBlock} = ${nightTime}`);
     }
     
     safeSet('j-night', nightTime);
@@ -2424,9 +2427,9 @@ window.downloadJourneyLog = async function(mode = 'download') {
 
         // HELPER: Calculate Night Overlap
     const getNightOverlap = (startMinsUTC, endMinsUTC) => {
-    if(!endMinsUTC && endMinsUTC !== 0) return "00:00"; 
+    if(!endMinsUTC && endMinsUTC !== 0) return "00:00";
     
-    // Kazakhstan night: 02:00-04:59 LOCAL = 21:00-23:59 UTC
+    // Kazakhstan night: 21:00-23:59 UTC (02:00-04:59 local)
     const nightStartUTC = 1260; // 21:00
     const nightEndUTC = 1439;   // 23:59
     
@@ -2436,19 +2439,16 @@ window.downloadJourneyLog = async function(mode = 'download') {
     
     let overlap = 0;
     
-    // Check if periods overlap at all
-    if (start <= nightEndUTC || end >= nightStartUTC) {
-        // Handle crossing midnight
-        for (let current = start; current < end; current++) {
-            const minuteOfDay = current % 1440;
-            if (minuteOfDay >= nightStartUTC && minuteOfDay <= nightEndUTC) {
-                overlap++;
-            }
+    for (let current = start; current < end; current++) {
+        const minuteOfDay = current % 1440;
+        if (minuteOfDay >= nightStartUTC && minuteOfDay <= nightEndUTC) {
+            overlap++;
         }
     }
     
     return minsToTime(overlap);
 };
+
 
         // DRAW ROWS
         for(let i = 0; i < totalRows; i++) {
