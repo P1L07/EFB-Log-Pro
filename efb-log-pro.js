@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.4";
+const APP_VERSION = "1.4.5";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -188,7 +188,6 @@ async function runAnalysis(fileOrEvent) {
 
     if (!blob) return;
 
-
     // 2. Clear previous data if this is a manual upload
     if (!isAutoLoad) {
         if (typeof clearOFPInputs === 'function') clearOFPInputs();
@@ -242,80 +241,43 @@ async function runAnalysis(fileOrEvent) {
     window.cutoffPageIndex = -1;
 
     // Helper to find coordinates on Page 1
-function extractFrontCoords(items) {
-    items.forEach(item => {
-        const raw = item.str.toUpperCase();
-        
-        // Look for ALT M1 variations
-        if (raw.includes('ALT') || raw.includes('M1') || raw.includes('ALT1')) {
-            console.log(`Possible ALT M1 item: "${item.str}" -> "${raw}"`);
-        }
-        
-        if (raw.includes('ATIS')) { 
-            frontCoords.atis = item;
-            console.log(`✓ Found ATIS: "${item.str}"`);
-        }
-        if (raw.includes('CLRNC')) { 
-            frontCoords.atcLabel = item;
-            console.log(`✓ Found CLRNC: "${item.str}"`);
-        }
-        if (raw.includes('STBY')) { 
-            frontCoords.stby = item;
-            console.log(`✓ Found STBY: "${item.str}"`);
-        }
-        if (raw.includes('PIC') && raw.includes('BLOCK')) { 
-            frontCoords.picBlockLabel = item;
-            console.log(`✓ Found PIC BLOCK: "${item.str}"`);
-        }
-        if (raw.includes('REASON')) { 
-            frontCoords.reasonLabel = item;
-            console.log(`✓ Found REASON: "${item.str}"`);
-        }
-    });
-    
-    // Now specifically look for ALT M1 and ALT M2
-    console.log("\n=== Looking for ALT M1/M2 specifically ===");
-    
-    // Method 1: Look for "ALT" and "M1" as separate items
-    for (let i = 0; i < items.length; i++) {
-        const current = items[i].str.toUpperCase();
-        const next = i + 1 < items.length ? items[i + 1].str.toUpperCase() : "";
-        
-        if (current === 'ALT' && next === 'M1') {
-            frontCoords.altm1 = items[i];
-            console.log(`✓ Found ALT M1: "${items[i].str}" + "${items[i+1].str}"`);
-            // REMOVED BREAK HERE so it continues to look for M2
-        }
-        if (current === 'ALT' && next === 'M2') {
-            frontCoords.altm2 = items[i];
-            console.log(`✓ Found ALT M2: "${items[i].str}" + "${items[i+1].str}"`);
-            // REMOVED BREAK HERE
-        }
+    function extractFrontCoords(items) {
+        items.forEach(item => {
+            const raw = item.str.toUpperCase();
+            
+            // Look for ALT M1 variations
+            if (raw.includes('ALTM1')) {
+                frontCoords.altm1 = item;
+                console.log(`✓ Found ALTM1: "${item.str}"`);
+            }
+
+            if (raw.includes('ALTM2')) {
+                frontCoords.altm2 = item;
+                console.log(`✓ Found ALTM2: "${item.str}"`);
+            }
+            
+            if (raw.includes('ATIS')) { 
+                frontCoords.atis = item;
+                console.log(`✓ Found ATIS: "${item.str}"`);
+            }
+            if (raw.includes('CLRNC')) { 
+                frontCoords.atcLabel = item;
+                console.log(`✓ Found CLRNC: "${item.str}"`);
+            }
+            if (raw.includes('STBY')) { 
+                frontCoords.stby = item;
+                console.log(`✓ Found STBY: "${item.str}"`);
+            }
+            if (raw.includes('PIC') && raw.includes('BLOCK')) { 
+                frontCoords.picBlockLabel = item;
+                console.log(`✓ Found PIC BLOCK: "${item.str}"`);
+            }
+            if (raw.includes('REASON')) { 
+                frontCoords.reasonLabel = item;
+                console.log(`✓ Found REASON: "${item.str}"`);
+            }
+        });
     }
-    
-    // Method 2: Look for combined patterns
-    items.forEach(item => {
-        const raw = item.str.toUpperCase();
-        
-        // Try multiple variations
-        if (raw === 'ALT M1' || raw === 'ALT.M1' || raw === 'ALT1' || raw === 'ALT M1:' || raw === 'ALT.M1:') {
-            frontCoords.altm1 = item;
-            console.log(`✓ Found ALT M1 as single item: "${item.str}"`);
-        }
-        if (raw === 'ALT M2' || raw === 'ALT.M2' || raw === 'ALT2' || raw === 'ALT M2:' || raw === 'ALT.M2:') {
-            frontCoords.altm2 = item;
-            console.log(`✓ Found ALT M2 as single item: "${item.str}"`);
-        }
-    });
-    
-    console.log("\n=== Final results ===");
-    console.log("Found:", {
-        altm1: frontCoords.altm1 ? `"${frontCoords.altm1.str}" at (${frontCoords.altm1.transform[4]}, ${frontCoords.altm1.transform[5]})` : "NOT FOUND",
-        altm2: frontCoords.altm2 ? `"${frontCoords.altm2.str}" at (${frontCoords.altm2.transform[4]}, ${frontCoords.altm2.transform[5]})` : "NOT FOUND",
-        stby: frontCoords.stby ? `"${frontCoords.stby.str}" at (${frontCoords.stby.transform[4]}, ${frontCoords.stby.transform[5]})` : "NOT FOUND",
-        reason: frontCoords.reasonLabel ? `"${frontCoords.reasonLabel.str}" at (${frontCoords.reasonLabel.transform[4]}, ${frontCoords.reasonLabel.transform[5]})` : "NOT FOUND"
-    });
-}
     
     // 6. PARSE PAGES
     for (let i = 1; i <= pdf.numPages; i++) {
@@ -324,8 +286,10 @@ function extractFrontCoords(items) {
         const items = content.items;
         const textContent = items.map(x=>x.str).join(' ');
 
-    // Detect End of OFP (for truncation)
-        if (window.cutoffPageIndex === -1) {
+        // --- FIXED TRUNCATION LOGIC ---
+        // Only look for "End" keywords AFTER Page 3 (index > 3)
+        // This prevents finding "BRIEFING" or "WEATHER" on the Page 1 Summary
+        if (i > 3 && window.cutoffPageIndex === -1) {
             const upperText = textContent.toUpperCase();
             
             // Check for multiple patterns that indicate end of flight plan
@@ -336,7 +300,7 @@ function extractFrontCoords(items) {
                 
                 // If we found the start of NOTAMs or WX, we cut HERE
                 window.cutoffPageIndex = i - 1; 
-                console.log("Cutoff found at page index: " + window.cutoffPageIndex);
+                console.log("✓ Cutoff found at page index: " + window.cutoffPageIndex);
             }
         }
 
@@ -364,8 +328,6 @@ function extractFrontCoords(items) {
                 safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
                 safeSet('j-std', stdFmt);
 
-                // NOTE: calcDutyLogic() is REMOVED here so it doesn't auto-calculate on upload.
-                
                 // Run Extractions
                 extractRoutes(textContent);
                 extractFuelDataSimple(textContent); // Populates fuelData
@@ -817,86 +779,92 @@ function parseTimeString(timeStr) {
 window.runDownload = async function(mode = 'download') {
     if(!ofpPdfBytes) return;
     try {
+        // 1. Load the PDF
         const pdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
         
-        // Embed fonts
+        // 2. Embed Fonts
         const fontB = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
         const fontR = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
-        
-        // Get all pages references BEFORE we delete anything
+
+        // 3. Get Pages (This is the original list)
         const pages = pdf.getPages();
         const totalPages = pdf.getPageCount();
 
-        // Check for iPad mode rotation
+        // 4. iPad Rotation Fix
         const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
         if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
 
         // ===============================================
-        // 1. DRAWING PHASE (Do this BEFORE Truncation)
+        // PHASE 1: DRAWING (Must happen BEFORE truncation)
         // ===============================================
-        
-        // --- A. Front Page (Page 0) ---
+
+        // --- Front Page ---
         if (pages.length > 0) {
+            const p0 = pages[0];
+            
+            // Draw Header/Summary inputs
             const frontItems = [ 
                 {id:'front-atis', offset:40, coord:frontCoords.atis}, 
                 {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
             ];
             frontItems.forEach(f => {
                 const v = el(f.id)?.value;
-                if(f.coord && v) pages[0].drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
+                if(f.coord && v) p0.drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
             });
 
+            // Draw PIC Block
             const picBlockText = el('view-pic-block')?.innerText || "";
             if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
-                pages[0].drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
+                p0.drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
             
+            // Draw Reason
             const reasonText = el('front-extra-reason')?.value || "";
             if(frontCoords.reasonLabel && reasonText) {
-                pages[0].drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
+                p0.drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
 
-            // Altimeters
+            // Draw Altimeters (Using your corrected extraction logic)
             ['altm1','stby','altm2'].forEach(k => {
                 const v = el('front-'+k)?.value;
-                if(frontCoords[k] && v) {
-                    pages[0].drawText(v, { x: frontCoords[k].transform[4] + (k==='stby'?40:50), y: frontCoords[k].transform[5] + V_LIFT, size: 12, font: fontB });
+                const coord = frontCoords[k];
+                if(coord && v) {
+                    p0.drawText(v, { x: coord.transform[4] + (k==='stby'?40:50), y: coord.transform[5] + V_LIFT, size: 12, font: fontB });
                 }
             });
 
-            // Signature
+            // Draw Signature
             if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
                 try {
                     const sigImageBase64 = signaturePad.toDataURL();
                     const sigImage = await pdf.embedPng(sigImageBase64);
-                    pages[0].drawImage(sigImage, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
+                    p0.drawImage(sigImage, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
                 } catch (sigError) { console.error("Signature Error:", sigError); }
             }
         }
 
-        // --- B. Waypoints (Flight Log) ---
+        // --- Waypoints (Flight Log) ---
         const draw = (list, pre) => {
             list.forEach((wp, i) => {
                 if (wp.isTakeoff) return;
                 
-                // CRITICAL FIX: Ensure we only draw if the page index is valid relative to the ORIGINAL pdf
+                // Verify page index is valid before drawing
                 if (wp.page >= 0 && wp.page < pages.length) {
+                    const page = pages[wp.page];
+                    const mainY = wp.y_anchor;
+
+                    // Values
                     const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
                     const f = el(`${pre}-f-${i}`)?.value || "";
                     const n = el(`${pre}-n-${i}`)?.value || "";
                     const agl = el(`${pre}-agl-${i}`)?.value || ""; 
-                    
-                    const page = pages[wp.page]; // We use the original page object
-                    const mainY = wp.y_anchor;
 
-                    // Safety check: Don't draw if Y is somehow 0 (sanity check)
-                    if(mainY > 0) {
-                        if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
-                        if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
-                        if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                        if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                        if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                    }
+                    // Drawing
+                    if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
+                    if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
+                    if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
                 }
             });
         };
@@ -905,26 +873,25 @@ window.runDownload = async function(mode = 'download') {
         draw(alternateWaypoints, 'a');
 
         // ===============================================
-        // 2. TRUNCATION PHASE (Do this LAST)
+        // PHASE 2: TRUNCATION (Must happen LAST)
         // ===============================================
-        // The logs said "No truncation needed" because cutoff was -1.
-        // We ensure we only truncate if a valid positive cutoff was found.
         const cutoff = window.cutoffPageIndex;
         
-        if (cutoff > 0 && cutoff < totalPages - 1) {
-            console.log(`Truncating from page ${cutoff + 1} to end.`);
-            // When removing, always go backwards to avoid index shifting problems
+        // Safety Check: Cutoff must be greater than 2 to avoid deleting the Flight Log
+        if (cutoff > 2 && cutoff < totalPages - 1) {
+            console.log(`Executing Truncation. Keeping pages 0 to ${cutoff}. Deleting rest.`);
+            // Loop Backwards to safely remove pages
             for (let k = totalPages - 1; k > cutoff; k--) {
                 pdf.removePage(k);
             }
         } else {
-            console.log("Skipping truncation (cutoff index invalid or not found)");
+            console.log(`Skipping Truncation. Index ${cutoff} is too small or invalid.`);
         }
 
         // ===============================================
-        // 3. SAVE & EXPORT
+        // PHASE 3: SAVE (With Fix for White Pages)
         // ===============================================
-        // useObjectStreams: false helps with compatibility on some iPad viewers
+        // useObjectStreams: false fixes the "White Pages" bug on some viewers
         const bytes = await pdf.save({ useObjectStreams: false });
         
         const filename = originalFileName.replace(".pdf", "_Logged.pdf");
