@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.23";
+const APP_VERSION = "1.4.24";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -294,7 +294,7 @@ async function runAnalysis(fileOrEvent) {
                 
                 safeSet('j-flt', flt); safeSet('j-reg', reg); safeSet('j-date', date);
                 safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
-                safeSet('j-std', stdFmt);
+                if (!el('j-std')?.value) safeSet('j-std', stdFmt);
 
                 extractRoutes(textContent);
                 extractFuelDataSimple(textContent);
@@ -1303,7 +1303,11 @@ function updateAllLegFDPAlerts() {
             // Calculate FC FDP
             let fcMins = parseTimeString(onBlockStr) - fcStartMins;
             if (fcMins < 0) fcMins += 1440;
-            leg.fdp = minsToTime(fcMins);
+            
+            // Update FDP display value (cumulative from reporting)
+            leg.cumulativeFDP = minsToTime(fcMins);
+            
+            // Check alert
             leg.fdpAlert = (fcMins > fcLimit);
             
             // Calculate CC FDP
@@ -2111,12 +2115,17 @@ window.renderJourneyList = function() {
             const canMoveDown = i < dailyLegs.length - 1;
 
             // Calculate display FDP correctly
-            let displayFDP = l.fdp;
-            if (i > 0) {
-                // For legs after first: show sector time (previous on block to current on block)
+            let displayFDP = "";
+            if (i === 0) {
+                // First leg: Show reporting to block
+                displayFDP = l.fdp || '-';
+            } else {
+                // Subsequent legs: Show sector time (previous on block to current on block)
                 const prevLeg = dailyLegs[i-1];
                 if (prevLeg['j-in'] && l['j-in']) {
                     displayFDP = getDiff(prevLeg['j-in'], l['j-in']);
+                } else {
+                    displayFDP = '-';
                 }
             }
 
@@ -2126,7 +2135,7 @@ window.renderJourneyList = function() {
                 <td>${l['j-flt']}</td>
                 <td>${l['j-dep']} - ${l['j-dest']}</td>
                 <td style="${l.fdpAlert ? 'color:red; font-weight:bold;' : ''}">${displayFDP || '-'}</td>
-                <td style="${l.ccFdpAlert ? 'color:orange; font-weight:bold;' : ''}">${l['j-night'] || '00:00'}</td>
+                <td style="${l.ccFdpAlert ? 'color:orange; font-weight:bold;' : ''}">${l.nightTime || '00:00'}</td>
                 
                 <td style="white-space: nowrap; text-align: right;">
                     <button onclick="moveLeg(${i}, -1)" class="btn-icon" ${!canMoveUp ? 'disabled style="opacity:0.3"' : ''} title="Move Up">
