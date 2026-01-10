@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.22";
+const APP_VERSION = "1.4.23";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -1178,7 +1178,7 @@ window.recalcMaxFDP = function() {
     dutyStartTime = fcMins; 
 
     // 2. Count Sectors
-    const sectors = Math.max(dailyLegs.length, 1);
+    const sectors = dailyLegs.length;
 
     // 3. Helper function to calculate max FDP with sector reductions
     const calculateMaxFDPWithSectors = (startMins, isCabinCrew = false) => {
@@ -1217,18 +1217,18 @@ window.recalcMaxFDP = function() {
             else if (startMins >= 345 && startMins <= 359) maxFDP = 765;
         }
 
-        // Apply Sector Reductions (same for both)
-        if (sectors === 3) {
+        // Apply Sector Reductions
+        if (sectors === 2) {
+            // 2 sectors: no reduction
+        } else if (sectors === 3) {
             maxFDP -= 30; // 3 Sectors: -30 mins
-        } 
-        else if (sectors === 4) {
+        } else if (sectors === 4) {
             maxFDP -= 60; // 4 Sectors: -60 mins
-        } 
-        else if (sectors >= 5) {
+        } else if (sectors >= 5) {
             maxFDP -= 90; // 5+ Sectors: -90 mins
         }
 
-        // Ensure minimum 660 minutes (11 hours) for very late starts
+        // Ensure minimum 660 minutes (11 hours)
         if (maxFDP < 660) maxFDP = 660;
 
         return maxFDP;
@@ -1250,6 +1250,38 @@ window.recalcMaxFDP = function() {
     // 6. Update FDP alerts for all legs
     updateAllLegFDPAlerts();
 };
+
+// Helper function for night calculation in Kazakhstan
+function calculateNightTimeKZ(startMinsUTC, endMinsUTC) {
+    if (startMinsUTC === null || endMinsUTC === null) return 0;
+    
+    // Kazakhstan night: 02:00-04:59 local = 21:00-23:59 UTC (previous day) and 00:00-01:59 UTC
+    let nightOverlap = 0;
+    
+    // Adjust for midnight crossing
+    let start = startMinsUTC;
+    let end = endMinsUTC;
+    if (end < start) end += 1440;
+    
+    // Night windows in UTC
+    const nightWindows = [
+        { start: 0, end: 119 },    // 00:00-01:59 UTC
+        { start: 1260, end: 1439 }  // 21:00-23:59 UTC
+    ];
+    
+    for (let i = start; i < end; i++) {
+        const minuteOfDay = i % 1440;
+        
+        for (const window of nightWindows) {
+            if (minuteOfDay >= window.start && minuteOfDay <= window.end) {
+                nightOverlap++;
+                break; // Count each minute only once
+            }
+        }
+    }
+    
+    return nightOverlap;
+}
 
 // Helper function to update FDP alerts for all legs
 function updateAllLegFDPAlerts() {
@@ -1669,46 +1701,97 @@ window.addLeg = function() {
     }
 
     // ============================================================
-    // 2. FDP CHECK (BOTH FC AND CC) - FIXED VERSION
+    // 2. FDP CHECK (BOTH FC AND CC) - FIXED CALCULATION
     // ============================================================
     const onBlock = el('j-in')?.value;
     let fdp = "", alertFdp = false, ccFdpAlert = false;
 
-    if(onBlock && dutyStartTime !== null && dutyStartTime !== undefined) {
-        // Get FC duty start - FIX: Use the actual start time from input, not dutyStartTime variable
+    // Calculate FDP for display (sector time vs cumulative)
+    if(onBlock) {
+        if (dailyLegs.length === 0) {
+            // First leg: FDP = reporting to this leg's block
+            const fcStartStr = el('j-duty-start')?.value;
+            if (fcStartStr) {
+                let fcMins = parseTimeString(onBlock) - parseTimeString(fcStartStr);
+                if (fcMins < 0) fcMins += 1440; 
+                fdp = minsToTime(fcMins);
+            }
+        } else {
+            // Subsequent legs: FDP = previous leg block to this leg block
+            const prevLeg = dailyLegs[dailyLegs.length - 1];
+            const prevOnBlock = prevLeg['j-in'];
+            if (prevOnBlock) {
+                fdp = getDiff(prevOnBlock, onBlock);
+            }
+        }
+
+        // Check alerts (cumulative from reporting)
         const fcStartStr = el('j-duty-start')?.value;
         const ccStartStr = el('j-cc-duty-start')?.value;
         
         if (fcStartStr) {
-            // FIX: Calculate from report time to THIS leg's block-in time
-            let fcMins = parseTimeString(onBlock) - parseTimeString(fcStartStr);
-            if (fcMins < 0) fcMins += 1440; 
-            fdp = minsToTime(fcMins);
-            
-            // FIX: Use the correct max FDP value from input
-            const fcLimitStr = el('j-max-fdp')?.value;
-            if(fcLimitStr) {
-                const fcLimit = parseTimeString(fcLimitStr);
-                if(fcMins > fcLimit) alertFdp = true;
-            }
+            let fcCumulativeMins = parseTimeString(onBlock) - parseTimeString(fcStartStr);
+            if (fcCumulativeMins < 0) fcCumulativeMins += 1440; 
+            const fcLimit = parseTimeString(el('j-max-fdp')?.value || '13:00');
+            if(fcCumulativeMins > fcLimit) alertFdp = true;
         }
         
         // Check cabin crew FDP
         if (ccStartStr) {
             const ccMaxFDPStr = getCCMaxFDP();
             
-            let ccMins = parseTimeString(onBlock) - parseTimeString(ccStartStr);
-            if (ccMins < 0) ccMins += 1440; 
-            
-            if(ccMaxFDPStr && ccMaxFDPStr !== "00:00") {
-                const ccLimit = parseTimeString(ccMaxFDPStr);
-                if(ccMins > ccLimit) ccFdpAlert = true;
-            }
+            let ccCumulativeMins = parseTimeString(onBlock) - parseTimeString(ccStartStr);
+            if (ccCumulativeMins < 0) ccCumulativeMins += 1440; 
+            const ccLimit = parseTimeString(ccMaxFDPStr);
+            if(ccCumulativeMins > ccLimit) ccFdpAlert = true;
         }
     }
 
     // ============================================================
-    // 3. CAPTURE DATA
+    // 3. NIGHT DUTY CALCULATION (Kazakhstan UTC+5)
+    // ============================================================
+    let nightTime = "00:00";
+    const onBlockTime = el('j-in')?.value;
+    const offBlockTime = el('j-off')?.value;
+    
+    if (offBlockTime && onBlockTime) {
+        // Kazakhstan night: 02:00-04:59 local = 21:00-23:59 UTC (previous day) and 00:00-01:59 UTC
+        const depMins = parseTimeString(offBlockTime);
+        const arrMins = parseTimeString(onBlockTime);
+        
+        // Convert to Kazakhstan time (UTC+5) by subtracting 5 hours
+        // But our times are in UTC, so for night calculation we need to check UTC times
+        // Night in UTC = 21:00-23:59 and 00:00-01:59
+        
+        let nightOverlap = 0;
+        let currentMins = depMins;
+        const arrAdjusted = arrMins < depMins ? arrMins + 1440 : arrMins;
+        
+        while (currentMins < arrAdjusted) {
+            // Check first night window: 21:00-23:59 UTC
+            if (currentMins >= 1260 && currentMins <= 1439) {
+                nightOverlap += Math.min(arrAdjusted, 1439) - currentMins + 1;
+            }
+            // Check second night window: 00:00-01:59 UTC
+            else if (currentMins >= 0 && currentMins <= 119) {
+                nightOverlap += Math.min(arrAdjusted, 119) - currentMins + 1;
+            }
+            
+            currentMins += 60; // Check next minute
+            if (currentMins > 1440) currentMins -= 1440;
+        }
+        
+        // Convert minutes back to time format
+        const hours = Math.floor(nightOverlap / 60);
+        const minutes = nightOverlap % 60;
+        nightTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    }
+    
+    safeSet('j-night', nightTime);
+    safeSet('j-night-calc', nightTime);
+
+    // ============================================================
+    // 4. CAPTURE DATA
     // ============================================================
     const d = {};
     const getValue = (id) => {
@@ -1724,28 +1807,31 @@ window.addLeg = function() {
 
     d.fdp = fdp; 
     d.fdpAlert = alertFdp;
-    d.ccFdpAlert = ccFdpAlert; // Add CC FDP alert flag
+    d.ccFdpAlert = ccFdpAlert;
     
     dailyLegs.push(d);
+    
+    // ============================================================
+    // 5. RECALCULATE MAX FDP WITH SECTOR REDUCTIONS
+    // ============================================================
+    setTimeout(() => {
+        if (typeof recalcMaxFDP === 'function') {
+            recalcMaxFDP();
+        }
+    }, 100);
+
+    // ============================================================
+    // 6. UPDATE NIGHT DUTY FOR ALL CREW
+    // ============================================================
+    // Update the journey list with calculated values
     renderJourneyList();
     validateInputs();
 
     // ============================================================
-    // 4. RECALCULATE MAX FDP FOR THE NEW SECTOR COUNT
-    // ============================================================
-    if (typeof recalcMaxFDP === 'function') {
-        setTimeout(() => {
-            recalcMaxFDP();
-        }, 100);
-    }
-
-    // ============================================================
-    // 5. PREPARE NEXT LEG
+    // 7. PREPARE NEXT LEG
     // ============================================================
     const nextInitFuel = d['j-shut'];
     clearJourneyInputs(nextInitFuel);
-    
-    // Clear departure and destination for next leg
     safeSet('j-dep', '');   
     safeSet('j-dest', '');
     
@@ -2012,7 +2098,7 @@ window.modifyLeg = function(index) {
     alert("Leg loaded. Make changes and click '+ Add Leg'.");
 };
 
-    window.renderJourneyList = function() {
+window.renderJourneyList = function() {
     const tb = el('journey-list-body');
     if(!tb) return;
 
@@ -2024,12 +2110,23 @@ window.modifyLeg = function(index) {
             const canMoveUp = i > 0; 
             const canMoveDown = i < dailyLegs.length - 1;
 
+            // Calculate display FDP correctly
+            let displayFDP = l.fdp;
+            if (i > 0) {
+                // For legs after first: show sector time (previous on block to current on block)
+                const prevLeg = dailyLegs[i-1];
+                if (prevLeg['j-in'] && l['j-in']) {
+                    displayFDP = getDiff(prevLeg['j-in'], l['j-in']);
+                }
+            }
+
             return `
             <tr>
                 <td style="text-align:center; font-weight:bold;">${i+1}</td>
                 <td>${l['j-flt']}</td>
                 <td>${l['j-dep']} - ${l['j-dest']}</td>
-                <td style="${l.fdpAlert ? 'color:red; font-weight:bold;' : ''}">${l.fdp || '-'}</td>
+                <td style="${l.fdpAlert ? 'color:red; font-weight:bold;' : ''}">${displayFDP || '-'}</td>
+                <td style="${l.ccFdpAlert ? 'color:orange; font-weight:bold;' : ''}">${l['j-night'] || '00:00'}</td>
                 
                 <td style="white-space: nowrap; text-align: right;">
                     <button onclick="moveLeg(${i}, -1)" class="btn-icon" ${!canMoveUp ? 'disabled style="opacity:0.3"' : ''} title="Move Up">
@@ -2052,7 +2149,7 @@ window.modifyLeg = function(index) {
             `;
         }).join('');
     }
-    };
+};
 
     window.showTab = function(id, btn) {
     // 1. SAVE before leaving
