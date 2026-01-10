@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.6";
+const APP_VERSION = "1.4.7";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -244,37 +244,26 @@ async function runAnalysis(fileOrEvent) {
     function extractFrontCoords(items) {
         items.forEach(item => {
             const raw = item.str.toUpperCase();
-            
-            // Look for ALT M1 variations
             if (raw.includes('ALTM1')) {
                 frontCoords.altm1 = item;
-                console.log(`✓ Found ALTM1: "${item.str}"`);
             }
-
             if (raw.includes('ALTM2')) {
                 frontCoords.altm2 = item;
-                console.log(`✓ Found ALTM2: "${item.str}"`);
             }
-            
             if (raw.includes('ATIS')) { 
                 frontCoords.atis = item;
-                console.log(`✓ Found ATIS: "${item.str}"`);
             }
             if (raw.includes('CLRNC')) { 
                 frontCoords.atcLabel = item;
-                console.log(`✓ Found CLRNC: "${item.str}"`);
             }
             if (raw.includes('STBY')) { 
                 frontCoords.stby = item;
-                console.log(`✓ Found STBY: "${item.str}"`);
             }
             if (raw.includes('PIC') && raw.includes('BLOCK')) { 
                 frontCoords.picBlockLabel = item;
-                console.log(`✓ Found PIC BLOCK: "${item.str}"`);
             }
             if (raw.includes('REASON')) { 
                 frontCoords.reasonLabel = item;
-                console.log(`✓ Found REASON: "${item.str}"`);
             }
         });
     }
@@ -779,27 +768,56 @@ function parseTimeString(timeStr) {
 window.runDownload = async function(mode = 'download') {
     if(!ofpPdfBytes) return;
     try {
-        // 1. Load PDF
-        const pdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
-        const fontB = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
-        const fontR = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+        // 1. Load the SOURCE PDF
+        const sourcePdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
+        const totalPages = sourcePdf.getPageCount();
         
-        // 2. Get Page Counts
-        const pages = pdf.getPages();
-        const totalPages = pdf.getPageCount();
-        console.log(`PDF Loaded. Total Pages: ${totalPages}`); // DEBUG LOG
+        // 2. Create a NEW CLEAN PDF
+        const newPdf = await PDFLib.PDFDocument.create();
 
-        // 3. iPad Rotation Fix
+        // 3. Determine which pages to keep (Truncation Logic)
+        // We keep pages from 0 up to 'cutoff'.
+        // If cutoff is invalid (e.g. -1), we keep ALL pages.
+        let limit = totalPages - 1; 
+        const cutoff = window.cutoffPageIndex;
+
+        if (cutoff > 0 && cutoff < totalPages) {
+            console.log(`Truncating: Keeping pages 0 to ${cutoff} (Total original: ${totalPages})`);
+            limit = cutoff;
+        } else {
+            console.log("No truncation applied. Keeping all pages.");
+        }
+
+        // Build list of indices [0, 1, 2, ... limit]
+        const indicesToCopy = [];
+        for (let i = 0; i <= limit; i++) {
+            indicesToCopy.push(i);
+        }
+
+        // 4. Copy pages from Source to New
+        const copiedPages = await newPdf.copyPages(sourcePdf, indicesToCopy);
+        copiedPages.forEach(page => newPdf.addPage(page));
+
+        // 5. Embed Fonts into the NEW PDF
+        const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
+
+        // 6. Get the new list of pages to draw on
+        const pages = newPdf.getPages();
+
+        // 7. iPad Rotation Fix (Apply to Page 0 of new PDF)
         const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
         if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
 
         // ===============================================
-        // PHASE 1: DRAWING (Draw BEFORE Truncating)
+        // DRAWING PHASE (On the NEW PDF)
         // ===============================================
+
+        // --- Front Page ---
         if (pages.length > 0) {
             const p0 = pages[0];
             
-            // Front Page Items
+            // Header Items
             const frontItems = [ 
                 {id:'front-atis', offset:40, coord:frontCoords.atis}, 
                 {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
@@ -832,20 +850,21 @@ window.runDownload = async function(mode = 'download') {
             if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
                 try {
                     const sigImageBase64 = signaturePad.toDataURL();
-                    const sigImage = await pdf.embedPng(sigImageBase64);
+                    const sigImage = await newPdf.embedPng(sigImageBase64); // Embed in NEW PDF
                     p0.drawImage(sigImage, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
                 } catch (sigError) { console.error("Signature Error:", sigError); }
             }
         }
 
-        // Flight Log Items
+        // --- Waypoints ---
         const draw = (list, pre) => {
             list.forEach((wp, i) => {
                 if (wp.isTakeoff) return;
-                // Only draw if page exists
+                // Check if the page exists in our NEW truncated document
                 if (wp.page >= 0 && wp.page < pages.length) {
                     const page = pages[wp.page];
                     const mainY = wp.y_anchor;
+                    
                     const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
                     const f = el(`${pre}-f-${i}`)?.value || "";
                     const n = el(`${pre}-n-${i}`)?.value || "";
@@ -863,25 +882,9 @@ window.runDownload = async function(mode = 'download') {
         draw(alternateWaypoints, 'a');
 
         // ===============================================
-        // PHASE 2: TRUNCATION (Corrected Logic)
+        // SAVE
         // ===============================================
-        const cutoff = window.cutoffPageIndex;
-        
-        // Relaxed Check: As long as cutoff is valid (> 2) and less than total pages
-        if (cutoff > 2 && cutoff < totalPages) {
-            console.log(`Executing Truncation. Keeping pages 0 to ${cutoff}. Total was ${totalPages}.`);
-            // Remove pages from End backwards
-            for (let k = totalPages - 1; k > cutoff; k--) {
-                pdf.removePage(k);
-            }
-        } else {
-            console.log(`Skipping Truncation. Cutoff: ${cutoff}, Total: ${totalPages}`);
-        }
-
-        // ===============================================
-        // PHASE 3: SAVE (ObjectStreams False fixes White Pages)
-        // ===============================================
-        const bytes = await pdf.save({ useObjectStreams: false });
+        const bytes = await newPdf.save(); // Clean save
         
         const filename = originalFileName.replace(".pdf", "_Logged.pdf");
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
