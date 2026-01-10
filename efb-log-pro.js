@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.24";
+const APP_VERSION = "1.4.25";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -1180,65 +1180,78 @@ window.recalcMaxFDP = function() {
     // 2. Count Sectors
     const sectors = dailyLegs.length;
 
-    // 3. Helper function to calculate max FDP with sector reductions
-    const calculateMaxFDPWithSectors = (startMins, isCabinCrew = false) => {
-        let maxFDP = 0;
+    // 3. Helper function to calculate BASE max FDP (without sector reductions)
+    const calculateBaseMaxFDP = (startMins, isCabinCrew = false) => {
+        // BASE limits for Kazakhstan (based on EASA with local adjustments)
+        // IMPORTANT: Start time is in UTC, but we need to check local time for night window
+        // Local time = UTC + 5 hours for Kazakhstan
         
-        // EASA Time Band Logic
+        // Convert UTC to local Kazakhstan time
+        const localStartMins = (startMins + 300) % 1440; // +5 hours = +300 minutes
+        
+        // CABIN CREW: 14 hours base
         if (isCabinCrew) {
-            // CABIN CREW: 14 hours base
-            if (startMins >= 360 && startMins <= 809) maxFDP = 840;
-            else if (startMins >= 810 && startMins <= 839) maxFDP = 825;
-            else if (startMins >= 840 && startMins <= 869) maxFDP = 810;
-            else if (startMins >= 870 && startMins <= 899) maxFDP = 795;
-            else if (startMins >= 900 && startMins <= 929) maxFDP = 780;
-            else if (startMins >= 930 && startMins <= 959) maxFDP = 765;
-            else if (startMins >= 960 && startMins <= 989) maxFDP = 750;
-            else if (startMins >= 990 && startMins <= 1019) maxFDP = 735;
-            else if (startMins >= 1020 || startMins <= 299) maxFDP = 660;
-            else if (startMins >= 300 && startMins <= 314) maxFDP = 720;
-            else if (startMins >= 315 && startMins <= 329) maxFDP = 735;
-            else if (startMins >= 330 && startMins <= 344) maxFDP = 750;
-            else if (startMins >= 345 && startMins <= 359) maxFDP = 765;
+            if (localStartMins >= 360 && localStartMins <= 809) return 840;  // 06:00-13:29 local
+            else if (localStartMins >= 810 && localStartMins <= 839) return 825; // 13:30-13:59
+            else if (localStartMins >= 840 && localStartMins <= 869) return 810; // 14:00-14:29
+            else if (localStartMins >= 870 && localStartMins <= 899) return 795; // 14:30-14:59
+            else if (localStartMins >= 900 && localStartMins <= 929) return 780; // 15:00-15:29
+            else if (localStartMins >= 930 && localStartMins <= 959) return 765; // 15:30-15:59
+            else if (localStartMins >= 960 && localStartMins <= 989) return 750; // 16:00-16:29
+            else if (localStartMins >= 990 && localStartMins <= 1019) return 735; // 16:30-16:59
+            else if (localStartMins >= 1020 || localStartMins <= 299) return 660; // 17:00-04:59 (night)
+            else if (localStartMins >= 300 && localStartMins <= 314) return 720;  // 05:00-05:14
+            else if (localStartMins >= 315 && localStartMins <= 329) return 735;  // 05:15-05:29
+            else if (localStartMins >= 330 && localStartMins <= 344) return 750;  // 05:30-05:44
+            else if (localStartMins >= 345 && localStartMins <= 359) return 765;  // 05:45-05:59
         } else {
             // FLIGHT CREW: 13 hours base
-            if (startMins >= 360 && startMins <= 809) maxFDP = 780;
-            else if (startMins >= 810 && startMins <= 839) maxFDP = 765;
-            else if (startMins >= 840 && startMins <= 869) maxFDP = 750;
-            else if (startMins >= 870 && startMins <= 899) maxFDP = 735;
-            else if (startMins >= 900 && startMins <= 929) maxFDP = 720;
-            else if (startMins >= 930 && startMins <= 959) maxFDP = 705;
-            else if (startMins >= 960 && startMins <= 989) maxFDP = 690;
-            else if (startMins >= 990 && startMins <= 1019) maxFDP = 675;
-            else if (startMins >= 1020 || startMins <= 299) maxFDP = 660;
-            else if (startMins >= 300 && startMins <= 314) maxFDP = 720;
-            else if (startMins >= 315 && startMins <= 329) maxFDP = 735;
-            else if (startMins >= 330 && startMins <= 344) maxFDP = 750;
-            else if (startMins >= 345 && startMins <= 359) maxFDP = 765;
+            if (localStartMins >= 360 && localStartMins <= 809) return 780;  // 06:00-13:29 local
+            else if (localStartMins >= 810 && localStartMins <= 839) return 765; // 13:30-13:59
+            else if (localStartMins >= 840 && localStartMins <= 869) return 750; // 14:00-14:29
+            else if (localStartMins >= 870 && localStartMins <= 899) return 735; // 14:30-14:59
+            else if (localStartMins >= 900 && localStartMins <= 929) return 720; // 15:00-15:29
+            else if (localStartMins >= 930 && localStartMins <= 959) return 705; // 15:30-15:59
+            else if (localStartMins >= 960 && localStartMins <= 989) return 690; // 16:00-16:29
+            else if (localStartMins >= 990 && localStartMins <= 1019) return 675; // 16:30-16:59
+            else if (localStartMins >= 1020 || localStartMins <= 299) return 660; // 17:00-04:59 (night)
+            else if (localStartMins >= 300 && localStartMins <= 314) return 720;  // 05:00-05:14
+            else if (localStartMins >= 315 && localStartMins <= 329) return 735;  // 05:15-05:29
+            else if (localStartMins >= 330 && localStartMins <= 344) return 750;  // 05:30-05:44
+            else if (localStartMins >= 345 && localStartMins <= 359) return 765;  // 05:45-05:59
         }
-
-        // Apply Sector Reductions
-        if (sectors === 2) {
-            // 2 sectors: no reduction
-        } else if (sectors === 3) {
-            maxFDP -= 30; // 3 Sectors: -30 mins
-        } else if (sectors === 4) {
-            maxFDP -= 60; // 4 Sectors: -60 mins
-        } else if (sectors >= 5) {
-            maxFDP -= 90; // 5+ Sectors: -90 mins
-        }
-
-        // Ensure minimum 660 minutes (11 hours)
-        if (maxFDP < 660) maxFDP = 660;
-
-        return maxFDP;
+        return 780; // Default
     };
 
-    // 4. Calculate for both FC and CC
-    const fcMax = calculateMaxFDPWithSectors(fcMins, false);
-    const ccMax = calculateMaxFDPWithSectors(ccMins, true);
+    // 4. Calculate base max FDP
+    const fcBaseMax = calculateBaseMaxFDP(fcMins, false);
+    const ccBaseMax = calculateBaseMaxFDP(ccMins, true);
 
-    // 5. Update both fields
+    // 5. Apply Sector Reductions
+    const getMaxFDPWithSectors = (baseMax, sectors) => {
+        let finalMax = baseMax;
+        
+        // Apply reductions
+        if (sectors === 2) {
+            // No reduction
+        } else if (sectors === 3) {
+            finalMax -= 30; // 3 Sectors: -30 mins
+        } else if (sectors === 4) {
+            finalMax -= 60; // 4 Sectors: -60 mins
+        } else if (sectors >= 5) {
+            finalMax -= 90; // 5+ Sectors: -90 mins
+        }
+        
+        // Ensure minimum 660 minutes (11 hours)
+        return Math.max(finalMax, 660);
+    };
+
+    const fcMax = getMaxFDPWithSectors(fcBaseMax, sectors);
+    const ccMax = getMaxFDPWithSectors(ccBaseMax, sectors);
+
+    console.log(`Max FDP Update - Sectors: ${sectors}, FC Base: ${fcBaseMax}, CC Base: ${ccBaseMax}, FC Final: ${fcMax}, CC Final: ${ccMax}`);
+
+    // 6. Update both fields
     safeSet('j-max-fdp', minsToTime(fcMax));
     
     // Update hidden cabin crew max FDP
@@ -1247,9 +1260,41 @@ window.recalcMaxFDP = function() {
         ccMaxInput.value = minsToTime(ccMax);
     }
     
-    // 6. Update FDP alerts for all legs
+    // 7. Update FDP alerts for all legs
     updateAllLegFDPAlerts();
 };
+
+
+window.calculateNightTime = function(offBlockUTC, onBlockUTC) {
+    if (!offBlockUTC || !onBlockUTC) return "00:00";
+    
+    const offMins = parseTimeString(offBlockUTC);
+    const onMins = parseTimeString(onBlockUTC);
+    
+    // Kazakhstan night: 02:00-04:59 LOCAL TIME (UTC+5)
+    // Convert to UTC: 21:00-23:59 UTC (previous day)
+    const nightStartUTC = 21 * 60;  // 21:00 UTC = 02:00 local
+    const nightEndUTC = 23 * 60 + 59; // 23:59 UTC = 04:59 local
+    
+    let nightMinutes = 0;
+    let current = offMins;
+    const endTime = onMins < offMins ? onMins + 1440 : onMins;
+    
+    // Check each minute of the flight
+    while (current < endTime) {
+        const minuteOfDay = current % 1440;
+        
+        // Check if current minute is within night window
+        if (minuteOfDay >= nightStartUTC && minuteOfDay <= nightEndUTC) {
+            nightMinutes++;
+        }
+        
+        current++;
+    }
+    
+    return minsToTime(nightMinutes);
+};
+
 
 // Helper function for night calculation in Kazakhstan
 function calculateNightTimeKZ(startMinsUTC, endMinsUTC) {
@@ -1705,9 +1750,22 @@ window.addLeg = function() {
     }
 
     // ============================================================
-    // 2. FDP CHECK (BOTH FC AND CC) - FIXED CALCULATION
+    // 2. CALCULATE NIGHT TIME FOR THIS LEG
     // ============================================================
+    const offBlock = el('j-off')?.value;
     const onBlock = el('j-in')?.value;
+    let nightTime = "00:00";
+    
+    if (offBlock && onBlock) {
+        nightTime = calculateNightTime(offBlock, onBlock);
+    }
+    
+    safeSet('j-night', nightTime);
+    safeSet('j-night-calc', nightTime);
+
+    // ============================================================
+    // 3. FDP CHECK (BOTH FC AND CC) - FIXED CALCULATION
+    // ============================================================
     let fdp = "", alertFdp = false, ccFdpAlert = false;
 
     // Calculate FDP for display (sector time vs cumulative)
@@ -1752,49 +1810,6 @@ window.addLeg = function() {
     }
 
     // ============================================================
-    // 3. NIGHT DUTY CALCULATION (Kazakhstan UTC+5)
-    // ============================================================
-    let nightTime = "00:00";
-    const onBlockTime = el('j-in')?.value;
-    const offBlockTime = el('j-off')?.value;
-    
-    if (offBlockTime && onBlockTime) {
-        // Kazakhstan night: 02:00-04:59 local = 21:00-23:59 UTC (previous day) and 00:00-01:59 UTC
-        const depMins = parseTimeString(offBlockTime);
-        const arrMins = parseTimeString(onBlockTime);
-        
-        // Convert to Kazakhstan time (UTC+5) by subtracting 5 hours
-        // But our times are in UTC, so for night calculation we need to check UTC times
-        // Night in UTC = 21:00-23:59 and 00:00-01:59
-        
-        let nightOverlap = 0;
-        let currentMins = depMins;
-        const arrAdjusted = arrMins < depMins ? arrMins + 1440 : arrMins;
-        
-        while (currentMins < arrAdjusted) {
-            // Check first night window: 21:00-23:59 UTC
-            if (currentMins >= 1260 && currentMins <= 1439) {
-                nightOverlap += Math.min(arrAdjusted, 1439) - currentMins + 1;
-            }
-            // Check second night window: 00:00-01:59 UTC
-            else if (currentMins >= 0 && currentMins <= 119) {
-                nightOverlap += Math.min(arrAdjusted, 119) - currentMins + 1;
-            }
-            
-            currentMins += 60; // Check next minute
-            if (currentMins > 1440) currentMins -= 1440;
-        }
-        
-        // Convert minutes back to time format
-        const hours = Math.floor(nightOverlap / 60);
-        const minutes = nightOverlap % 60;
-        nightTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-    }
-    
-    safeSet('j-night', nightTime);
-    safeSet('j-night-calc', nightTime);
-
-    // ============================================================
     // 4. CAPTURE DATA
     // ============================================================
     const d = {};
@@ -1812,6 +1827,7 @@ window.addLeg = function() {
     d.fdp = fdp; 
     d.fdpAlert = alertFdp;
     d.ccFdpAlert = ccFdpAlert;
+    d.nightTime = nightTime; // Store calculated night time
     
     dailyLegs.push(d);
     
@@ -1825,9 +1841,8 @@ window.addLeg = function() {
     }, 100);
 
     // ============================================================
-    // 6. UPDATE NIGHT DUTY FOR ALL CREW
+    // 6. UPDATE DISPLAY
     // ============================================================
-    // Update the journey list with calculated values
     renderJourneyList();
     validateInputs();
 
@@ -1842,6 +1857,7 @@ window.addLeg = function() {
     // Auto-save immediately
     saveState();
 };
+
 
 window.removeLeg = function(i) {
     dailyLegs.splice(i,1);
@@ -2401,53 +2417,39 @@ window.downloadJourneyLog = async function(mode = 'download') {
 
         // HELPER: Calculate FDP Duration
         const getFDP = (startMins) => {
-            if(!onBlocksMins && onBlocksMins !== 0) return ""; 
-            let diff = onBlocksMins - startMins;
-            
-            // Handle midnight crossing properly
-            if (diff < 0) diff += 1440; 
-            
-            // If duty spans more than 24 hours (unlikely but handle)
-            if (diff > 1440) diff = diff % 1440;
-            
-            return minsToTime(diff);
-        };
+    if(!onBlocksMins && onBlocksMins !== 0) return ""; 
+    let diff = onBlocksMins - startMins;
+    if(diff < 0) diff += 1440; 
+    return minsToTime(diff);
+};
 
         // HELPER: Calculate Night Overlap
-        const getNightOverlap = (startMins) => {
-            if(!onBlocksMins && onBlocksMins !== 0) return "00:00"; 
-            
-            // Night window: 21:00-05:59 UTC (1260 to 1439 and 0 to 359)
-            const nightStart1 = 1260; // 21:00
-            const nightEnd1 = 1439;   // 23:59
-            const nightStart2 = 0;    // 00:00
-            const nightEnd2 = 359;    // 05:59
-            
-            let overlap = 0;
-            
-            // Check first night window
-            if (startMins <= nightEnd1) {
-                const startInWindow = Math.max(startMins, nightStart1);
-                const endInWindow = Math.min(onBlocksMins, nightEnd1);
-                if (endInWindow > startInWindow) {
-                    overlap += (endInWindow - startInWindow);
-                }
+        const getNightOverlapKZ = (startMinsUTC, endMinsUTC) => {
+    if(!endMinsUTC && endMinsUTC !== 0) return "00:00"; 
+    
+    // Kazakhstan night: 02:00-04:59 LOCAL = 21:00-23:59 UTC
+    const nightStartUTC = 1260; // 21:00
+    const nightEndUTC = 1439;   // 23:59
+    
+    let start = startMinsUTC;
+    let end = endMinsUTC;
+    if(end < start) end += 1440;
+    
+    let overlap = 0;
+    
+    // Check if periods overlap at all
+    if (start <= nightEndUTC || end >= nightStartUTC) {
+        // Handle crossing midnight
+        for (let current = start; current < end; current++) {
+            const minuteOfDay = current % 1440;
+            if (minuteOfDay >= nightStartUTC && minuteOfDay <= nightEndUTC) {
+                overlap++;
             }
-            
-            // Check second night window (next day)
-            if (onBlocksMins >= nightStart2) {
-                const startInWindow = Math.max(startMins, nightStart2 - 1440);
-                const endInWindow = Math.min(onBlocksMins, nightEnd2);
-                if (endInWindow > startInWindow) {
-                    overlap += (endInWindow - startInWindow);
-                }
-            }
-            
-            // Handle case where duty spans multiple days (very rare)
-            if (overlap < 0) overlap = 0;
-            
-            return minsToTime(overlap);
-        };
+        }
+    }
+    
+    return minsToTime(overlap);
+};
 
         // DRAW ROWS
         for(let i = 0; i < totalRows; i++) {
