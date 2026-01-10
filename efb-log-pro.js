@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.14";
+const APP_VERSION = "1.4.15";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -760,46 +760,45 @@ window.testPDFLib = async function() {
 
 window.runDownload = async function(mode = 'download') {
     if(!ofpPdfBytes) return;
-    
     try {
-        // 1. Load with pdfjsLib (which reads all pages correctly)
+        // 1. Load the SOURCE PDF with pdfjsLib (which reads all pages correctly)
         const pdfjsDoc = await pdfjsLib.getDocument(ofpPdfBytes).promise;
         const totalPages = pdfjsDoc.numPages;
-        console.log(`[DEBUG] Original PDF has ${totalPages} pages`);
         
-        // 2. Determine cutoff
+        // 2. Determine Cutoff - using the actual page count from pdfjsLib
         const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
-        const pagesToKeep = (cutoff >= 0 && cutoff < totalPages - 1) ? cutoff + 1 : totalPages;
         
-        console.log(`[DEBUG] Keeping first ${pagesToKeep} pages`);
-        
-        // 3. Create new PDF with PDFLib
+        console.log(`[PDF DEBUG] Actual PDF has ${totalPages} pages | Cutoff Index: ${cutoff}`);
+
+        // 3. Create a NEW CLEAN PDF with PDFLib (for annotations)
         const newPdf = await PDFLib.PDFDocument.create();
         
-        // 4. For each page to keep, get it from pdfjsLib and add to PDFLib
-        for (let i = 1; i <= pagesToKeep; i++) { // pdfjsLib uses 1-based page numbers
+        // 4. Copy pages using pdfjsLib for correct page extraction
+        const pagesToKeep = (cutoff >= 0 && cutoff < totalPages - 1) ? cutoff + 1 : totalPages;
+        
+        console.log(`[PDF DEBUG] Keeping first ${pagesToKeep} pages`);
+        
+        // 5. Process each page
+        for (let i = 1; i <= pagesToKeep; i++) {
             const page = await pdfjsDoc.getPage(i);
-            
-            // Get page viewport
             const viewport = page.getViewport({ scale: 1.0 });
             
-            // Create a canvas to render the page
+            // Render page to canvas
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
             canvas.width = viewport.width;
             canvas.height = viewport.height;
             
-            // Render page to canvas
             await page.render({
                 canvasContext: context,
                 viewport: viewport
             }).promise;
             
-            // Convert canvas to image and embed in PDFLib
-            const imageData = canvas.toDataURL('image/png');
-            const pngImage = await newPdf.embedPng(imageData);
+            // Convert canvas to PNG and embed in PDFLib
+            const pngData = canvas.toDataURL('image/png');
+            const pngImage = await newPdf.embedPng(pngData);
             
-            // Add page with correct dimensions
+            // Add page to new PDF
             const newPage = newPdf.addPage([viewport.width, viewport.height]);
             newPage.drawImage(pngImage, {
                 x: 0,
@@ -811,22 +810,143 @@ window.runDownload = async function(mode = 'download') {
             // Clean up
             canvas.remove();
         }
-        
-        // 5. Now add your annotations (drawText calls) to the new PDF
+
+        // 6. Now add your annotations (drawText calls) to the new PDF
         const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
         const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
         
-        // ... rest of your drawing code ...
+        // Get pages for annotation
+        const pages = newPdf.getPages();
         
-        // 6. Save
-        const bytes = await newPdf.save();
-        // ... download logic ...
+        // 7. iPad rotation fix
+        const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
+        if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
+
+        // ===============================================
+        // DRAWING PHASE (Annotations)
+        // ===============================================
+
+        // --- Front Page ---
+        if (pages.length > 0) {
+            const p0 = pages[0];
+            
+            const frontItems = [ 
+                {id:'front-atis', offset:40, coord:frontCoords.atis}, 
+                {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
+            ];
+            frontItems.forEach(f => {
+                const v = el(f.id)?.value;
+                if(f.coord && v) p0.drawText(v.toUpperCase(), { 
+                    x: f.coord.transform[4] + f.offset, 
+                    y: f.coord.transform[5] + V_LIFT, 
+                    size: 12, 
+                    font: fontB 
+                });
+            });
+
+            const picBlockText = el('view-pic-block')?.innerText || "";
+            if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
+                p0.drawText(picBlockText, { 
+                    x: frontCoords.picBlockLabel.transform[4] + 65, 
+                    y: frontCoords.picBlockLabel.transform[5] + V_LIFT, 
+                    size: 12, 
+                    font: fontB 
+                });
+            }
+            const reasonText = el('front-extra-reason')?.value || "";
+            if(frontCoords.reasonLabel && reasonText) {
+                p0.drawText(reasonText.toUpperCase(), { 
+                    x: frontCoords.reasonLabel.transform[4] + 175, 
+                    y: frontCoords.reasonLabel.transform[5] + V_LIFT, 
+                    size: 12, 
+                    font: fontB 
+                });
+            }
+
+            ['altm1','stby','altm2'].forEach(k => {
+                const v = el('front-'+k)?.value;
+                const coord = frontCoords[k];
+                if(coord && v) {
+                    p0.drawText(v, { 
+                        x: coord.transform[4] + (k==='stby'?40:50), 
+                        y: coord.transform[5] + V_LIFT, 
+                        size: 12, 
+                        font: fontB 
+                    });
+                }
+            });
+
+            // Signature
+            if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
+                try {
+                    const sigImageBase64 = signaturePad.toDataURL();
+                    const sigImage = await newPdf.embedPng(sigImageBase64);
+                    p0.drawImage(sigImage, { 
+                        x: frontCoords.reasonLabel.transform[4], 
+                        y: frontCoords.reasonLabel.transform[5] + 40, 
+                        width: 100, 
+                        height: 35 
+                    });
+                } catch (sigError) { 
+                    console.error("Signature Error:", sigError); 
+                }
+            }
+        }
+
+        // --- Waypoints ---
+        const draw = (list, pre) => {
+            list.forEach((wp, i) => {
+                if (wp.isTakeoff) return;
+                
+                if (wp.page >= 0 && wp.page < pages.length) {
+                    const page = pages[wp.page];
+                    const mainY = wp.y_anchor;
+                    
+                    const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
+                    const f = el(`${pre}-f-${i}`)?.value || "";
+                    const n = el(`${pre}-n-${i}`)?.value || "";
+                    const agl = el(`${pre}-agl-${i}`)?.value || ""; 
+
+                    if(wp.eto) page.drawText(wp.eto, { 
+                        x: TIME_X, 
+                        y: mainY + LINE_HEIGHT + V_LIFT, 
+                        size: 12, 
+                        font: fontB, 
+                        color: PDFLib.rgb(0,0,0.5) 
+                    });
+                    if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
+                    if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                }
+            });
+        };
+        draw(waypoints, 'o'); 
+        draw(alternateWaypoints, 'a');
+
+        // ===============================================
+        // SAVE
+        // ===============================================
+        const bytes = await newPdf.save(); 
         
-    } catch(error) { 
+        const filename = originalFileName.replace(".pdf", "_Logged.pdf");
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+        if (mode === 'email' && isMobile) {
+            const flt = el('j-flt')?.value || "FLT";
+            const date = el('j-date')?.value || "DATE";
+            const subject = `OFP: ${flt} ${date}`;
+            await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
+        } else {
+            downloadBlob(bytes, filename);
+        }
+        
+    } catch (error) { 
         console.error("Error in runDownload:", error); 
-        alert("Error: " + error.message);
+        alert("Error saving PDF: " + error.message); 
     }
 };
+
 window.runCalc = function() {
     const atd = el('ofp-atd-in')?.value;
     
