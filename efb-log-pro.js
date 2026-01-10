@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.11";
+const APP_VERSION = "1.4.12";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -8,6 +8,32 @@ function sanitizeHTML(str) {
     div.textContent = str;
     return div.innerHTML;
 }
+
+window.debugPDF = async function() {
+    if (!ofpPdfBytes) {
+        console.log("No PDF loaded");
+        return;
+    }
+    
+    // Try with PDF.js first
+    const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
+    console.log(`PDF.js sees ${pdf.numPages} pages`);
+    
+    // Try with PDFLib
+    try {
+        const pdfDoc = await PDFLib.PDFDocument.load(ofpPdfBytes);
+        console.log(`PDFLib sees ${pdfDoc.getPageCount()} pages`);
+    } catch(e) {
+        console.log(`PDFLib error: ${e.message}`);
+    }
+    
+    // Download the current ofpPdfBytes
+    const blob = new Blob([ofpPdfBytes], {type: 'application/pdf'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'DEBUG_current_ofpPdfBytes.pdf';
+    link.click();
+};
 
 
 // 3. Clean up event listeners
