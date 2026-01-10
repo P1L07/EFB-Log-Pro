@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.5";
+const APP_VERSION = "1.4.6";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -779,30 +779,27 @@ function parseTimeString(timeStr) {
 window.runDownload = async function(mode = 'download') {
     if(!ofpPdfBytes) return;
     try {
-        // 1. Load the PDF
+        // 1. Load PDF
         const pdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
-        
-        // 2. Embed Fonts
         const fontB = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
         const fontR = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
-
-        // 3. Get Pages (This is the original list)
+        
+        // 2. Get Page Counts
         const pages = pdf.getPages();
         const totalPages = pdf.getPageCount();
+        console.log(`PDF Loaded. Total Pages: ${totalPages}`); // DEBUG LOG
 
-        // 4. iPad Rotation Fix
+        // 3. iPad Rotation Fix
         const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
         if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
 
         // ===============================================
-        // PHASE 1: DRAWING (Must happen BEFORE truncation)
+        // PHASE 1: DRAWING (Draw BEFORE Truncating)
         // ===============================================
-
-        // --- Front Page ---
         if (pages.length > 0) {
             const p0 = pages[0];
             
-            // Draw Header/Summary inputs
+            // Front Page Items
             const frontItems = [ 
                 {id:'front-atis', offset:40, coord:frontCoords.atis}, 
                 {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
@@ -812,19 +809,17 @@ window.runDownload = async function(mode = 'download') {
                 if(f.coord && v) p0.drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
             });
 
-            // Draw PIC Block
+            // PIC Block & Reason
             const picBlockText = el('view-pic-block')?.innerText || "";
             if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
                 p0.drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
-            
-            // Draw Reason
             const reasonText = el('front-extra-reason')?.value || "";
             if(frontCoords.reasonLabel && reasonText) {
                 p0.drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
 
-            // Draw Altimeters (Using your corrected extraction logic)
+            // Altimeters
             ['altm1','stby','altm2'].forEach(k => {
                 const v = el('front-'+k)?.value;
                 const coord = frontCoords[k];
@@ -833,7 +828,7 @@ window.runDownload = async function(mode = 'download') {
                 }
             });
 
-            // Draw Signature
+            // Signature
             if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
                 try {
                     const sigImageBase64 = signaturePad.toDataURL();
@@ -843,23 +838,19 @@ window.runDownload = async function(mode = 'download') {
             }
         }
 
-        // --- Waypoints (Flight Log) ---
+        // Flight Log Items
         const draw = (list, pre) => {
             list.forEach((wp, i) => {
                 if (wp.isTakeoff) return;
-                
-                // Verify page index is valid before drawing
+                // Only draw if page exists
                 if (wp.page >= 0 && wp.page < pages.length) {
                     const page = pages[wp.page];
                     const mainY = wp.y_anchor;
-
-                    // Values
                     const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
                     const f = el(`${pre}-f-${i}`)?.value || "";
                     const n = el(`${pre}-n-${i}`)?.value || "";
                     const agl = el(`${pre}-agl-${i}`)?.value || ""; 
 
-                    // Drawing
                     if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
                     if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
                     if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
@@ -868,30 +859,28 @@ window.runDownload = async function(mode = 'download') {
                 }
             });
         };
-        
         draw(waypoints, 'o'); 
         draw(alternateWaypoints, 'a');
 
         // ===============================================
-        // PHASE 2: TRUNCATION (Must happen LAST)
+        // PHASE 2: TRUNCATION (Corrected Logic)
         // ===============================================
         const cutoff = window.cutoffPageIndex;
         
-        // Safety Check: Cutoff must be greater than 2 to avoid deleting the Flight Log
-        if (cutoff > 2 && cutoff < totalPages - 1) {
-            console.log(`Executing Truncation. Keeping pages 0 to ${cutoff}. Deleting rest.`);
-            // Loop Backwards to safely remove pages
+        // Relaxed Check: As long as cutoff is valid (> 2) and less than total pages
+        if (cutoff > 2 && cutoff < totalPages) {
+            console.log(`Executing Truncation. Keeping pages 0 to ${cutoff}. Total was ${totalPages}.`);
+            // Remove pages from End backwards
             for (let k = totalPages - 1; k > cutoff; k--) {
                 pdf.removePage(k);
             }
         } else {
-            console.log(`Skipping Truncation. Index ${cutoff} is too small or invalid.`);
+            console.log(`Skipping Truncation. Cutoff: ${cutoff}, Total: ${totalPages}`);
         }
 
         // ===============================================
-        // PHASE 3: SAVE (With Fix for White Pages)
+        // PHASE 3: SAVE (ObjectStreams False fixes White Pages)
         // ===============================================
-        // useObjectStreams: false fixes the "White Pages" bug on some viewers
         const bytes = await pdf.save({ useObjectStreams: false });
         
         const filename = originalFileName.replace(".pdf", "_Logged.pdf");
