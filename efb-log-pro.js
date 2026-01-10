@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.3";
+const APP_VERSION = "1.4.4";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -243,18 +243,6 @@ async function runAnalysis(fileOrEvent) {
 
     // Helper to find coordinates on Page 1
 function extractFrontCoords(items) {
-    console.log("=== DEBUG: Looking for front page coordinates ===");
-    
-    // Log ALL text items on the front page to see what's available
-    console.log("All text items on front page:");
-    items.forEach((item, index) => {
-        const raw = item.str.toUpperCase();
-        console.log(`[${index}] "${item.str}" -> "${raw}" at (x:${item.transform[4]}, y:${item.transform[5]})`);
-    });
-    
-    // Now search for specific patterns
-    console.log("\n=== Searching for specific patterns ===");
-    
     items.forEach(item => {
         const raw = item.str.toUpperCase();
         
@@ -288,7 +276,6 @@ function extractFrontCoords(items) {
     // Now specifically look for ALT M1 and ALT M2
     console.log("\n=== Looking for ALT M1/M2 specifically ===");
     
-    // Method 1: Look for "ALT" and "M1" as separate items
     // Method 1: Look for "ALT" and "M1" as separate items
     for (let i = 0; i < items.length; i++) {
         const current = items[i].str.toUpperCase();
@@ -339,17 +326,19 @@ function extractFrontCoords(items) {
 
     // Detect End of OFP (for truncation)
         if (window.cutoffPageIndex === -1) {
-        const upperText = textContent.toUpperCase();
-        
-        // Check for multiple patterns that indicate end of flight plan
-        if (upperText.includes("END OF ALTERNATE FLIGHT PLAN") ||
-            (upperText.includes("END") && upperText.includes("ALTERNATE") && upperText.includes("FLIGHT PLAN")) ||
-            (upperText.includes("TOT DIST:") && upperText.includes("END OF"))) {
+            const upperText = textContent.toUpperCase();
             
-            window.cutoffPageIndex = i - 1;
-            
+            // Check for multiple patterns that indicate end of flight plan
+            if (upperText.includes("END OF ALTERNATE FLIGHT PLAN") ||
+                (upperText.includes("END") && upperText.includes("FLIGHT") && upperText.includes("PLAN")) || 
+                (upperText.includes("WEATHER") && upperText.includes("CHART")) || // Common cutoff point
+                (upperText.includes("NOTAM") && upperText.includes("BRIEFING"))) {
+                
+                // If we found the start of NOTAMs or WX, we cut HERE
+                window.cutoffPageIndex = i - 1; 
+                console.log("Cutoff found at page index: " + window.cutoffPageIndex);
+            }
         }
-    }
 
         // --- PAGE 1: Summary, Routes, Fuel, Weights ---
         if (i === 1) {
@@ -830,31 +819,23 @@ window.runDownload = async function(mode = 'download') {
     try {
         const pdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
         
-        // ===============================================
-        // 1. TRUNCATION LOGIC
-        // ===============================================
-        const cutoff = window.cutoffPageIndex;
-        const totalPages = pdf.getPageCount();
-        
-        if (cutoff !== -1 && cutoff !== undefined && cutoff < totalPages - 1) {
-            
-            // Remove from the end backwards
-            for (let k = totalPages - 1; k > cutoff; k--) {
-                pdf.removePage(k);
-            }
-            
-        } else {
-            console.log("No truncation needed");
-        }
-        
-        // Rest of your code...
-        const pages = pdf.getPages();
+        // Embed fonts
         const fontB = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
         const fontR = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+        
+        // Get all pages references BEFORE we delete anything
+        const pages = pdf.getPages();
+        const totalPages = pdf.getPageCount();
+
+        // Check for iPad mode rotation
+        const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
+        if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
 
         // ===============================================
-        // 2. FRONT PAGE (Always Page 0)
+        // 1. DRAWING PHASE (Do this BEFORE Truncation)
         // ===============================================
+        
+        // --- A. Front Page (Page 0) ---
         if (pages.length > 0) {
             const frontItems = [ 
                 {id:'front-atis', offset:40, coord:frontCoords.atis}, 
@@ -869,15 +850,13 @@ window.runDownload = async function(mode = 'download') {
             if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
                 pages[0].drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
+            
             const reasonText = el('front-extra-reason')?.value || "";
             if(frontCoords.reasonLabel && reasonText) {
-                pages[0].drawText(reasonText.toUpperCase(), { 
-                    x: frontCoords.reasonLabel.transform[4] + 175, 
-                    y: frontCoords.reasonLabel.transform[5] + V_LIFT, 
-                    size: 12, font: fontB 
-                });
+                pages[0].drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
 
+            // Altimeters
             ['altm1','stby','altm2'].forEach(k => {
                 const v = el('front-'+k)?.value;
                 if(frontCoords[k] && v) {
@@ -885,41 +864,39 @@ window.runDownload = async function(mode = 'download') {
                 }
             });
 
+            // Signature
             if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
                 try {
                     const sigImageBase64 = signaturePad.toDataURL();
                     const sigImage = await pdf.embedPng(sigImageBase64);
-                    pages[0].drawImage(sigImage, {
-                        x: frontCoords.reasonLabel.transform[4], 
-                        y: frontCoords.reasonLabel.transform[5] + 40, 
-                        width: 100, height: 35
-                    });
+                    pages[0].drawImage(sigImage, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
                 } catch (sigError) { console.error("Signature Error:", sigError); }
             }
         }
 
-        // ===============================================
-        // 3. WAYPOINTS
-        // ===============================================
+        // --- B. Waypoints (Flight Log) ---
         const draw = (list, pre) => {
             list.forEach((wp, i) => {
                 if (wp.isTakeoff) return;
                 
-                // CRITICAL CHECK: Does this page still exist?
+                // CRITICAL FIX: Ensure we only draw if the page index is valid relative to the ORIGINAL pdf
                 if (wp.page >= 0 && wp.page < pages.length) {
                     const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
                     const f = el(`${pre}-f-${i}`)?.value || "";
                     const n = el(`${pre}-n-${i}`)?.value || "";
                     const agl = el(`${pre}-agl-${i}`)?.value || ""; 
                     
-                    const page = pages[wp.page];
+                    const page = pages[wp.page]; // We use the original page object
                     const mainY = wp.y_anchor;
 
-                    if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
-                    if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
-                    if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                    if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                    if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    // Safety check: Don't draw if Y is somehow 0 (sanity check)
+                    if(mainY > 0) {
+                        if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
+                        if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
+                        if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                        if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                        if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    }
                 }
             });
         };
@@ -927,7 +904,29 @@ window.runDownload = async function(mode = 'download') {
         draw(waypoints, 'o'); 
         draw(alternateWaypoints, 'a');
 
-        const bytes = await pdf.save();
+        // ===============================================
+        // 2. TRUNCATION PHASE (Do this LAST)
+        // ===============================================
+        // The logs said "No truncation needed" because cutoff was -1.
+        // We ensure we only truncate if a valid positive cutoff was found.
+        const cutoff = window.cutoffPageIndex;
+        
+        if (cutoff > 0 && cutoff < totalPages - 1) {
+            console.log(`Truncating from page ${cutoff + 1} to end.`);
+            // When removing, always go backwards to avoid index shifting problems
+            for (let k = totalPages - 1; k > cutoff; k--) {
+                pdf.removePage(k);
+            }
+        } else {
+            console.log("Skipping truncation (cutoff index invalid or not found)");
+        }
+
+        // ===============================================
+        // 3. SAVE & EXPORT
+        // ===============================================
+        // useObjectStreams: false helps with compatibility on some iPad viewers
+        const bytes = await pdf.save({ useObjectStreams: false });
+        
         const filename = originalFileName.replace(".pdf", "_Logged.pdf");
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
@@ -940,7 +939,10 @@ window.runDownload = async function(mode = 'download') {
             downloadBlob(bytes, filename);
         }
         
-    } catch (error) { console.error(error); alert("Error saving PDF: " + error.message); }
+    } catch (error) { 
+        console.error(error); 
+        alert("Error saving PDF: " + error.message); 
+    }
 };
 
 window.runCalc = function() {
@@ -2153,7 +2155,7 @@ window.downloadJourneyLog = async function(mode = 'download') {
     if (!journeyLogTemplateBytes) return alert("Please upload Journey Log first.");
     if (dailyLegs.length === 0) return alert("No legs to print.");
 
-        console.log("=== DEBUG: Starting downloadJourneyLog ===");
+    console.log("=== DEBUG: Starting downloadJourneyLog ===");
     console.log("fcMaxFDPStr from j-max-fdp:", el('j-max-fdp')?.value);
     console.log("ccMaxFDPStr from hidden input:", document.getElementById('j-cc-max-fdp-hidden')?.value);
     console.log("fcDutyStartStr:", el('j-duty-start')?.value);
