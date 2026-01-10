@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.7";
+const APP_VERSION = "1.4.8";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -775,37 +775,41 @@ window.runDownload = async function(mode = 'download') {
         // 2. Create a NEW CLEAN PDF
         const newPdf = await PDFLib.PDFDocument.create();
 
-        // 3. Determine which pages to keep (Truncation Logic)
-        // We keep pages from 0 up to 'cutoff'.
-        // If cutoff is invalid (e.g. -1), we keep ALL pages.
-        let limit = totalPages - 1; 
-        const cutoff = window.cutoffPageIndex;
+        // 3. Determine Cutoff
+        // We ensure cutoff is a valid number.
+        const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
+        
+        console.log(`[PDF DEBUG] Source Pages: ${totalPages} | Cutoff Index: ${cutoff}`);
 
-        if (cutoff > 0 && cutoff < totalPages) {
-            console.log(`Truncating: Keeping pages 0 to ${cutoff} (Total original: ${totalPages})`);
-            limit = cutoff;
+        // 4. Calculate which pages to Copy
+        // If cutoff is valid AND less than total, we truncate.
+        // Otherwise, we keep everything.
+        let lastPageIndex = totalPages - 1; 
+
+        if (cutoff > 0 && cutoff < totalPages - 1) {
+             console.log(`[PDF DEBUG] Truncating... Keeping pages 0 to ${cutoff}`);
+             lastPageIndex = cutoff;
         } else {
-            console.log("No truncation applied. Keeping all pages.");
+             console.log(`[PDF DEBUG] Keeping ALL pages (No valid cutoff or file already short).`);
         }
 
-        // Build list of indices [0, 1, 2, ... limit]
         const indicesToCopy = [];
-        for (let i = 0; i <= limit; i++) {
+        for (let i = 0; i <= lastPageIndex; i++) {
             indicesToCopy.push(i);
         }
 
-        // 4. Copy pages from Source to New
+        // 5. Perform the Copy
         const copiedPages = await newPdf.copyPages(sourcePdf, indicesToCopy);
         copiedPages.forEach(page => newPdf.addPage(page));
 
-        // 5. Embed Fonts into the NEW PDF
+        // 6. Embed Fonts into NEW PDF
         const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
         const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
 
-        // 6. Get the new list of pages to draw on
+        // 7. Get the New Pages to Draw On
         const pages = newPdf.getPages();
 
-        // 7. iPad Rotation Fix (Apply to Page 0 of new PDF)
+        // 8. iPad Rotation Fix
         const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
         if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
 
@@ -817,7 +821,6 @@ window.runDownload = async function(mode = 'download') {
         if (pages.length > 0) {
             const p0 = pages[0];
             
-            // Header Items
             const frontItems = [ 
                 {id:'front-atis', offset:40, coord:frontCoords.atis}, 
                 {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
@@ -827,7 +830,6 @@ window.runDownload = async function(mode = 'download') {
                 if(f.coord && v) p0.drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
             });
 
-            // PIC Block & Reason
             const picBlockText = el('view-pic-block')?.innerText || "";
             if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
                 p0.drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
@@ -837,7 +839,6 @@ window.runDownload = async function(mode = 'download') {
                 p0.drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
             }
 
-            // Altimeters
             ['altm1','stby','altm2'].forEach(k => {
                 const v = el('front-'+k)?.value;
                 const coord = frontCoords[k];
@@ -846,11 +847,10 @@ window.runDownload = async function(mode = 'download') {
                 }
             });
 
-            // Signature
             if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
                 try {
                     const sigImageBase64 = signaturePad.toDataURL();
-                    const sigImage = await newPdf.embedPng(sigImageBase64); // Embed in NEW PDF
+                    const sigImage = await newPdf.embedPng(sigImageBase64);
                     p0.drawImage(sigImage, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
                 } catch (sigError) { console.error("Signature Error:", sigError); }
             }
@@ -860,7 +860,8 @@ window.runDownload = async function(mode = 'download') {
         const draw = (list, pre) => {
             list.forEach((wp, i) => {
                 if (wp.isTakeoff) return;
-                // Check if the page exists in our NEW truncated document
+                
+                // CRITICAL: We check if the page exists in our NEW document
                 if (wp.page >= 0 && wp.page < pages.length) {
                     const page = pages[wp.page];
                     const mainY = wp.y_anchor;
@@ -884,7 +885,7 @@ window.runDownload = async function(mode = 'download') {
         // ===============================================
         // SAVE
         // ===============================================
-        const bytes = await newPdf.save(); // Clean save
+        const bytes = await newPdf.save(); 
         
         const filename = originalFileName.replace(".pdf", "_Logged.pdf");
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
