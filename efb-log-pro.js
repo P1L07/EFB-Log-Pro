@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.13";
+const APP_VERSION = "1.4.14";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -182,14 +182,11 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
 // ==========================================
 // 3. INITIALIZATION & LISTENERS
 // ==========================================
-
-
-
 async function runAnalysis(fileOrEvent) {
     let blob = null;
     let isAutoLoad = false;
 
-    // 1. Determine source (File Input vs Auto-Load Blob)
+    // 1. Determine source
     if (fileOrEvent instanceof Blob) {
         blob = fileOrEvent;
         isAutoLoad = true;
@@ -197,49 +194,44 @@ async function runAnalysis(fileOrEvent) {
         const fileInput = document.getElementById('ofp-file-in');
         if (fileInput && fileInput.files.length > 0) {
             blob = fileInput.files[0];
-            if (typeof savePdfToDB === 'function') savePdfToDB(blob);
             
-            // Smart Reset for new manual upload
-            let stored = {};
-            try { stored = JSON.parse(localStorage.getItem('efb_log_state')) || {}; } catch(e){}
-            stored.inputs = {}; 
-            stored.waypoints = [];
-            localStorage.setItem('efb_log_state', JSON.stringify(stored));
+            // CLEAR OLD DATA on new upload
             window.savedWaypointData = [];
+            localStorage.removeItem('efb_log_state'); 
         }
     }
 
     if (!blob) return;
 
-    // 2. Clear previous data if this is a manual upload
+    // 2. CRITICAL: Update the Global Bytes Variable immediately
+    // This ensures PDFLib gets the fresh 52-page file, not a cached 5-page ghost.
+    ofpPdfBytes = await blob.arrayBuffer(); 
+    originalFileName = blob.name || "Logged_OFP.pdf";
+
+    // 3. Initialize Viewer (pdfjsLib)
+    // We use the SAME bytes we just loaded to ensure sync
+    const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
+    
+    console.log(`[ANALYSIS START] PDF Loaded. Total Pages: ${pdf.numPages}`);
+
+    // --- VISIBILITY FIX ---
     if (!isAutoLoad) {
         if (typeof clearOFPInputs === 'function') clearOFPInputs();
-        
-        // Clear Summary Headers
-        ['view-pic-block', 'view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn'].forEach(id => {
-            const e = document.getElementById(id);
-            if(e) { (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') ? e.value = "" : e.innerText = "-"; }
-        });
-
-        // --- VISIBILITY FIX: Show the Add Leg form when new OFP is uploaded ---
         const legForm = document.getElementById('leg-input-form');
         if(legForm) legForm.style.display = 'block';
     }
 
-    // 3. Initialize PDF
-    originalFileName = blob.name || "Logged_OFP.pdf";
-    ofpPdfBytes = await blob.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
-        
-    // 4. Render Preview (Canvas)
+    // 4. Render Preview
     const container = document.getElementById('pdf-render-container');
     const fallback = document.getElementById('pdf-fallback');
     
     if (container && pdf) {
         if(fallback) fallback.style.display = 'none';
         container.innerHTML = '';
-
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        
+        // Only render first 3 pages for performance preview
+        const previewLimit = Math.min(pdf.numPages, 3);
+        for (let pageNum = 1; pageNum <= previewLimit; pageNum++) {
             const page = await pdf.getPage(pageNum);
             const scale = 1.5;
             const viewport = page.getViewport({ scale });
@@ -256,80 +248,52 @@ async function runAnalysis(fileOrEvent) {
         }
     }
 
-    const pdfjsDoc = await pdfjsLib.getDocument(ofpPdfBytes).promise;
-    console.log(`[DEBUG] pdfjsLib page count: ${pdfjsDoc.numPages}`);
-
-    try {
-        const pdfLibDoc = await PDFLib.PDFDocument.load(ofpPdfBytes);
-        console.log(`[DEBUG] PDFLib page count: ${pdfLibDoc.getPageCount()}`);
-    } catch (e) {
-        console.error(`[DEBUG] PDFLib load error: ${e.message}`);
-    }
-
-    // 5. RESET PARSING VARIABLES (Crucial for re-upload)
+    // 5. Reset Parsing Variables
     waypoints = []; 
     alternateWaypoints = []; 
     fuelData = []; 
     blockFuelValue = 0;
     window.cutoffPageIndex = -1;
+    
+    // Reset Coordinates
+    frontCoords = { atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null, reasonLabel: null };
 
-    // Helper to find coordinates on Page 1
+    // Helper for Coordinates
     function extractFrontCoords(items) {
         items.forEach(item => {
             const raw = item.str.toUpperCase();
-            if (raw.includes('ALTM1')) {
-                frontCoords.altm1 = item;
-            }
-            if (raw.includes('ALTM2')) {
-                frontCoords.altm2 = item;
-            }
-            if (raw.includes('ATIS')) { 
-                frontCoords.atis = item;
-            }
-            if (raw.includes('CLRNC')) { 
-                frontCoords.atcLabel = item;
-            }
-            if (raw.includes('STBY')) { 
-                frontCoords.stby = item;
-            }
-            if (raw.includes('PIC') && raw.includes('BLOCK')) { 
-                frontCoords.picBlockLabel = item;
-            }
-            if (raw.includes('REASON')) { 
-                frontCoords.reasonLabel = item;
-            }
+            if (raw.includes('ALTM1')) frontCoords.altm1 = item;
+            if (raw.includes('ALTM2')) frontCoords.altm2 = item;
+            if (raw.includes('ATIS')) frontCoords.atis = item;
+            if (raw.includes('CLRNC')) frontCoords.atcLabel = item;
+            if (raw.includes('STBY')) frontCoords.stby = item;
+            if (raw.includes('PIC') && raw.includes('BLOCK')) frontCoords.picBlockLabel = item;
+            if (raw.includes('REASON')) frontCoords.reasonLabel = item;
         });
     }
-    
-    // 6. PARSE PAGES
+
+    // 6. Parse Pages
     for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
         const items = content.items;
         const textContent = items.map(x=>x.str).join(' ');
 
-        // Only look for "End" keywords AFTER Page 3 (index > 2)
-        // This prevents finding "BRIEFING" or "WEATHER" on the Page 1 Summary
-        if (i > 2 && window.cutoffPageIndex === -1) {
+        // --- TRUNCATION LOGIC ---
+        // Only look for "End" keywords AFTER Page 3
+        if (i > 3 && window.cutoffPageIndex === -1) {
             const upperText = textContent.toUpperCase();
-            
-            // Check for multiple patterns that indicate end of flight plan
             if (upperText.includes("END OF ALTERNATE FLIGHT PLAN") ||
                 (upperText.includes("END") && upperText.includes("FLIGHT") && upperText.includes("PLAN")) || 
-                (upperText.includes("WEATHER") && upperText.includes("CHART")) || // Common cutoff point
+                (upperText.includes("WEATHER") && upperText.includes("CHART")) ||
                 (upperText.includes("NOTAM") && upperText.includes("BRIEFING"))) {
-                
-                // If we found the start of NOTAMs or WX, we cut HERE
                 window.cutoffPageIndex = i - 1; 
                 console.log("✓ Cutoff found at page index: " + window.cutoffPageIndex);
             }
         }
 
-        // --- PAGE 1: Summary, Routes, Fuel, Weights ---
+        // --- Page 1 Analysis ---
         if (i === 1) {
-            // Reset coords before extracting
-            frontCoords = { atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null, reasonLabel: null };
-    
             extractFrontCoords(items);
             const match2 = textContent.match(/([A-Z]{3}\d{3,4})\s+([A-Z0-9-]{3,7})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s+([A-Z]{4})\s+CI(\w+)\s+(\d{4})\s+\S+\s+(\d{4})\s+\S+\s+([A-Z]{4})/);
 
@@ -344,19 +308,17 @@ async function runAnalysis(fileOrEvent) {
                 safeText('view-std-text', stdFmt); safeText('view-sta-text', staFmt);
                 safeText('view-altn', altn);
                 
-                // Populate hidden inputs
                 safeSet('j-flt', flt); safeSet('j-reg', reg); safeSet('j-date', date);
                 safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn);
                 safeSet('j-std', stdFmt);
 
-                // Run Extractions
                 extractRoutes(textContent);
-                extractFuelDataSimple(textContent); // Populates fuelData
+                extractFuelDataSimple(textContent);
                 extractWeights(textContent);
             }
         }
         
-        // --- PAGE 2+: Flight Log / Waypoints ---
+        // --- Flight Log Analysis (Pages 2+) ---
         if (i >= 2) {
             const rows = buildRows(items);
             rows.sort((a,b) => b.y - a.y); 
@@ -364,12 +326,9 @@ async function runAnalysis(fileOrEvent) {
             let headerY = null;
             for(const row of rows) {
                 const rowText = row.items.map(item => item.str).join(' ');
-                let headerCount = 0;
-                if(rowText.includes("TO") || rowText.includes("TO:")) headerCount++;
-                if(rowText.includes("AWY") || rowText.includes("AWY:")) headerCount++;
-                if(rowText.includes("ET") || rowText.includes("ETE")) headerCount++;
-                if(rowText.includes("FUEL") || rowText.includes("FOB")) headerCount++;
-                if(headerCount >= 2) { headerY = row.y; break; }
+                if((rowText.includes("TO") && rowText.includes("FUEL")) || (rowText.includes("AWY") && rowText.includes("ETE"))) {
+                    headerY = row.y; break; 
+                }
             }
             
             if(!headerY) continue; 
@@ -380,47 +339,31 @@ async function runAnalysis(fileOrEvent) {
                 if(row.items.length < 3) continue;
                 
                 let timeValue = null, fuelValue = null;
-                
                 for(const item of row.items) {
                     const str = item.str.trim();
                     if(/^\d+[\.:]\d{2}$/.test(str)) timeValue = str;
                     if(/^\d{3,5}$/.test(str) && !str.includes('.') && !str.includes(':')) {
                         const num = parseInt(str);
-                        if(num >= 100 && num <= 50000) {
-                            const ctx = row.items.map(i=>i.str).join(' ');
-                            if(!ctx.includes('FL ') && !/^\s*\d{3}\s*$/.test(str)) fuelValue = str;
-                        }
+                        if(num >= 100 && num <= 50000 && !row.items.map(x=>x.str).join(' ').includes('FL ')) fuelValue = str;
                     }
                 }
                 
                 if(timeValue && fuelValue) {
                     let data = { name: "?", awy: "-", level: "-", track: "-", wind: "-", tas: "-", gs: "-" };
-                    // Try to get Name from previous row if needed (for compact OFPs)
                     if(r > 0) {
                         const prevRow = rows[r-1];
                         if(Math.abs(row.y - prevRow.y) < 25) {
-                            const fullString = prevRow.items.map(x => x.str).join(' ');
-                            const parts = fullString.trim().split(/\s+/);
-                            if (parts.length >= 7) {
-                                data.name = parts[0];
-                                data.awy = parts[1];
-                                data.level = parts[2];
-                                data.track = parts[3];
-                                data.wind = parts[4];
-                                data.tas = parts[5];
-                                data.gs = parts[6];
-                            } else if (parts.length > 0) { data.name = parts[0]; }
+                            const parts = prevRow.items.map(x => x.str).join(' ').trim().split(/\s+/);
+                            if (parts.length > 0) data.name = parts[0];
                         }
                     }
 
                     if(data.name !== "?") {
-                        const absTime = parseTimeString(timeValue);
-                        const fobValue = parseInt(fuelValue) || 0;
                         const wpObj = {
                             ...data,
-                            totalMins: absTime,
+                            totalMins: parseTimeString(timeValue),
                             eto: "",
-                            fob: fobValue,
+                            fob: parseInt(fuelValue) || 0,
                             page: i-1, 
                             y_anchor: row.y,
                             isTakeoff: false,
@@ -434,7 +377,7 @@ async function runAnalysis(fileOrEvent) {
         }
     } 
     
-    // 7. FINALIZE & RENDER
+    // 7. Finalize
     waypoints.forEach(wp => { wp.baseFuel = parseInt(wp.fob) || 0; wp.fuel = wp.baseFuel; });
     processWaypointsList();
     
@@ -446,24 +389,27 @@ async function runAnalysis(fileOrEvent) {
     
     runCalc(); 
     validateInputs(); 
-    renderFuelTable(); // This draws the Fuel Table
-    renderTables();    // This draws the Flight Log
+    renderFuelTable(); 
+    renderTables();
 
     // Logic for loading state vs saving new state
-    if (isAutoLoad) { loadState(); } else { saveState(); }
-    
-    // Restore User Data if Auto-Loading
-    if (isAutoLoad && window.savedWaypointData && window.savedWaypointData.length > 0) {
-        window.savedWaypointData.forEach((data, i) => {
-            if (i < waypoints.length) {
-                if(data.ato) safeSet(`o-a-${i}`, data.ato);
-                if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                if(data.notes) safeSet(`o-n-${i}`, data.notes);
-                if(data.agl) safeSet(`o-agl-${i}`, data.agl);
-            }
-        });
-        syncLastWaypoint(); 
-        updateAlternateETOs();
+    if (isAutoLoad) { 
+        loadState(); 
+        // Restore Waypoints
+        if (window.savedWaypointData && window.savedWaypointData.length > 0) {
+            window.savedWaypointData.forEach((data, i) => {
+                if (i < waypoints.length) {
+                    if(data.ato) safeSet(`o-a-${i}`, data.ato);
+                    if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                    if(data.notes) safeSet(`o-n-${i}`, data.notes);
+                    if(data.agl) safeSet(`o-agl-${i}`, data.agl);
+                }
+            });
+            syncLastWaypoint(); 
+            updateAlternateETOs();
+        }
+    } else { 
+        saveState(); 
     }
 }
 
