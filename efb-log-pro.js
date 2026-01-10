@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.10";
+const APP_VERSION = "1.4.11";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -124,6 +124,7 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
     let fuelData = [];
     let blockFuelValue = 0;
     let dutyStartTime = null;
+    window.cutoffPageIndex = -1; 
 
 
     
@@ -156,11 +157,7 @@ if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || wi
 // 3. INITIALIZATION & LISTENERS
 // ==========================================
 
- // Global variable to store where the OFP ends
-let cutoffPageIndex = -1; 
 
-// Global variable for truncation
-window.cutoffPageIndex = -1; 
 
 async function runAnalysis(fileOrEvent) {
     let blob = null;
@@ -275,10 +272,9 @@ async function runAnalysis(fileOrEvent) {
         const items = content.items;
         const textContent = items.map(x=>x.str).join(' ');
 
-        // --- FIXED TRUNCATION LOGIC ---
-        // Only look for "End" keywords AFTER Page 3 (index > 3)
+        // Only look for "End" keywords AFTER Page 3 (index > 2)
         // This prevents finding "BRIEFING" or "WEATHER" on the Page 1 Summary
-        if (i > 3 && window.cutoffPageIndex === -1) {
+        if (i > 2 && window.cutoffPageIndex === -1) {
             const upperText = textContent.toUpperCase();
             
             // Check for multiple patterns that indicate end of flight plan
@@ -767,6 +763,13 @@ function parseTimeString(timeStr) {
 
 window.runDownload = async function(mode = 'download') {
     if(!ofpPdfBytes) return;
+    // DEBUG: Check the byte size
+    console.log(`[DEBUG] ofpPdfBytes size: ${ofpPdfBytes.byteLength} bytes`);
+    
+    // Load and check
+    const sourcePdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
+    const totalPages = sourcePdf.getPageCount();
+    console.log(`[DEBUG] Loaded PDF has ${totalPages} pages`);
     try {
         // 1. Load the SOURCE PDF
         const sourcePdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
@@ -783,7 +786,7 @@ window.runDownload = async function(mode = 'download') {
         // 4. Copy the CORRECT pages in CORRECT order
         let pagesToCopy = [];
         
-        if (cutoff > 0 && cutoff < totalPages - 1) {
+        if (cutoff > 0 && cutoff <= totalPages - 1) {
             console.log(`[PDF DEBUG] Truncating... Keeping pages 0 to ${cutoff}`);
             
             // Copy pages 0 through cutoff (inclusive) in correct order
