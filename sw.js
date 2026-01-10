@@ -1,4 +1,4 @@
-const CACHE_NAME = 'efb-log-pro-v1.4.9'; 
+const CACHE_NAME = 'efb-log-pro-v1.4.10'; 
 
 const STATIC_ASSETS = [
   './pdf-lib.min.js',

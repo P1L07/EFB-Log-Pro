@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.9";
+const APP_VERSION = "1.4.10";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -776,35 +776,41 @@ window.runDownload = async function(mode = 'download') {
         const newPdf = await PDFLib.PDFDocument.create();
 
         // 3. Determine Cutoff
-        // We ensure cutoff is a valid number.
         const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
         
         console.log(`[PDF DEBUG] Source Pages: ${totalPages} | Cutoff Index: ${cutoff}`);
 
-        // 4. Calculate which pages to Copy
-        let lastPageIndexToCopy = totalPages - 1; // Default: copy all pages
-
-        if (cutoff > 0 && cutoff < totalPages) {
-            console.log(`[PDF DEBUG] Truncating... Keeping pages 0 to ${cutoff} (inclusive)`);
-            // If cutoff is 5 (page index 5), we want to keep pages 0,1,2,3,4,5.
-            // This means the last index we copy IS the cutoff index.
-            lastPageIndexToCopy = cutoff;
+        // 4. Copy the CORRECT pages in CORRECT order
+        let pagesToCopy = [];
+        
+        if (cutoff > 0 && cutoff < totalPages - 1) {
+            console.log(`[PDF DEBUG] Truncating... Keeping pages 0 to ${cutoff}`);
+            
+            // Copy pages 0 through cutoff (inclusive) in correct order
+            for (let i = 0; i <= cutoff; i++) {
+                pagesToCopy.push(i);
+            }
         } else {
-            console.log(`[PDF DEBUG] Keeping ALL pages (No valid cutoff).`);
+            console.log(`[PDF DEBUG] Keeping ALL pages (No valid cutoff or file already short).`);
+            // Copy all pages
+            for (let i = 0; i < totalPages; i++) {
+                pagesToCopy.push(i);
+            }
         }
 
-        // 5. Build the array of indices to copy: from 0 to lastPageIndexToCopy, inclusive.
-        const indicesToCopy = [];
-        for (let i = 0; i <= lastPageIndexToCopy; i++) { // Note: <= is correct here
-            indicesToCopy.push(i);
+        console.log(`[PDF DEBUG] Pages to copy indices: [${pagesToCopy}]`);
+
+        // 5. Perform the Copy - CRITICAL FIX HERE
+        // Use copyPages with ALL indices at once
+        const copiedPages = await newPdf.copyPages(sourcePdf, pagesToCopy);
+        console.log(`[PDF DEBUG] Copied ${copiedPages.length} pages`);
+        
+        // 6. Add pages to new PDF IN THE SAME ORDER
+        for (const page of copiedPages) {
+            newPdf.addPage(page);
         }
-        console.log(`[PDF DEBUG] Will copy indices: [${indicesToCopy}]`);
 
-        // 6. Perform the Copy
-        const copiedPages = await newPdf.copyPages(sourcePdf, indicesToCopy);
-        copiedPages.forEach(page => newPdf.addPage(page));
-
-        // 6. Embed Fonts into NEW PDF
+        // 7. Embed Fonts into NEW PDF
         const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
         const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
 
