@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.26";
+const APP_VERSION = "1.4.27";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -2151,7 +2151,6 @@ window.renderJourneyList = function() {
                 <td>${l['j-flt']}</td>
                 <td>${l['j-dep']} - ${l['j-dest']}</td>
                 <td style="${l.fdpAlert ? 'color:red; font-weight:bold;' : ''}">${displayFDP || '-'}</td>
-                <td style="${l.ccFdpAlert ? 'color:orange; font-weight:bold;' : ''}">${l.nightTime || '00:00'}</td>
                 
                 <td style="white-space: nowrap; text-align: right;">
                     <button onclick="moveLeg(${i}, -1)" class="btn-icon" ${!canMoveUp ? 'disabled style="opacity:0.3"' : ''} title="Move Up">
