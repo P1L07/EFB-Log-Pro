@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.16";
+const APP_VERSION = "1.4.22";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -194,8 +194,7 @@ async function runAnalysis(fileOrEvent) {
         const fileInput = document.getElementById('ofp-file-in');
         if (fileInput && fileInput.files.length > 0) {
             blob = fileInput.files[0];
-            
-            // CLEAR OLD DATA on new upload
+            // Force reset stored data on new manual upload
             window.savedWaypointData = [];
             localStorage.removeItem('efb_log_state'); 
         }
@@ -203,16 +202,14 @@ async function runAnalysis(fileOrEvent) {
 
     if (!blob) return;
 
-    // 2. CRITICAL: Update the Global Bytes Variable immediately
-    // This ensures PDFLib gets the fresh 52-page file, not a cached 5-page ghost.
-    ofpPdfBytes = await blob.arrayBuffer(); 
-    originalFileName = blob.name || "Logged_OFP.pdf";
+    // 2. GLOBAL VARIABLE UPDATE (Crucial!)
+    // We explicitly set window.ofpPdfBytes to ensure global scope sees the new file
+    window.ofpPdfBytes = await blob.arrayBuffer(); 
+    window.originalFileName = blob.name || "Logged_OFP.pdf";
 
-    // 3. Initialize Viewer (pdfjsLib)
-    // We use the SAME bytes we just loaded to ensure sync
-    const pdf = await pdfjsLib.getDocument(ofpPdfBytes).promise;
-    
-    console.log(`[ANALYSIS START] PDF Loaded. Total Pages: ${pdf.numPages}`);
+    // 3. Initialize Viewer
+    const pdf = await pdfjsLib.getDocument(window.ofpPdfBytes).promise;
+    console.log(`[ANALYSIS] New PDF Loaded. Total Pages: ${pdf.numPages}`);
 
     // --- VISIBILITY FIX ---
     if (!isAutoLoad) {
@@ -278,19 +275,6 @@ async function runAnalysis(fileOrEvent) {
         const content = await page.getTextContent();
         const items = content.items;
         const textContent = items.map(x=>x.str).join(' ');
-
-        // --- TRUNCATION LOGIC ---
-        // Only look for "End" keywords AFTER Page 3
-        if (i > 3 && window.cutoffPageIndex === -1) {
-            const upperText = textContent.toUpperCase();
-            if (upperText.includes("END OF ALTERNATE FLIGHT PLAN") ||
-                (upperText.includes("END") && upperText.includes("FLIGHT") && upperText.includes("PLAN")) || 
-                (upperText.includes("WEATHER") && upperText.includes("CHART")) ||
-                (upperText.includes("NOTAM") && upperText.includes("BRIEFING"))) {
-                window.cutoffPageIndex = i - 1; 
-                console.log("✓ Cutoff found at page index: " + window.cutoffPageIndex);
-            }
-        }
 
         // --- Page 1 Analysis ---
         if (i === 1) {
@@ -759,199 +743,146 @@ window.testPDFLib = async function() {
 };
 
 window.runDownload = async function(mode = 'download') {
-    if(!ofpPdfBytes) return;
-    
-    // Create a settings object for quality control
-    const QUALITY_SETTINGS = {
-        // Use JPEG compression with white background for smaller files
-        useJpeg: true,
-        // Quality settings per page type
-        qualities: {
-            summary: 0.95,    // Page 1 - needs to be readable
-            flightLog: 0.85,  // Pages 2-4 - flight log text
-            charts: 0.75,     // Pages 5+ - charts/weather (less critical)
-        },
-        // Resolution settings
-        dpi: {
-            summary: 150,     // Page 1 - high DPI
-            flightLog: 120,   // Pages 2-4 - medium DPI
-            charts: 96,       // Pages 5+ - standard DPI
-        }
-    };
+    // 1. Safety Check
+    if(!window.ofpPdfBytes) return alert("Please Upload the OFP PDF first.");
     
     try {
-        // 1. Load with pdfjsLib
-        const pdfjsDoc = await pdfjsLib.getDocument(ofpPdfBytes).promise;
-        const totalPages = pdfjsDoc.numPages;
+        // 2. Load the SOURCE PDF
+        const sourcePdf = await PDFLib.PDFDocument.load(window.ofpPdfBytes);
+        const totalPages = sourcePdf.getPageCount();
         
-        // 2. Determine cutoff
-        const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
-        const pagesToKeep = (cutoff >= 0 && cutoff < totalPages - 1) ? cutoff + 1 : totalPages;
+        console.log(`[DOWNLOAD] Source PDF has ${totalPages} pages.`);
         
-        console.log(`[PDF] Processing ${pagesToKeep} pages (of ${totalPages})`);
-        
-        // 3. Create PDF with optimized settings
+        // Safety Alert if the file is still the "ghost" file
+        if (totalPages < 10) {
+            if(!confirm(`WARNING: The loaded PDF only has ${totalPages} pages (it should be 50+). It might be corrupted. Do you want to continue?`)) return;
+        }
+
+        // 3. Create a NEW, CLEAN PDF (Cloning repairs internal structure)
         const newPdf = await PDFLib.PDFDocument.create();
         
-        // 4. Process each page with optimal settings
-        const pageInfo = [];
-        
-        for (let i = 1; i <= pagesToKeep; i++) {
-            const page = await pdfjsDoc.getPage(i);
-            const originalViewport = page.getViewport({ scale: 1.0 });
-            
-            // Determine page type for quality settings
-            let pageType = 'charts';
-            let scale = 1.0;
-            
-            if (i === 1) {
-                pageType = 'summary';
-                scale = 150 / 72; // Convert DPI to scale (72 DPI = 1.0 scale)
-            } else if (i >= 2 && i <= 4) {
-                pageType = 'flightLog';
-                scale = 120 / 72;
-            } else {
-                pageType = 'charts';
-                scale = 96 / 72;
-            }
-            
-            const viewport = page.getViewport({ scale });
-            
-            // Create canvas
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = Math.floor(viewport.width);
-            canvas.height = Math.floor(viewport.height);
-            
-            // White background for better JPEG compression
-            ctx.fillStyle = 'white';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Render page
-            await page.render({
-                canvasContext: ctx,
-                viewport: viewport,
-                background: 'rgba(255,255,255,1)'
-            }).promise;
-            
-            // Compress image
-            let imageData, image;
-            if (QUALITY_SETTINGS.useJpeg) {
-                const quality = QUALITY_SETTINGS.qualities[pageType];
-                imageData = canvas.toDataURL('image/jpeg', quality);
-                image = await newPdf.embedJpg(imageData);
-            } else {
-                imageData = canvas.toDataURL('image/png');
-                image = await newPdf.embedPng(imageData);
-            }
-            
-            // Add page
-            const newPage = newPdf.addPage([viewport.width, viewport.height]);
-            newPage.drawImage(image, {
-                x: 0,
-                y: 0,
-                width: viewport.width,
-                height: viewport.height
-            });
-            
-            // Store page info for annotation positioning
-            pageInfo.push({
-                pageIndex: i - 1,
-                scale: scale,
-                originalWidth: originalViewport.width,
-                renderedWidth: viewport.width,
-                type: pageType
-            });
-            
-            // Clean up
-            canvas.remove();
-            
-            // Log progress for large files
-            if (pagesToKeep > 10 && i % 5 === 0) {
-                console.log(`Processed ${i}/${pagesToKeep} pages...`);
-            }
+        // 4. Determine Pages to Copy
+        // We calculate exactly which page indices to copy [0, 1, 2, ... N]
+        let lastPageIndex = totalPages - 1; 
+        const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
+
+        // Truncation Logic
+        if (cutoff > 2 && cutoff < totalPages - 1) {
+             console.log(`[DOWNLOAD] Truncating: Keeping pages 1 to ${cutoff + 1}`);
+             lastPageIndex = cutoff;
+        } else {
+             console.log(`[DOWNLOAD] Keeping ALL ${totalPages} pages.`);
         }
-        
-        // 5. Add annotations with proper scaling
+
+        const indices = [];
+        for (let i = 0; i <= lastPageIndex; i++) indices.push(i);
+
+        // 5. Perform the Copy (Vector Method = Sharp Text)
+        const copiedPages = await newPdf.copyPages(sourcePdf, indices);
+        copiedPages.forEach(page => newPdf.addPage(page));
+
+        // 6. Embed Fonts
         const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
         const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
         const pages = newPdf.getPages();
-        
-        // Helper function to scale coordinates
-        const scaleCoord = (pageIndex, coord) => {
-            const info = pageInfo[pageIndex];
-            if (!info) return coord;
-            return coord * (info.renderedWidth / info.originalWidth);
-        };
-        
-        // Front Page annotations (Page 1)
+
+        // 7. iPad Rotation Fix
+        const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
+        if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
+
+        // ===============================================
+        // DRAWING PHASE (Sharp Text Overlay)
+        // ===============================================
+
+        // --- Front Page ---
         if (pages.length > 0) {
             const p0 = pages[0];
-            const pageScale = pageInfo[0]?.scale || 1.0;
             
-            // Draw front page items
+            // Header Items
             const frontItems = [ 
                 {id:'front-atis', offset:40, coord:frontCoords.atis}, 
                 {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
             ];
-            
             frontItems.forEach(f => {
                 const v = el(f.id)?.value;
-                if(f.coord && v) {
-                    p0.drawText(v.toUpperCase(), { 
-                        x: scaleCoord(0, f.coord.transform[4] + f.offset), 
-                        y: scaleCoord(0, f.coord.transform[5] + V_LIFT), 
-                        size: 12 * pageScale, 
-                        font: fontB 
-                    });
+                if(f.coord && v) p0.drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
+            });
+
+            // PIC Block & Reason
+            const picBlockText = el('view-pic-block')?.innerText || "";
+            if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
+                p0.drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
+            }
+            const reasonText = el('front-extra-reason')?.value || "";
+            if(frontCoords.reasonLabel && reasonText) {
+                p0.drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
+            }
+
+            // Altimeters
+            ['altm1','stby','altm2'].forEach(k => {
+                const v = el('front-'+k)?.value;
+                const coord = frontCoords[k];
+                if(coord && v) {
+                    p0.drawText(v, { x: coord.transform[4] + (k==='stby'?40:50), y: coord.transform[5] + V_LIFT, size: 12, font: fontB });
                 }
             });
-            
-            // Add other annotations similarly...
-        }
-        
-        // 6. Save with compression
-        const bytes = await newPdf.save({
-            useObjectStreams: true,
-            addDefaultPage: false,
-        });
-        
-        // 7. Further compress if needed
-        const compressedBytes = await compressPDF(bytes);
-        
-        const filename = originalFileName.replace(".pdf", "_Logged.pdf");
-        const fileSizeMB = compressedBytes.length / (1024 * 1024);
-        
-        console.log(`Final PDF size: ${fileSizeMB.toFixed(2)} MB`);
-        
-        if (fileSizeMB > 10) {
-            if (confirm(`PDF size is ${fileSizeMB.toFixed(1)} MB. This may be too large for email. Use lower quality settings?`)) {
-                // Option to re-run with lower quality
-                QUALITY_SETTINGS.qualities.summary = 0.85;
-                QUALITY_SETTINGS.qualities.flightLog = 0.75;
-                QUALITY_SETTINGS.qualities.charts = 0.65;
-                QUALITY_SETTINGS.dpi.summary = 120;
-                QUALITY_SETTINGS.dpi.flightLog = 96;
-                QUALITY_SETTINGS.dpi.charts = 72;
-                return; // Would need to re-run
+
+            // Signature
+            if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
+                try {
+                    const sigImageBase64 = signaturePad.toDataURL();
+                    const sigImage = await newPdf.embedPng(sigImageBase64);
+                    p0.drawImage(sigImage, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
+                } catch (sigError) { console.error("Signature Error:", sigError); }
             }
         }
+
+        // --- Waypoints (Flight Log) ---
+        const draw = (list, pre) => {
+            list.forEach((wp, i) => {
+                if (wp.isTakeoff) return;
+                
+                // Only draw if the page exists in our new document
+                if (wp.page >= 0 && wp.page < pages.length) {
+                    const page = pages[wp.page];
+                    const mainY = wp.y_anchor;
+                    
+                    const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
+                    const f = el(`${pre}-f-${i}`)?.value || "";
+                    const n = el(`${pre}-n-${i}`)?.value || "";
+                    const agl = el(`${pre}-agl-${i}`)?.value || ""; 
+
+                    if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
+                    if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
+                    if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                    if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
+                }
+            });
+        };
+        draw(waypoints, 'o'); 
+        draw(alternateWaypoints, 'a');
+
+        // ===============================================
+        // SAVE
+        // ===============================================
+        const bytes = await newPdf.save({ useObjectStreams: false });
         
-        // Download/Email
+        const filename = (window.originalFileName || "Logged_OFP.pdf").replace(".pdf", "_Logged.pdf");
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        
+
         if (mode === 'email' && isMobile) {
             const flt = el('j-flt')?.value || "FLT";
             const date = el('j-date')?.value || "DATE";
             const subject = `OFP: ${flt} ${date}`;
-            await sharePdf(compressedBytes, filename, subject, "Please find attached the OFP.");
+            await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
         } else {
-            downloadBlob(compressedBytes, filename);
+            downloadBlob(bytes, filename);
         }
         
     } catch (error) { 
-        console.error("Error:", error); 
-        alert("Error: " + error.message);
+        console.error(error); 
+        alert("Error saving PDF: " + error.message); 
     }
 };
 
@@ -1250,25 +1181,43 @@ window.recalcMaxFDP = function() {
     const sectors = Math.max(dailyLegs.length, 1);
 
     // 3. Helper function to calculate max FDP with sector reductions
-    const calculateMaxFDPWithSectors = (startMins) => {
+    const calculateMaxFDPWithSectors = (startMins, isCabinCrew = false) => {
         let maxFDP = 0;
-
+        
         // EASA Time Band Logic
-        if (startMins >= 360 && startMins <= 809) maxFDP = 780;
-        else if (startMins >= 810 && startMins <= 839) maxFDP = 765;
-        else if (startMins >= 840 && startMins <= 869) maxFDP = 750;
-        else if (startMins >= 870 && startMins <= 899) maxFDP = 735;
-        else if (startMins >= 900 && startMins <= 929) maxFDP = 720;
-        else if (startMins >= 930 && startMins <= 959) maxFDP = 705;
-        else if (startMins >= 960 && startMins <= 989) maxFDP = 690;
-        else if (startMins >= 990 && startMins <= 1019) maxFDP = 675;
-        else if (startMins >= 1020 || startMins <= 299) maxFDP = 660;
-        else if (startMins >= 300 && startMins <= 314) maxFDP = 720;
-        else if (startMins >= 315 && startMins <= 329) maxFDP = 735;
-        else if (startMins >= 330 && startMins <= 344) maxFDP = 750;
-        else if (startMins >= 345 && startMins <= 359) maxFDP = 765;
+        if (isCabinCrew) {
+            // CABIN CREW: 14 hours base
+            if (startMins >= 360 && startMins <= 809) maxFDP = 840;
+            else if (startMins >= 810 && startMins <= 839) maxFDP = 825;
+            else if (startMins >= 840 && startMins <= 869) maxFDP = 810;
+            else if (startMins >= 870 && startMins <= 899) maxFDP = 795;
+            else if (startMins >= 900 && startMins <= 929) maxFDP = 780;
+            else if (startMins >= 930 && startMins <= 959) maxFDP = 765;
+            else if (startMins >= 960 && startMins <= 989) maxFDP = 750;
+            else if (startMins >= 990 && startMins <= 1019) maxFDP = 735;
+            else if (startMins >= 1020 || startMins <= 299) maxFDP = 660;
+            else if (startMins >= 300 && startMins <= 314) maxFDP = 720;
+            else if (startMins >= 315 && startMins <= 329) maxFDP = 735;
+            else if (startMins >= 330 && startMins <= 344) maxFDP = 750;
+            else if (startMins >= 345 && startMins <= 359) maxFDP = 765;
+        } else {
+            // FLIGHT CREW: 13 hours base
+            if (startMins >= 360 && startMins <= 809) maxFDP = 780;
+            else if (startMins >= 810 && startMins <= 839) maxFDP = 765;
+            else if (startMins >= 840 && startMins <= 869) maxFDP = 750;
+            else if (startMins >= 870 && startMins <= 899) maxFDP = 735;
+            else if (startMins >= 900 && startMins <= 929) maxFDP = 720;
+            else if (startMins >= 930 && startMins <= 959) maxFDP = 705;
+            else if (startMins >= 960 && startMins <= 989) maxFDP = 690;
+            else if (startMins >= 990 && startMins <= 1019) maxFDP = 675;
+            else if (startMins >= 1020 || startMins <= 299) maxFDP = 660;
+            else if (startMins >= 300 && startMins <= 314) maxFDP = 720;
+            else if (startMins >= 315 && startMins <= 329) maxFDP = 735;
+            else if (startMins >= 330 && startMins <= 344) maxFDP = 750;
+            else if (startMins >= 345 && startMins <= 359) maxFDP = 765;
+        }
 
-        // Apply Sector Reductions
+        // Apply Sector Reductions (same for both)
         if (sectors === 3) {
             maxFDP -= 30; // 3 Sectors: -30 mins
         } 
@@ -1279,12 +1228,15 @@ window.recalcMaxFDP = function() {
             maxFDP -= 90; // 5+ Sectors: -90 mins
         }
 
+        // Ensure minimum 660 minutes (11 hours) for very late starts
+        if (maxFDP < 660) maxFDP = 660;
+
         return maxFDP;
     };
 
     // 4. Calculate for both FC and CC
-    const fcMax = calculateMaxFDPWithSectors(fcMins);
-    const ccMax = calculateMaxFDPWithSectors(ccMins);
+    const fcMax = calculateMaxFDPWithSectors(fcMins, false);
+    const ccMax = calculateMaxFDPWithSectors(ccMins, true);
 
     // 5. Update both fields
     safeSet('j-max-fdp', minsToTime(fcMax));
@@ -1294,7 +1246,45 @@ window.recalcMaxFDP = function() {
     if (ccMaxInput) {
         ccMaxInput.value = minsToTime(ccMax);
     }
+    
+    // 6. Update FDP alerts for all legs
+    updateAllLegFDPAlerts();
 };
+
+// Helper function to update FDP alerts for all legs
+function updateAllLegFDPAlerts() {
+    const fcStartStr = el('j-duty-start')?.value;
+    const ccStartStr = el('j-cc-duty-start')?.value;
+    const fcMaxStr = el('j-max-fdp')?.value;
+    const ccMaxStr = getCCMaxFDP();
+    
+    if (!fcStartStr || !ccStartStr) return;
+    
+    const fcStartMins = parseTimeString(fcStartStr);
+    const ccStartMins = parseTimeString(ccStartStr);
+    const fcLimit = parseTimeString(fcMaxStr || "13:00");
+    const ccLimit = parseTimeString(ccMaxStr || "14:00");
+    
+    dailyLegs.forEach((leg, index) => {
+        const onBlockStr = leg['j-in'];
+        if (onBlockStr) {
+            // Calculate FC FDP
+            let fcMins = parseTimeString(onBlockStr) - fcStartMins;
+            if (fcMins < 0) fcMins += 1440;
+            leg.fdp = minsToTime(fcMins);
+            leg.fdpAlert = (fcMins > fcLimit);
+            
+            // Calculate CC FDP
+            let ccMins = parseTimeString(onBlockStr) - ccStartMins;
+            if (ccMins < 0) ccMins += 1440;
+            leg.ccFdpAlert = (ccMins > ccLimit);
+        }
+    });
+    
+    // Re-render the journey list with updated alerts
+    renderJourneyList();
+}
+
 
 function minsToTime(m) {
     if(m<0) m+=1440;
@@ -1679,22 +1669,28 @@ window.addLeg = function() {
     }
 
     // ============================================================
-    // 2. FDP CHECK (BOTH FC AND CC)
+    // 2. FDP CHECK (BOTH FC AND CC) - FIXED VERSION
     // ============================================================
     const onBlock = el('j-in')?.value;
     let fdp = "", alertFdp = false, ccFdpAlert = false;
 
     if(onBlock && dutyStartTime !== null && dutyStartTime !== undefined) {
-        // Get FC duty start
+        // Get FC duty start - FIX: Use the actual start time from input, not dutyStartTime variable
         const fcStartStr = el('j-duty-start')?.value;
         const ccStartStr = el('j-cc-duty-start')?.value;
         
         if (fcStartStr) {
+            // FIX: Calculate from report time to THIS leg's block-in time
             let fcMins = parseTimeString(onBlock) - parseTimeString(fcStartStr);
             if (fcMins < 0) fcMins += 1440; 
             fdp = minsToTime(fcMins);
-            const fcLimit = parseTimeString(el('j-max-fdp')?.value || '13:00');
-            if(fcMins > fcLimit) alertFdp = true;
+            
+            // FIX: Use the correct max FDP value from input
+            const fcLimitStr = el('j-max-fdp')?.value;
+            if(fcLimitStr) {
+                const fcLimit = parseTimeString(fcLimitStr);
+                if(fcMins > fcLimit) alertFdp = true;
+            }
         }
         
         // Check cabin crew FDP
@@ -1703,8 +1699,11 @@ window.addLeg = function() {
             
             let ccMins = parseTimeString(onBlock) - parseTimeString(ccStartStr);
             if (ccMins < 0) ccMins += 1440; 
-            const ccLimit = parseTimeString(ccMaxFDPStr);
-            if(ccMins > ccLimit) ccFdpAlert = true;
+            
+            if(ccMaxFDPStr && ccMaxFDPStr !== "00:00") {
+                const ccLimit = parseTimeString(ccMaxFDPStr);
+                if(ccMins > ccLimit) ccFdpAlert = true;
+            }
         }
     }
 
@@ -1731,14 +1730,22 @@ window.addLeg = function() {
     renderJourneyList();
     validateInputs();
 
-    // Trigger logic to update Night Duty overlap now that we have an "In" time
-    calcDutyLogic(); 
+    // ============================================================
+    // 4. RECALCULATE MAX FDP FOR THE NEW SECTOR COUNT
+    // ============================================================
+    if (typeof recalcMaxFDP === 'function') {
+        setTimeout(() => {
+            recalcMaxFDP();
+        }, 100);
+    }
 
     // ============================================================
-    // 4. PREPARE NEXT LEG
+    // 5. PREPARE NEXT LEG
     // ============================================================
     const nextInitFuel = d['j-shut'];
     clearJourneyInputs(nextInitFuel);
+    
+    // Clear departure and destination for next leg
     safeSet('j-dep', '');   
     safeSet('j-dest', '');
     
@@ -2108,7 +2115,6 @@ window.modifyLeg = function(index) {
 };
 
 // Helper: Calculates the values based on a specific leg's data
-// Helper: Calculates the values based on a specific leg's data
 window.calculateDutyValues = function(std, flt, dep, dest) {
     if (!std) return { fc: "00:00", cc: "00:00", max: "00:00", ccMax: "00:00" };
 
@@ -2137,40 +2143,51 @@ window.calculateDutyValues = function(std, flt, dep, dest) {
     let ccStartMins = fcStartMins - ccDiff;
     if (ccStartMins < 0) ccStartMins += 1440;
 
-    // 5. Helper function to calculate max FDP based on start time
-    const calculateMaxFDP = (startMins) => {
-        let maxFDP = 780; // Base 13:00
+    // 5. Helper function to calculate max FDP based on start time (EASA TABLE)
+    const calculateMaxFDP = (startMins, isCabinCrew = false) => {
+        // CABIN CREW has different limits - 14 hours base instead of 13
+        let baseMax = isCabinCrew ? 840 : 780; // 14:00 for CC, 13:00 for FC
         
-        // EASA Table based on start time
-        if (startMins >= 360 && startMins <= 809) maxFDP = 780; // 06:00-13:29
-        else if (startMins >= 810 && startMins <= 839) maxFDP = 765;
-        else if (startMins >= 840 && startMins <= 869) maxFDP = 750;
-        else if (startMins >= 870 && startMins <= 899) maxFDP = 735;
-        else if (startMins >= 900 && startMins <= 929) maxFDP = 720;
-        else if (startMins >= 930 && startMins <= 959) maxFDP = 705;
-        else if (startMins >= 960 && startMins <= 989) maxFDP = 690;
-        else if (startMins >= 990 && startMins <= 1019) maxFDP = 675;
-        else if (startMins >= 1020 || startMins <= 299) maxFDP = 660; // Night
-        else if (startMins >= 300 && startMins <= 314) maxFDP = 720; // 05:00-05:14
-        else if (startMins >= 315 && startMins <= 329) maxFDP = 735; // 05:15-05:29
-        else if (startMins >= 330 && startMins <= 344) maxFDP = 750; // 05:30-05:44
-        else if (startMins >= 345 && startMins <= 359) maxFDP = 765; // 05:45-05:59
+        if (startMins >= 360 && startMins <= 809) baseMax = isCabinCrew ? 840 : 780; // 06:00-13:29
+        else if (startMins >= 810 && startMins <= 839) baseMax = isCabinCrew ? 825 : 765;
+        else if (startMins >= 840 && startMins <= 869) baseMax = isCabinCrew ? 810 : 750;
+        else if (startMins >= 870 && startMins <= 899) baseMax = isCabinCrew ? 795 : 735;
+        else if (startMins >= 900 && startMins <= 929) baseMax = isCabinCrew ? 780 : 720;
+        else if (startMins >= 930 && startMins <= 959) baseMax = isCabinCrew ? 765 : 705;
+        else if (startMins >= 960 && startMins <= 989) baseMax = isCabinCrew ? 750 : 690;
+        else if (startMins >= 990 && startMins <= 1019) baseMax = isCabinCrew ? 735 : 675;
+        else if (startMins >= 1020 || startMins <= 299) baseMax = isCabinCrew ? 660 : 660; // Both 11:00 for night
+        else if (startMins >= 300 && startMins <= 314) baseMax = isCabinCrew ? 720 : 720; // 05:00-05:14
+        else if (startMins >= 315 && startMins <= 329) baseMax = isCabinCrew ? 735 : 735; // 05:15-05:29
+        else if (startMins >= 330 && startMins <= 344) baseMax = isCabinCrew ? 750 : 750; // 05:30-05:44
+        else if (startMins >= 345 && startMins <= 359) baseMax = isCabinCrew ? 765 : 765; // 05:45-05:59
 
-        return maxFDP;
+        return baseMax;
     };
 
-    // 6. Calculate max FDP for both FC and CC (without sector reductions - those are applied in recalcMaxFDP)
-    const fcMaxFDP = calculateMaxFDP(fcStartMins);
-    const ccMaxFDP = calculateMaxFDP(ccStartMins);
+    // 6. Calculate max FDP for both FC and CC (without sector reductions)
+    const fcMaxFDP = calculateMaxFDP(fcStartMins, false);
+    const ccMaxFDP = calculateMaxFDP(ccStartMins, true);
 
     return {
         fc: minsToTime(fcStartMins),
         cc: minsToTime(ccStartMins),
-        max: minsToTime(fcMaxFDP),     // Flight Crew max FDP (base, no sector reduction)
-        ccMax: minsToTime(ccMaxFDP)    // Cabin Crew max FDP (base, no sector reduction)
+        max: minsToTime(fcMaxFDP),     // Flight Crew max FDP (base)
+        ccMax: minsToTime(ccMaxFDP)    // Cabin Crew max FDP (base)
     };
 };
 
+
+window.initializeDutyCalculations = function() {
+    // Recalculate everything when app loads or leg is added
+    if (dailyLegs.length > 0) {
+        const firstLeg = dailyLegs[0];
+        if (firstLeg['j-std']) {
+            calcDutyLogic();
+            recalcMaxFDP();
+        }
+    }
+};
 
 // ==========================================
 // 8. PDF GENERATION (JOURNEY LOG)
@@ -2280,7 +2297,13 @@ window.downloadJourneyLog = async function(mode = 'download') {
         const getFDP = (startMins) => {
             if(!onBlocksMins && onBlocksMins !== 0) return ""; 
             let diff = onBlocksMins - startMins;
-            if(diff < 0) diff += 1440; 
+            
+            // Handle midnight crossing properly
+            if (diff < 0) diff += 1440; 
+            
+            // If duty spans more than 24 hours (unlikely but handle)
+            if (diff > 1440) diff = diff % 1440;
+            
             return minsToTime(diff);
         };
 
@@ -2288,16 +2311,35 @@ window.downloadJourneyLog = async function(mode = 'download') {
         const getNightOverlap = (startMins) => {
             if(!onBlocksMins && onBlocksMins !== 0) return "00:00"; 
             
-            let endMins = onBlocksMins;
-            if(endMins < startMins) endMins += 1440;
-
-            const wStart = 1260; // 21:00 UTC
-            const wEnd = 1439;   // 23:59 UTC
+            // Night window: 21:00-05:59 UTC (1260 to 1439 and 0 to 359)
+            const nightStart1 = 1260; // 21:00
+            const nightEnd1 = 1439;   // 23:59
+            const nightStart2 = 0;    // 00:00
+            const nightEnd2 = 359;    // 05:59
             
             let overlap = 0;
-            overlap += Math.max(0, Math.min(endMins, wEnd) - Math.max(startMins, wStart));
-            overlap += Math.max(0, Math.min(endMins, wEnd + 1440) - Math.max(startMins, wStart + 1440));
-
+            
+            // Check first night window
+            if (startMins <= nightEnd1) {
+                const startInWindow = Math.max(startMins, nightStart1);
+                const endInWindow = Math.min(onBlocksMins, nightEnd1);
+                if (endInWindow > startInWindow) {
+                    overlap += (endInWindow - startInWindow);
+                }
+            }
+            
+            // Check second night window (next day)
+            if (onBlocksMins >= nightStart2) {
+                const startInWindow = Math.max(startMins, nightStart2 - 1440);
+                const endInWindow = Math.min(onBlocksMins, nightEnd2);
+                if (endInWindow > startInWindow) {
+                    overlap += (endInWindow - startInWindow);
+                }
+            }
+            
+            // Handle case where duty spans multiple days (very rare)
+            if (overlap < 0) overlap = 0;
+            
             return minsToTime(overlap);
         };
 
