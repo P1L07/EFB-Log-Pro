@@ -1,6 +1,6 @@
 (function() {
 
-const APP_VERSION = "1.4.12";
+const APP_VERSION = "1.4.13";
 
 // 1. Fix XSS vulnerability
 function sanitizeHTML(str) {
@@ -254,6 +254,16 @@ async function runAnalysis(fileOrEvent) {
             container.appendChild(canvas);
             await page.render({ canvasContext: context, viewport: viewport }).promise;
         }
+    }
+
+    const pdfjsDoc = await pdfjsLib.getDocument(ofpPdfBytes).promise;
+    console.log(`[DEBUG] pdfjsLib page count: ${pdfjsDoc.numPages}`);
+
+    try {
+        const pdfLibDoc = await PDFLib.PDFDocument.load(ofpPdfBytes);
+        console.log(`[DEBUG] PDFLib page count: ${pdfLibDoc.getPageCount()}`);
+    } catch (e) {
+        console.error(`[DEBUG] PDFLib load error: ${e.message}`);
     }
 
     // 5. RESET PARSING VARIABLES (Crucial for re-upload)
@@ -787,161 +797,90 @@ function parseTimeString(timeStr) {
         return h*60 + m;
     }
 
-window.runDownload = async function(mode = 'download') {
-    if(!ofpPdfBytes) return;
-    // DEBUG: Check the byte size
-    console.log(`[DEBUG] ofpPdfBytes size: ${ofpPdfBytes.byteLength} bytes`);
+window.testPDFLib = async function() {
+    const pdfLibDoc = await PDFLib.PDFDocument.load(ofpPdfBytes);
+    console.log(`PDFLib says: ${pdfLibDoc.getPageCount()} pages`);
     
-    // Load and check
-    const sourcePdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
-    const totalPages = sourcePdf.getPageCount();
-    console.log(`[DEBUG] Loaded PDF has ${totalPages} pages`);
-    try {
-        // 1. Load the SOURCE PDF
-        const sourcePdf = await PDFLib.PDFDocument.load(ofpPdfBytes);
-        const totalPages = sourcePdf.getPageCount();
-        
-        // 2. Create a NEW CLEAN PDF
-        const newPdf = await PDFLib.PDFDocument.create();
-
-        // 3. Determine Cutoff
-        const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
-        
-        console.log(`[PDF DEBUG] Source Pages: ${totalPages} | Cutoff Index: ${cutoff}`);
-
-        // 4. Copy the CORRECT pages in CORRECT order
-        let pagesToCopy = [];
-        
-        if (cutoff > 0 && cutoff <= totalPages - 1) {
-            console.log(`[PDF DEBUG] Truncating... Keeping pages 0 to ${cutoff}`);
-            
-            // Copy pages 0 through cutoff (inclusive) in correct order
-            for (let i = 0; i <= cutoff; i++) {
-                pagesToCopy.push(i);
-            }
-        } else {
-            console.log(`[PDF DEBUG] Keeping ALL pages (No valid cutoff or file already short).`);
-            // Copy all pages
-            for (let i = 0; i < totalPages; i++) {
-                pagesToCopy.push(i);
-            }
+    // Try to get each page
+    for (let i = 0; i < pdfLibDoc.getPageCount(); i++) {
+        try {
+            const page = pdfLibDoc.getPage(i);
+            console.log(`Page ${i} size: ${page.getWidth()}x${page.getHeight()}`);
+        } catch(e) {
+            console.log(`Page ${i} error: ${e.message}`);
         }
-
-        console.log(`[PDF DEBUG] Pages to copy indices: [${pagesToCopy}]`);
-
-        // 5. Perform the Copy - CRITICAL FIX HERE
-        // Use copyPages with ALL indices at once
-        const copiedPages = await newPdf.copyPages(sourcePdf, pagesToCopy);
-        console.log(`[PDF DEBUG] Copied ${copiedPages.length} pages`);
-        
-        // 6. Add pages to new PDF IN THE SAME ORDER
-        for (const page of copiedPages) {
-            newPdf.addPage(page);
-        }
-
-        // 7. Embed Fonts into NEW PDF
-        const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
-        const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
-
-        // 7. Get the New Pages to Draw On
-        const pages = newPdf.getPages();
-
-        // 8. iPad Rotation Fix
-        const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
-        if(!isIpadMode && pages.length > 0) pages[0].setRotation(PDFLib.degrees(0));
-
-        // ===============================================
-        // DRAWING PHASE (On the NEW PDF)
-        // ===============================================
-
-        // --- Front Page ---
-        if (pages.length > 0) {
-            const p0 = pages[0];
-            
-            const frontItems = [ 
-                {id:'front-atis', offset:40, coord:frontCoords.atis}, 
-                {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
-            ];
-            frontItems.forEach(f => {
-                const v = el(f.id)?.value;
-                if(f.coord && v) p0.drawText(v.toUpperCase(), { x: f.coord.transform[4] + f.offset, y: f.coord.transform[5] + V_LIFT, size: 12, font: fontB });
-            });
-
-            const picBlockText = el('view-pic-block')?.innerText || "";
-            if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
-                p0.drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
-            }
-            const reasonText = el('front-extra-reason')?.value || "";
-            if(frontCoords.reasonLabel && reasonText) {
-                p0.drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
-            }
-
-            ['altm1','stby','altm2'].forEach(k => {
-                const v = el('front-'+k)?.value;
-                const coord = frontCoords[k];
-                if(coord && v) {
-                    p0.drawText(v, { x: coord.transform[4] + (k==='stby'?40:50), y: coord.transform[5] + V_LIFT, size: 12, font: fontB });
-                }
-            });
-
-            if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
-                try {
-                    const sigImageBase64 = signaturePad.toDataURL();
-                    const sigImage = await newPdf.embedPng(sigImageBase64);
-                    p0.drawImage(sigImage, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
-                } catch (sigError) { console.error("Signature Error:", sigError); }
-            }
-        }
-
-        // --- Waypoints ---
-        const draw = (list, pre) => {
-            list.forEach((wp, i) => {
-                if (wp.isTakeoff) return;
-                
-                // CRITICAL: We check if the page exists in our NEW document
-                if (wp.page >= 0 && wp.page < pages.length) {
-                    const page = pages[wp.page];
-                    const mainY = wp.y_anchor;
-                    
-                    const a = el(`${pre}-a-${i}`)?.value.replace(':','') || "";
-                    const f = el(`${pre}-f-${i}`)?.value || "";
-                    const n = el(`${pre}-n-${i}`)?.value || "";
-                    const agl = el(`${pre}-agl-${i}`)?.value || ""; 
-
-                    if(wp.eto) page.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
-                    if(a) page.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
-                    if(f) page.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                    if(n) page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                    if(agl) page.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                }
-            });
-        };
-        draw(waypoints, 'o'); 
-        draw(alternateWaypoints, 'a');
-
-        // ===============================================
-        // SAVE
-        // ===============================================
-        const bytes = await newPdf.save(); 
-        
-        const filename = originalFileName.replace(".pdf", "_Logged.pdf");
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-        if (mode === 'email' && isMobile) {
-            const flt = el('j-flt')?.value || "FLT";
-            const date = el('j-date')?.value || "DATE";
-            const subject = `OFP: ${flt} ${date}`;
-            await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
-        } else {
-            downloadBlob(bytes, filename);
-        }
-        
-    } catch (error) { 
-        console.error(error); 
-        alert("Error saving PDF: " + error.message); 
     }
 };
 
+window.runDownload = async function(mode = 'download') {
+    if(!ofpPdfBytes) return;
+    
+    try {
+        // 1. Load with pdfjsLib (which reads all pages correctly)
+        const pdfjsDoc = await pdfjsLib.getDocument(ofpPdfBytes).promise;
+        const totalPages = pdfjsDoc.numPages;
+        console.log(`[DEBUG] Original PDF has ${totalPages} pages`);
+        
+        // 2. Determine cutoff
+        const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
+        const pagesToKeep = (cutoff >= 0 && cutoff < totalPages - 1) ? cutoff + 1 : totalPages;
+        
+        console.log(`[DEBUG] Keeping first ${pagesToKeep} pages`);
+        
+        // 3. Create new PDF with PDFLib
+        const newPdf = await PDFLib.PDFDocument.create();
+        
+        // 4. For each page to keep, get it from pdfjsLib and add to PDFLib
+        for (let i = 1; i <= pagesToKeep; i++) { // pdfjsLib uses 1-based page numbers
+            const page = await pdfjsDoc.getPage(i);
+            
+            // Get page viewport
+            const viewport = page.getViewport({ scale: 1.0 });
+            
+            // Create a canvas to render the page
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            
+            // Render page to canvas
+            await page.render({
+                canvasContext: context,
+                viewport: viewport
+            }).promise;
+            
+            // Convert canvas to image and embed in PDFLib
+            const imageData = canvas.toDataURL('image/png');
+            const pngImage = await newPdf.embedPng(imageData);
+            
+            // Add page with correct dimensions
+            const newPage = newPdf.addPage([viewport.width, viewport.height]);
+            newPage.drawImage(pngImage, {
+                x: 0,
+                y: 0,
+                width: viewport.width,
+                height: viewport.height
+            });
+            
+            // Clean up
+            canvas.remove();
+        }
+        
+        // 5. Now add your annotations (drawText calls) to the new PDF
+        const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
+        
+        // ... rest of your drawing code ...
+        
+        // 6. Save
+        const bytes = await newPdf.save();
+        // ... download logic ...
+        
+    } catch(error) { 
+        console.error("Error in runDownload:", error); 
+        alert("Error: " + error.message);
+    }
+};
 window.runCalc = function() {
     const atd = el('ofp-atd-in')?.value;
     
