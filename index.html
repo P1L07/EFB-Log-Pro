@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>EFB Log Pro</title>
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-title" content="EFB Log Pro">
+<link rel="apple-touch-icon" href="icon.png">
+
+<style>
+
+/* Large Centered Upload Button Overlay */
+.upload-overlay {
+    position: fixed;
+    top: 0;
+    left: 200px; /* Sidebar width */
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9998;
+    backdrop-filter: blur(5px);
+    animation: fadeIn 0.3s ease;
+}
+
+/* Always keep Paper tab content hidden by default when no OFP */
+.tool-section#section-paper .panel {
+    position: relative;
+}
+
+.upload-overlay.hidden {
+    display: none;
+}
+
+/* Tablet/Mobile responsive */
+@media (max-width: 768px) {
+    .upload-overlay {
+        left: 0;
+    }
+}
+
+/* Empty state upload - inside panels */
+.empty-state-upload {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    gap: 20px;
+    padding: 40px;
+}
+
+.empty-state-upload .upload-center-btn {
+    width: 150px;
+    height: 150px;
+    font-size: 36px;
+    animation: pulse 2s infinite;
+}
+
+/* Center button styling */
+.upload-center-btn {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), #5ac8fa);
+    color: white;
+    border: none;
+    font-size: 48px;
+    cursor: pointer;
+    box-shadow: 0 10px 40px rgba(0, 132, 255, 0.4);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.3s ease;
+}
+
+.upload-center-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 0 15px 50px rgba(0, 132, 255, 0.6);
+}
+
+.upload-center-btn span {
+    font-size: 16px;
+    font-weight: bold;
+    margin-top: 5px;
+}
+
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(0, 132, 255, 0.7); }
+    70% { box-shadow: 0 0 0 20px rgba(0, 132, 255, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 132, 255, 0); }
+}
+
+/* Signature */
+.signature-container {
+    width: 100%;
+    margin-top: 10px;
+}
+
+#sig-canvas {
+    width: 100%;
+    height: 200px; /* Fixed height for the pad */
+    background: var(--input); /* Matches your theme */
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    touch-action: none; /* Prevents iPad from scrolling while signing */
+}
+
+/* Drag & Drop Highlight */
+.nav-btn.drag-over {
+    border: 2px dashed #fff !important;
+    background: var(--success) !important;
+    transform: scale(1.02);
+    transition: all 0.2s;
+}
+
+/* CSS CORE */
+:root {
+    --bg:#000; --sidebar:#111; --panel:#1c1c1e; --accent:#0a84ff;
+    --text:#fff; --dim:#8e8e93; --border:#38383a; --input:#2c2c2e;
+    --success:#32d74b; --error:#ff453a;
+}
+[data-theme="light"] {
+    --bg:#f2f2f7; --sidebar:#fff; --panel:#fff; --accent:#007aff;
+    --text:#000; --dim:#636366; --border:#d1d1d6; --input:#f2f2f7;
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+
+/* LAYOUT */
+.efb-wrapper {
+    display: grid;
+    grid-template-columns: 200px minmax(0,1fr);
+    height: 100dvh;
+    overflow: hidden;
+}
+
+@supports not (height: 100dvh) {
+    .efb-wrapper {
+        height: 100vh;
+    }
+}
+
+/* SIDEBAR */
+.sidebar {
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    padding: 20px 15px;
+    display: flex;
+    flex-direction: column;
+
+    width: 200px;
+    min-width: 200px;
+    max-width: 200px;
+
+    height: 100%;
+    overflow: hidden;
+}
+
+
+.sidebar {
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* FIXED COMPONENTS (Never scroll) */
+.sidebar-header, #nav-status-block {
+    flex-shrink: 0; 
+}
+
+/* SCROLLABLE NAV AREA (Only scrolls if buttons don't fit) */
+.nav-menu {
+    flex-grow: 1;
+    overflow-y: auto;
+    background: transparent; /* Ensures it matches the sidebar exactly */
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    
+    /* Hide scrollbar while allowing scroll */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+.nav-menu::-webkit-scrollbar { display: none; }
+
+.nav-btn {
+    padding: 14px 16px;
+    border: none;
+    border-radius: 12px;
+    background: none;
+    color: var(--dim);
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    width: 100%;
+    transition: all 0.2s;
+    flex-shrink: 0; /* Prevents buttons from squishing */
+}
+
+.theme-toggle {
+    padding: 14px 16px;
+    border: none;
+    border-radius: 12px;
+    background: none;
+    color: var(--dim);
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    width: 100%;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.nav-btn.active {
+    background: var(--accent);
+    color: #fff;
+}
+
+
+.sidebar-footer {
+    flex-shrink: 0;
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.sidebar-header {
+    color: var(--accent);
+    font-weight: 800;
+    font-size: 18px;
+    margin-bottom: 15px;
+}
+
+/* MAIN */
+.main-content{height:100%;overflow-y:auto;padding:30px;-webkit-overflow-scrolling:touch}
+
+/* PANELS */
+.tool-section{display:none;padding-bottom:80px}
+.tool-section.active{display:block;animation:fadeIn .3s}
+.panel{background:var(--bg);border-radius:16px;padding:20px;margin-bottom:25px;border:1px solid var(--border)}
+.panel h3{margin:0 0 15px;font-size:10px;color:var(--accent);text-transform:uppercase;letter-spacing:1px}
+
+/* FORM */
+.grid-row{display:grid;gap:15px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+.grid-row-10{display:grid;gap:10px;grid-template-columns:repeat(10,1fr)} 
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase}
+.input{background:var(--input);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:10px;font-size:16px;width:100%;outline:none}
+.input:focus{border-color:var(--accent)}
+.input[readonly]{color:var(--accent);font-weight:bold}
+select.input { appearance: none; -webkit-appearance: none; }
+
+/* FORCE COMPACT INPUTS ON IPAD */
+input[type="time"], input[type="number"], input[type="text"] {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+}
+
+/* Specific fix for table inputs */
+table .input {
+    padding: 4px !important;
+    height: 30px !important;
+    font-size: 12px !important;
+    min-width: 0 !important;
+}
+
+/* DATA BOX */
+.data-box {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--accent);
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    padding: 0;
+    background: none;
+    border: none;
+}
+
+/* TEXT AREAS */
+.text-area {
+    background: var(--input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 14px;
+    border-radius: 10px;
+    font-size: 12px;
+    width: 100%;
+    outline: none;
+    resize: vertical;
+    min-height: 200px;
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* TABLES */
+.table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch; 
+}
+.table-container input.input {
+    background: var(--input); /* Changed to var(--input) to look better in both modes */
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+.table-container input.input:focus {
+    border-color: var(--accent);
+}
+
+table{width:100%;min-width:650px;border-collapse:collapse}
+th{text-align:left;color:var(--accent);font-size:11px;padding:15px;border-bottom:1px solid var(--border)}
+td{padding:12px;border-bottom:1px solid var(--border);font-size:14px}
+
+
+/* CHECKLIST */
+.checklist-item{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);font-size:14px}
+.status-ok{color:var(--success)} .status-fail{color:var(--error)}
+
+/* BUTTONS */
+.btn-group{display:flex;gap:15px;margin-top:20px}
+.btn{flex:1;padding:16px;border:none;border-radius:14px;font-weight:800;text-transform:uppercase;color:#fff;cursor:pointer;opacity:1}
+.btn-save{background:var(--success)} .btn-email{background:var(--accent)} .btn-danger{background:var(--error)}
+
+canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px solid var(--border)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+.btn-icon {
+    background: #e5e5ea; /* Light grey iOS style */
+    border: none;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #333;
+    margin: 0 2px;
+}
+
+.btn-action {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    color: white;
+}
+
+.modify { background-color: #007aff; } /* Apple Blue */
+.delete { background-color: #ff3b30; } /* Apple Red */
+
+/* Added styles for the Navigation Status block */
+#nav-status-block {
+    flex-shrink: 0;
+    padding: 10px 5px; /* Aligned with buttons */
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    background: transparent; /* No more ugly white box */
+}
+#time-status-nav, #fuel-status-nav {
+    font-size: 13px;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+</style>
+</head>
+<body>
+
+<div id="upload-overlay" class="upload-overlay hidden">
+    <button class="upload-center-btn" onclick="document.getElementById('ofp-file-in').click()">
+        📁
+        <span>Upload OFP</span>
+    </button>
+    <div style="position: absolute; bottom: 50px; color: var(--dim); text-align: center; width: 100%;">
+        <p>Drop PDF file anywhere or click to browse</p>
+        <p style="font-size: 12px; margin-top: 5px;">Support questions janri.kallas@gmail.com</p>
+    </div>
+</div>
+
+<div class="efb-wrapper">
+    <aside class="sidebar">
+        <div class="sidebar-header">EFB Log Pro <span id="app-version-display"></span></div>
+    <div class="nav-menu">
+        <button class="nav-btn active" data-tab="summary">Flight Summary</button>
+        <button class="nav-btn" data-tab="weights-fuel">Weights & Fuel</button>
+        <button class="nav-btn" data-tab="log">Flight Log</button>
+        <button class="nav-btn" data-tab="altn">Alternate Route</button>
+        <button class="nav-btn" data-tab="weather">Weather</button>
+        <button class="nav-btn" data-tab="notams">NOTAMS</button>
+        <button class="nav-btn" data-tab="paper">Paper Flight Plan</button>
+        <button class="nav-btn" data-tab="journey">Journey Log</button>
+        <button class="nav-btn" data-tab="confirm">OFP Confirm</button>
+    </div>
+        <div class="sidebar-footer">
+            <button class="theme-toggle" onclick="toggleTheme()">Day/Night</button>
+        </div>
+    </aside>
+<input type="file" id="ofp-file-in" style="display:none">
+
+    <main class="main-content">
+        <section id="section-summary" class="tool-section active">
+
+            <div class="panel">
+                <div class="grid-row">
+                    <div class="field"><label>Flight</label><div id="view-flt" class="data-box">-</div></div>
+                    <div class="field"><label>Reg</label><div id="view-reg" class="data-box">-</div></div>
+                    <div class="field"><label>Date</label><div id="view-date" class="data-box">-</div></div>
+                    <div class="field"><label>Dep</label><div id="view-dep" class="data-box">-</div></div>
+                    <div class="field"><label>Dest</label><div id="view-dest" class="data-box">-</div></div>
+                    <div class="field"><label>CI</label><div id="view-ci" class="data-box">-</div></div>
+                    <div class="field"><label>ALTN</label><div id="view-altn" class="data-box">-</div></div>
+                    <div class="field"><label>ERA</label><div id="view-era-text" class="data-box">-</div></div>
+                    <div class="field"><label>STD</label><div id="view-std-text" class="data-box">-</div></div>
+                    <div class="field"><label>ETD</label><div id="view-etd-text" class="data-box">-</div></div>
+                    <div class="field"><label>STA</label><div id="view-sta-text" class="data-box">-</div></div>
+                    <div class="field"><label>ETA</label><div id="view-eta-text" class="data-box">-</div></div>
+                    <div class="field"><label>ALTN2</label><div id="view-altn2" class="data-box">-</div></div>
+                </div>
+                <div class="field">
+                    <div id="view-crz-wind-temp" class="data-box" style="font-size:14px;color:var(--text);font-weight:normal">-</div>
+                    <div id="view-seats-stn-jmp" class="data-box" style="font-size:14px;color:var(--text);font-weight:normal">-</div>
+                </div>
+                <div class="field" style="margin-top:15px"><label>DEST ROUTE</label><div id="view-dest-route" class="data-box" style="font-size:14px;color:var(--text);font-weight:normal">-</div></div>
+                <div class="field" style="margin-top:15px"><label>ALTN ROUTE</label><div id="view-altn-route" class="data-box" style="font-size:14px;color:var(--text);font-weight:normal">-</div></div>
+            </div>
+
+            <div class="panel">
+                <div class="grid-row">
+                    <div class="field"><label>ATIS</label><input id="front-atis" class="input"></div>
+                    <div class="field"><label>ATC Clearance</label><input id="front-atc" class="input"></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>ALTIMETER CHECK</h3>
+                <div class="grid-row">
+                    <div class="field"><label>CPT</label><input id="front-altm1" class="input" type="tel" maxlength="4" oninput="validateAltimeter(this)" pattern="\d*"></div>
+                    <div class="field"><label>STBY</label><input id="front-stby" class="input" type="tel" maxlength="4" oninput="validateAltimeter(this)" pattern="\d*"></div>
+                    <div class="field"><label>FO</label><input id="front-altm2" class="input" type="tel" maxlength="4" oninput="validateAltimeter(this)" pattern="\d*"></div>
+                </div>
+            </div>
+        </section>
+
+<section id="section-weights-fuel" class="tool-section">
+    <div class="panel">
+        <div class="grid-row" style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:15px">
+            <div class="field"><label>MTOW</label><div id="view-mtow" class="data-box">-</div></div>
+            <div class="field"><label>TOW</label><div id="view-tow" class="data-box">-</div></div>
+            <div class="field"><label>MZFW</label><div id="view-mzfw" class="data-box">-</div></div>
+            <div class="field"><label>ZFW</label><div id="view-zfw" class="data-box">-</div></div>
+            <div class="field"><label>MLW</label><div id="view-mlw" class="data-box">-</div></div>
+            <div class="field"><label>LW</label><div id="view-lw" class="data-box">-</div></div>
+            <div class="field"><label>MPLD</label><div id="view-mpld" class="data-box">-</div></div>
+            <div class="field"><label>PLD</label><div id="view-pld" class="data-box">-</div></div>
+            <div class="field"><label>FCAP</label><div id="view-fcap" class="data-box">-</div></div>
+            <div class="field"><label>DOW</label><div id="view-dow" class="data-box">-</div></div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead><tr><th>Item</th><th>Time</th><th>Fuel (kg)</th><th>Remarks</th></tr></thead>
+                <tbody id="fuel-tbody">
+                    <tr><td colspan="4" style="text-align:center;color:gray;padding:20px">Upload OFP to load fuel data</td></tr>
+                </tbody>
+            </table>
+        </div>
+    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+    <div class="field">
+        <label>Extra Fuel (kg)</label>
+        <input id="front-extra-kg" class="input" readonly style="background:transparent; border:none; color:var(--dim); font-weight:bold; padding-left:0;">
+    </div>
+    
+    <div class="field">
+        <label>Reason for Extra</label>
+        <input id="front-extra-reason" class="input">
+    </div>
+</div>
+
+    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+        <div class="field">
+            <label>Burn Increase per 1T</label>
+            <div id="view-burn-inc" class="data-box">32 kg</div>
+        </div>
+        
+        <div class="field">
+            <label>PIC Block Fuel</label>
+            <input id="view-pic-block" class="input" type="tel" pattern="\d*" 
+                style="color:var(--accent); font-weight:bold; font-size:18px;" 
+                oninput="calculateExtraFromTotal()">
+        </div>
+    </div>
+</section>
+
+<section id="section-log" class="tool-section">
+    <div class="panel" style="margin-top: 0; ">
+        <div class="table-container">
+            <input type="time" id="ofp-atd-in" style="display: none">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="min-width:60px">WAYPOINT</th>
+                        <th style="width:50px">AWY</th>
+                        <th style="width:40px">FL</th>
+                        <th style="width:40px">TRK</th>
+                        <th style="width:60px">WIND</th>
+                        <th style="width:40px">TAS</th>
+                        <th style="width:40px">GS</th>
+                        <th style="min-width:100px">NOTES</th>
+                        <th>ETO</th>
+                        <th>ATO</th>
+                        <th>EFOB</th>
+                        <th>AFOB</th>
+                        <th>ACT FL</th>
+                    </tr>
+                </thead>
+                <tbody id="ofp-tbody"></tbody>
+            </table>
+        </div>
+        <p style="text-align:center; font-size:11px; color:gray; margin-top:10px;">
+            Last Waypoint inputs will auto-fill Journey Log.
+        </p>
+    </div>
+</section>
+
+<section id="section-altn" class="tool-section">
+    <div class="panel">
+        <h3>Alternate Route</h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="min-width:60px">WAYPOINT</th>
+                        <th style="width:50px">AWY</th>
+                        <th style="width:40px">FL</th>
+                        <th style="width:40px">TRK</th>
+                        <th style="width:60px">WIND</th>
+                        <th style="width:40px">TAS</th>
+                        <th style="width:40px">GS</th>
+                        <th style="min-width:100px">NOTES</th>
+                        <th>ETO</th>
+                        <th>ATO</th>
+                        <th>EFOB</th>
+                        <th>AFOB</th>
+                        <th>ACT FL</th>
+                    </tr>
+                </thead>
+                <tbody id="altn-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+</section>
+        <section id="section-weather" class="tool-section">
+            <div class="panel">
+                <h3>Weather Information</h3>
+                <div class="field">
+                    <textarea id="view-weather" class="text-area" readonly>Available in the next version. Use Paper Flight Plan Tab</textarea>
+                </div>
+            </div>
+        </section>
+
+        <section id="section-notams" class="tool-section">
+            <div class="panel">
+                <h3>NOTAMS Information</h3>
+                <div class="field">
+                    <textarea id="view-notams" class="text-area" readonly>Available in the next version. Use Paper Flight Plan Tab</textarea>
+                </div>
+            </div>
+        </section>
+<section id="section-paper" class="tool-section">
+    <div class="panel" style="height: 85vh; padding: 0; overflow: hidden; background: #525659;">
+        <div id="pdf-render-container" style="height: 100%; overflow-y: auto; padding: 20px; text-align: center; display: none;">
+            <!-- PDF will be rendered here -->
+        </div>
+        <div id="pdf-fallback" style="display:flex; justify-content:center; align-items:center; height:100%; color:#ccc; flex-direction:column;">
+            <div id="empty-state-upload" class="empty-state-upload" style="display: none;">
+                <div style="font-size: 48px; color: #ccc;">📄</div>
+                <h3 style="color: #ccc;">No OFP Uploaded</h3>
+                <p style="color: #ccc; text-align: center; max-width: 300px;">
+                    Upload your Operational Flight Plan to view it here
+                </p>
+                <button class="upload-center-btn" onclick="document.getElementById('ofp-file-in').click()">
+                    📁
+                    <span>Upload</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</section>
+        <section id="section-journey" class="tool-section">
+            <input type="hidden" id="j-flt"><input type="hidden" id="j-reg"><input type="hidden" id="j-date">
+            <input type="hidden" id="j-dep"><input type="hidden" id="j-dest"><input type="hidden" id="j-altn">
+            <input type="hidden" id="j-cc-max-fdp-hidden" value="00:00">
+            <input type="hidden" id="j-std">
+            <input type="hidden" id="j-flt-alt" class="input">
+
+            <div id="leg-input-form" style="display: block;">
+                <div class="panel">
+                    <div class="grid-row">
+                        <div class="field"><label>Off Block</label><input type="time" id="j-out" class="input"></div>
+                        <div class="field"><label>Takeoff</label><input type="time" id="j-off" class="input"style="color:var(--accent); font-weight:bold"></div>
+                        <div class="field"><label>Landing</label><input type="time" id="j-on" class="input" style="color:var(--accent); font-weight:bold"></div>
+                        <div class="field"><label>On Block</label><input type="time" id="j-in" class="input"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                        <div class="field"><label>Block Time</label><div id="j-block" class="data-box">00:00</div></div>
+                        <div class="field"><label>Flight Time</label><div id="j-flight" class="data-box">00:00</div></div>
+                        <div class="field"><label>Night Block</label><input type="time" id="j-night" class="input"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                        <div class="field"><label>TO</label><input type="number" id="j-to" class="input"></div>
+                        <div class="field"><label>LDG</label><input type="number" id="j-ldg" class="input"></div>
+                        <div class="field"><label>Manual/Automatic</label><input id="j-ldg-type" class="input"></div>
+                        <div class="field"><label>DETAILS</label><input id="j-ldg-detail" class="input"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                        <div class="field"><label>Init</label><input type="number" id="j-init" class="input"></div>
+                        <div class="field"><label>Uplift Weight</label><input type="number" id="j-uplift-w" class="input"></div>
+                        <div class="field"><label>Uplift Vol</label><input type="number" id="j-uplift-vol" class="input"></div>
+                        <div class="field"><label>Calc Ramp</label><div id="j-calc-ramp" class="data-box">0</div></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px">
+                        <div class="field"><label>Act Ramp</label><input type="number" id="j-act-ramp" class="input"></div>
+                        <div class="field"><label>Shutdown</label><input type="number" id="j-shut" class="input" style="color:var(--accent); font-weight:bold"></div>
+                        <div class="field"><label>Trip Burn</label><div id="j-burn" class="data-box">0</div></div>
+                        <div class="field"><label>Discrepancy</label><div id="j-disc" class="data-box">0</div></div>
+                        <div class="field"><label>Slip</label><input type="number" id="j-slip" class="input"></div>
+                        <div class="field"><label>Slip2</label><input type="number" id="j-slip-2" class="input"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                        <div class="field"><label>ADL</label><input id="j-adl" class="input" type="number"></div>
+                        <div class="field"><label>CHL</label><input id="j-chl" class="input" type="number"></div>
+                        <div class="field"><label>INF</label><input id="j-inf" class="input" type="number"></div>
+                        <div class="field"><label>Cargo</label><input id="j-cargo" class="input" type="number"></div>
+                        <div class="field"><label>Mail</label><input id="j-mail" class="input" type="number"></div>
+                        <div class="field"><label>Bag</label><input id="j-bag" class="input" type="number"></div>
+                    </div>
+                    <div class="grid-row" style="margin-top:15px">
+                        <div class="field"><label>ZFW</label><input type="number" id="j-zfw" class="input" type="number"></div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-email" onclick="addLeg()">+ Add Leg</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>Day Summary</h3>
+                <div class="table-container" style="margin-bottom:10px">
+                    <table>
+                        <thead>
+                            <tr><th>#</th><th>Flt No</th><th>Route</th><th>FDP</th></tr>
+                        </thead>
+                        <tbody id="journey-list-body">
+                            <tr><td colspan="5" style="text-align:center; color:gray; padding:20px;">No legs.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+
+<h3>Duty Settings & Crew</h3>
+<div class="grid-row" style="margin-bottom:10px">
+    <div class="field">
+        <label>FC Report Time(AUTO)</label>
+        <input type="time" id="j-duty-start" class="input" style="color:var(--accent); font-weight:bold;"> 
+    </div>
+
+    <div class="field">
+        <label>CC Report Time(AUTO)</label>
+        <input type="time" id="j-cc-duty-start" class="input" style="color:var(--accent); font-weight:bold;">
+    </div>
+
+    <div class="field">
+        <label>Max FDP(AUTO)</label>
+        <input type="time" id="j-max-fdp" class="input" style="color:var(--accent); font-weight:bold;">
+    </div>
+</div>
+
+<div class="grid-row" style="margin-top:15px;" style="margin-bottom:10px;">
+    <div class="field">
+        <label># Flight Crew(AUTO)</label>
+        <input type="number" id="j-fc-count" class="input" value="2" min="1" max="4">
+    </div>
+    <div class="field">
+        <label># Cabin Crew(AUTO)</label>
+        <input type="number" id="j-cc-count" class="input" value="4" min="0" max="10">
+    </div>
+    </div>
+<div class="panel" style="margin-top:15px;">
+    <div class="field" margin-top:10px;>
+        <label>Upload Journey Log</label>
+        <input type="file" id="journey-log-file" class="input" accept=".pdf">
+    </div>
+    <p style="font-size:12px;color:var(--dim);margin-top:10px;">
+        Upload the official journey log PDF template. Data will be filled into this template.
+    </p>
+</div>
+<div class="btn-group" style="margin-top: 20px;">
+    <button class="btn btn-save" onclick="downloadJourneyLog('email')">
+        Finalize Journey Log
+    </button>
+</div>
+<div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
+    <label style="color:var(--text); font-size:14px;">PDF Rows:</label>
+    <select id="j-template-rows" style="padding:8px; border-radius:8px; background:var(--input); color:var(--text); border:1px solid var(--border);">
+        <option value="3">3 Rows</option>
+        <option value="4" selected>4 Rows (Standard)</option>
+        <option value="6">6 Rows</option>
+    </select>
+</div>
+            </div>
+        </section>
+
+        <section id="section-confirm" class="tool-section">
+            <div class="panel">
+                <h3>Crosscheck Before Saving OFP</h3>
+                <div id="validation-list" style="margin-bottom: 10px;"></div>
+            
+                <h3>Signature</h3>
+                <div class="signature-container">
+                    <canvas id="sig-canvas"></canvas>
+                    <div style="margin-top: 10px;">
+                        <button type="button" onclick="clearSignature()" class="btn btn-email">Clear Signature</button>
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button id="btn-send-ofp" class="btn btn-save" onclick="DownloadOFP('email')" disabled>Finalize OFP</button>
+                </div>
+            </div>
+            <div id="download-progress-container" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; backdrop-filter: blur(3px);">
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); min-width: 300px; text-align: center;">
+                    <h3 style="margin-bottom: 20px; color: #007aff;">Processing OFP</h3>
+                    <div style="margin-bottom: 15px;">
+                        <progress id="download-progress" value="0" max="100" style="width: 100%; height: 20px;"></progress>
+                    </div>
+                    <p id="download-status" style="color: #666; font-size: 14px;">Starting...</p>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js');
+  }
+</script>
+<script src="pdf-lib.min.js"></script>
+<script src="pdf.min.js"></script>
+<script src="signature_pad.umd.min.js"></script>
+<script src="efb-log-pro.js?v=1.3"></script>
+</body>
+</html>
