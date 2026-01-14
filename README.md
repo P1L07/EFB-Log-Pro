@@ -117,7 +117,7 @@ This application operates entirely **Client-Side**:
 3. **Export Options:**
    - **Modified OFP:** Annotated PDF with all pilot inputs
    - **Journey Log:** Completed log with all legs
-   - **Email:** Automatic sharing to ops@airastana.com
+   - **Email:** Automatic sharing via email
 4. **End of Day Reset:** System prompts to clear for next day
 
 ## Compatibility & Performance
