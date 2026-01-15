@@ -4899,20 +4899,38 @@ const EXPECTED_SW_HASH = '44f5e591d43438fb861f7bf4dc2a9d5469c5101d440a5b40eaaccc
             const savedState = localStorage.getItem('efb_log_state');
             if (savedState) {
                 try {
-                    const state = JSON.parse(savedState);
+                    // Try to decrypt first (since state is encrypted)
+                    let state;
+                    try {
+                        state = await decryptData(savedState);
+                    } catch (decryptError) {
+                        // If decryption fails, try parsing as plain JSON (legacy fallback)
+                        console.log("Decryption failed, trying plain JSON:", decryptError);
+                        state = JSON.parse(savedState);
+                    }
+                    
                     const newState = {
                         dailyLegs: state.dailyLegs || [],
                         dutyStartTime: state.dutyStartTime || null,
                         inputs: {} 
                     };
+                    
                     // Keep Duty Inputs
                     if (state.inputs) {
                         ['j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count'].forEach(key => {
                             if (state.inputs[key]) newState.inputs[key] = state.inputs[key];
                         });
                     }
-                    localStorage.setItem('efb_log_state', JSON.stringify(newState));
-                } catch(e) { console.error(e); }
+                    
+                    // Encrypt and save the new state
+                    const encryptedNewState = await encryptData(newState);
+                    localStorage.setItem('efb_log_state', encryptedNewState);
+                    
+                } catch(e) { 
+                    console.error("Error processing saved state:", e);
+                    // If there's an error, start fresh
+                    localStorage.removeItem('efb_log_state');
+                }
             }
         } else {
             // 12.1 FULL RESET (End of Day)
