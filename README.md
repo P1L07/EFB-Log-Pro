@@ -55,17 +55,18 @@ This application operates entirely **Client-Side**:
 - **PWA:** Service Worker for offline capability and installation
 
 ## Airline-Specific Implementation
-
+- **FDP Calculations:** Based on Kazakhstan CARS with sector reductions
+- **Night Duty:** 21:00-23:59 UTC (02:00-04:59 local KZ time)
+- **Streamlined Calculations:** Optimized for high-frequency operations
+  
 ### Air Astana (KZR/KC) Rules
 - **Reporting Times:** 90 minutes before STD for international, 75 minutes for domestic
 - **Cabin Crew:** Reports 15 minutes before flight crew
-- **FDP Calculations:** Based on Kazakhstan CARS with sector reductions
-- **Night Duty:** 21:00-23:59 UTC (02:00-04:59 local KZ time)
 
 ### FlyArystan (AYN/FS) Rules
 - **Reporting Times:** 75 minutes before STD for international, 60 minutes for domestic
 - **Crew Coordination:** Flight and cabin crew report simultaneously
-- **Streamlined Calculations:** Optimized for high-frequency operations
+
 
 ## Usage Guide
 
