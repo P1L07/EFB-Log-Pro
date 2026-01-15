@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "1.3";
+const APP_VERSION = "1.4";
 const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
 const ENCRYPTION_ALGO = {
     name: 'AES-GCM',
