@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "1.4";
+const APP_VERSION = "1.5";
 const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
 const ENCRYPTION_ALGO = {
     name: 'AES-GCM',
@@ -10,7 +10,8 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '44f5e591d43438fb861f7bf4dc2a9d5469c5101d440a5b40eaacccb91faa31aa';
+const EXPECTED_SW_HASH = '1cc1e284cf62c93949a26b89a9d90902046a2ad73ed68a4e9d52912318bef490';
+const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
 // ==========================================
 // 1. CONFIGURATION & UPDATE LOGIC
@@ -579,9 +580,14 @@ const EXPECTED_SW_HASH = '44f5e591d43438fb861f7bf4dc2a9d5469c5101d440a5b40eaaccc
     }
     
     // Add a pre-verification check before registering
-    async function preVerifyServiceWorker() {
+async function preVerifyServiceWorker() {
+    try {
+        let response;
+        let fromCache = false;
+        
+        // Try to fetch from network first
         try {
-            const response = await fetch('sw.js', {
+            response = await fetch('sw.js', {
                 cache: 'no-store',
                 headers: {
                     'Cache-Control': 'no-cache'
@@ -589,33 +595,79 @@ const EXPECTED_SW_HASH = '44f5e591d43438fb861f7bf4dc2a9d5469c5101d440a5b40eaaccc
             });
             
             if (!response.ok) throw new Error('Failed to fetch service worker');
+        } catch (networkError) {
+            console.log('Network fetch failed, device may be offline:', networkError);
             
-            const swText = await response.text();
-            
-            // Calculate hash
-            const encoder = new TextEncoder();
-            const data = encoder.encode(swText);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            const calculatedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            
-            if (calculatedHash !== EXPECTED_SW_HASH) {
-                console.error('Service worker integrity check failed');
-                throw new Error('Service worker has been modified');
+            // Check if we have a cached hash for offline verification
+            const cachedHashData = localStorage.getItem(SW_HASH_STORAGE_KEY);
+            if (cachedHashData) {
+                try {
+                    const { hash, timestamp, version } = JSON.parse(cachedHashData);
+                    
+                    // Check if cache is not too old (e.g., less than 30 days)
+                    const cacheAge = Date.now() - timestamp;
+                    const MAX_CACHE_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
+                    
+                    if (cacheAge < MAX_CACHE_AGE && hash === EXPECTED_SW_HASH) {
+                        console.log('Using cached service worker hash for offline verification');
+                        return true; // Accept cached verification
+                    } else {
+                        console.log('Cached hash is expired or invalid');
+                    }
+                } catch (e) {
+                    console.log('Failed to parse cached hash:', e);
+                }
             }
             
-            return true;
-        } catch (error) {
-            console.error('Service worker verification failed:', error);
+            // If we get here, we can't verify
+            const shouldContinue = confirm(
+                'Cannot verify service worker while offline.\n\n' +
+                'Continue without service worker verification?\n\n' +
+                'Note: Some offline features may not work properly.'
+            );
             
-            // Ask user if they want to continue without verification
-            const shouldContinue = confirm(`Service worker verification failed: ${error.message}\n\nContinue without service worker?`);
             if (shouldContinue) {
                 return false; // Don't register service worker
             }
-            throw error;
+            throw new Error('Service worker verification failed: Device is offline');
         }
+        
+        // We have a response, calculate hash
+        const swText = await response.text();
+        const encoder = new TextEncoder();
+        const data = encoder.encode(swText);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const calculatedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        
+        // Cache the hash for future offline use
+        try {
+            localStorage.setItem(SW_HASH_STORAGE_KEY, JSON.stringify({
+                hash: calculatedHash,
+                timestamp: Date.now(),
+                version: APP_VERSION
+            }));
+        } catch (e) {
+            console.log('Failed to cache service worker hash:', e);
+        }
+        
+        if (calculatedHash !== EXPECTED_SW_HASH) {
+            console.error('Service worker integrity check failed');
+            throw new Error('Service worker has been modified');
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('Service worker verification failed:', error);
+        
+        // Ask user if they want to continue without verification
+        const shouldContinue = confirm(`Service worker verification failed: ${error.message}\n\nContinue without service worker?`);
+        if (shouldContinue) {
+            return false; // Don't register service worker
+        }
+        throw error;
     }
+}
     
     // Pre-verify before registering
     preVerifyServiceWorker().then(shouldRegister => {
@@ -2523,8 +2575,6 @@ const EXPECTED_SW_HASH = '44f5e591d43438fb861f7bf4dc2a9d5469c5101d440a5b40eaaccc
             // Get the fixed scale from quality setting
             let fixedScale = qualityScales[pdfQuality] || 1.0;
             
-            console.log(`PDF Quality Setting: ${pdfQuality}, Fixed Scale: ${fixedScale}`);
-            
             // Load PDF document
             const pdf = await pdfjsLib.getDocument(pdfBytes).promise;
             const totalPages = pdf.numPages;
@@ -2560,8 +2610,6 @@ const EXPECTED_SW_HASH = '44f5e591d43438fb861f7bf4dc2a9d5469c5101d440a5b40eaaccc
             // Always ensure minimum readable scale (100% for readability)
             const MIN_SCALE = 1.0; // Changed from 0.8 to 1.0 for better readability
             scale = Math.max(scale, MIN_SCALE);
-            
-            console.log(`PDF Rendering: Quality=${pdfQuality}, FixedScale=${fixedScale}, ContainerWidth=${containerWidth}px, PageWidth=${pageWidth}px, MaxScale=${maxScaleForContainer.toFixed(2)}, FinalScale=${scale.toFixed(2)}`);
             
             // Create a loading progress indicator
             const progressDiv = document.createElement('div');
