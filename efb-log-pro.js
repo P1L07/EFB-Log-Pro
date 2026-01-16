@@ -5213,7 +5213,7 @@ async function preVerifyServiceWorker() {
         
         if (!raw) {
             // Try unencrypted fallback
-            raw = localStorage.getItem('efb_log_state_plain');
+            raw = localStorage.getItem('efb_log_state_fallback');
             isEncrypted = false;
             
             if (!raw) return;
@@ -5228,7 +5228,7 @@ async function preVerifyServiceWorker() {
                 } catch (decryptError) {
                     console.error("Decryption failed:", decryptError);
                     // Try unencrypted fallback
-                    raw = localStorage.getItem('efb_log_state_plain');
+                    raw = localStorage.getItem('efb_log_state_fallback');
                     if (raw) {
                         state = JSON.parse(raw);
                         isEncrypted = false;
@@ -5306,7 +5306,7 @@ async function preVerifyServiceWorker() {
             // If corrupted, clear storage
             if (e.message && (e.message.includes('corrupted') || e.message.includes('decrypt') || e.message.includes('JSON'))) {
                 localStorage.removeItem('efb_log_state');
-                localStorage.removeItem('efb_log_state_plain');
+                localStorage.removeItem('efb_log_state_fallback');
                 console.log("Corrupted data detected. Storage has been cleared.");
             }
         }
