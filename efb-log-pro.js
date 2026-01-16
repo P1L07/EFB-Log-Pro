@@ -1152,6 +1152,7 @@ async function preVerifyServiceWorker() {
                 window.ofpPdfBytes = await savedPdfBlob.arrayBuffer();
                 window.originalFileName = savedPdfBlob.name || "Logged_OFP.pdf"; 
                 // Then run analysis with the PDF Blob
+                await loadState();
                 await runAnalysis(savedPdfBlob); 
             } else {
                 // If no PDF, just load the text inputs from LocalStorage
@@ -5290,6 +5291,7 @@ async function preVerifyServiceWorker() {
             'btn-view-audit': viewAuditLog,
             'btn-export-data': exportAllData,
             'btn-factory-reset': confirmFactoryReset,
+            'btn-recover-data': recoverLostData,
         };
         
         Object.entries(settingsButtons).forEach(([id, handler]) => {
