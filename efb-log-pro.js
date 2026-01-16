@@ -5885,4 +5885,15 @@ async function preVerifyServiceWorker() {
         }
     });
 
+    window.addEventListener('pagehide', () => {
+        saveState();
+    });
+
+    // 2. Save on Tab Switch
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            saveState();
+        }
+    });
+
 })();
