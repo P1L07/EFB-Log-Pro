@@ -17,6 +17,162 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 // 1. CONFIGURATION & UPDATE LOGIC
 // ==========================================
 
+    window.addEventListener('DOMContentLoaded', function() {
+        // 1. Initialize pdfFallbackElement
+        pdfFallbackElement = document.getElementById('pdf-fallback');
+        
+        // 2. Check initial OFP state
+        if (window.ofpPdfBytes) {
+            setOFPLoadedState(true);
+        } else {
+            setOFPLoadedState(false);
+        }
+        
+        // 3. Add event listener for file input change to update OFP state
+        const fileInput = document.getElementById('ofp-file-in');
+        if (fileInput) {
+            fileInput.addEventListener('change', function() {
+                setOFPLoadedState(true);
+            });
+        }
+        
+        // 4. Add drag and drop functionality for the overlay
+        const overlay = document.getElementById('upload-overlay');
+        const ofpFileInput = document.getElementById('ofp-file-in');
+        
+        if (overlay && ofpFileInput) {
+            // Drag enter/over
+            ['dragenter', 'dragover'].forEach(eventName => {
+                overlay.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    overlay.style.background = 'rgba(0, 132, 255, 0.3)';
+                }, false);
+            });
+            
+            // Drag leave
+            ['dragleave', 'drop'].forEach(eventName => {
+                overlay.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    overlay.style.background = 'rgba(0, 0, 0, 0.9)';
+                }, false);
+            });
+            
+            // Drop
+            overlay.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    ofpFileInput.files = files;
+                    ofpFileInput.dispatchEvent(new Event('change'));
+                }
+            }, false);
+        }
+        
+        // 5. Initialize theme on page load
+        const savedTheme = localStorage.getItem('data-theme');
+        const html = document.documentElement;
+        const themeButton = document.querySelector('.theme-toggle');
+        
+        if (savedTheme) {
+            // Apply saved theme
+            html.setAttribute('data-theme', savedTheme);
+            
+            // Update button text and active state
+            if (themeButton) {
+                themeButton.textContent = savedTheme === 'dark' ? 'Day Mode' : 'Night Mode';
+            }
+        } else {
+            // Default to light theme if no saved preference
+            html.setAttribute('data-theme', 'light');
+            if (themeButton) {
+                themeButton.textContent = 'Night Mode';
+            }
+        }
+        
+        // 6. Initialize tab navigation
+        initializeTabNavigation();
+        
+        // 7. Initial update for upload button visibility
+        updateUploadButtonVisibility();
+        
+        // 8. Add time input masks
+        addTimeInputMasks();
+        
+        // 9. Initialize signature pad if on confirm tab
+        setTimeout(() => {
+            const canvas = document.getElementById('sig-canvas');
+            if (canvas) {
+                const ratio = Math.max(window.devicePixelRatio || 1, 1);
+                canvas.width = canvas.offsetWidth * ratio;
+                canvas.height = canvas.offsetHeight * ratio;
+                canvas.getContext("2d").scale(ratio, ratio);
+                
+                signaturePad = new SignaturePad(canvas, {
+                    backgroundColor: 'rgba(0,0,0,0)',
+                    penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+                });
+                
+                // Restore saved signature if exists
+                if (savedSignatureData) {
+                    signaturePad.fromDataURL(savedSignatureData, { ratio: ratio });
+                }
+                
+                // Update save button state
+                updateSaveButtonState();
+            }
+        }, 100);
+        
+        setTimeout(() => {
+            initializeSettingsTab();
+        }, 1500);
+    
+        // Auto-save settings when changed
+        ['auto-lock-time', 'pdf-quality',].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.addEventListener('change', saveSettings);
+            }
+        });
+
+        // Activity tracking
+        if (sessionStorage.getItem('efb_authenticated') === 'true') {
+            setupActivityTracking();
+            resetAutoLockTimer();
+        }
+    });
+
+    window.addEventListener('beforeunload', () => {
+        // Remove all event listeners
+    });
+
+    // Trigger Save on any input change (wait 500ms before saving to save performance)
+    window.addEventListener('input', (e) => {
+        if(window.saveTimeout) clearTimeout(window.saveTimeout);
+        window.saveTimeout = setTimeout(() => saveState(), 500);
+    });
+
+    window.addEventListener('resize', function() {
+        if (signaturePad) {
+            const canvas = document.getElementById('sig-canvas');
+            canvas.width = canvas.offsetWidth;
+            signaturePad.clear();
+        }
+    });
+
+    window.addEventListener('pagehide', () => {
+        saveState();
+    });
+
+    // 2. Save on Tab Switch
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            saveState();
+        }
+    });
+
     function verifyUpdateOrigin(registration) {
         // During initial installation, registration.active might be null
         const scriptURL = registration.active ? registration.active.scriptURL : registration.scope || '';
@@ -5739,161 +5895,5 @@ async function preVerifyServiceWorker() {
 // ==========================================
 // 15. EVENT LISTENERS
 // ==========================================
-
-    window.addEventListener('DOMContentLoaded', function() {
-        // 1. Initialize pdfFallbackElement
-        pdfFallbackElement = document.getElementById('pdf-fallback');
-        
-        // 2. Check initial OFP state
-        if (window.ofpPdfBytes) {
-            setOFPLoadedState(true);
-        } else {
-            setOFPLoadedState(false);
-        }
-        
-        // 3. Add event listener for file input change to update OFP state
-        const fileInput = document.getElementById('ofp-file-in');
-        if (fileInput) {
-            fileInput.addEventListener('change', function() {
-                setOFPLoadedState(true);
-            });
-        }
-        
-        // 4. Add drag and drop functionality for the overlay
-        const overlay = document.getElementById('upload-overlay');
-        const ofpFileInput = document.getElementById('ofp-file-in');
-        
-        if (overlay && ofpFileInput) {
-            // Drag enter/over
-            ['dragenter', 'dragover'].forEach(eventName => {
-                overlay.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    overlay.style.background = 'rgba(0, 132, 255, 0.3)';
-                }, false);
-            });
-            
-            // Drag leave
-            ['dragleave', 'drop'].forEach(eventName => {
-                overlay.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    overlay.style.background = 'rgba(0, 0, 0, 0.9)';
-                }, false);
-            });
-            
-            // Drop
-            overlay.addEventListener('drop', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const files = e.dataTransfer.files;
-                if (files.length > 0) {
-                    ofpFileInput.files = files;
-                    ofpFileInput.dispatchEvent(new Event('change'));
-                }
-            }, false);
-        }
-        
-        // 5. Initialize theme on page load
-        const savedTheme = localStorage.getItem('data-theme');
-        const html = document.documentElement;
-        const themeButton = document.querySelector('.theme-toggle');
-        
-        if (savedTheme) {
-            // Apply saved theme
-            html.setAttribute('data-theme', savedTheme);
-            
-            // Update button text and active state
-            if (themeButton) {
-                themeButton.textContent = savedTheme === 'dark' ? 'Day Mode' : 'Night Mode';
-            }
-        } else {
-            // Default to light theme if no saved preference
-            html.setAttribute('data-theme', 'light');
-            if (themeButton) {
-                themeButton.textContent = 'Night Mode';
-            }
-        }
-        
-        // 6. Initialize tab navigation
-        initializeTabNavigation();
-        
-        // 7. Initial update for upload button visibility
-        updateUploadButtonVisibility();
-        
-        // 8. Add time input masks
-        addTimeInputMasks();
-        
-        // 9. Initialize signature pad if on confirm tab
-        setTimeout(() => {
-            const canvas = document.getElementById('sig-canvas');
-            if (canvas) {
-                const ratio = Math.max(window.devicePixelRatio || 1, 1);
-                canvas.width = canvas.offsetWidth * ratio;
-                canvas.height = canvas.offsetHeight * ratio;
-                canvas.getContext("2d").scale(ratio, ratio);
-                
-                signaturePad = new SignaturePad(canvas, {
-                    backgroundColor: 'rgba(0,0,0,0)',
-                    penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
-                });
-                
-                // Restore saved signature if exists
-                if (savedSignatureData) {
-                    signaturePad.fromDataURL(savedSignatureData, { ratio: ratio });
-                }
-                
-                // Update save button state
-                updateSaveButtonState();
-            }
-        }, 100);
-        
-        setTimeout(() => {
-            initializeSettingsTab();
-        }, 1500);
-    
-        // Auto-save settings when changed
-        ['auto-lock-time', 'pdf-quality',].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.addEventListener('change', saveSettings);
-            }
-        });
-
-        // Activity tracking
-        if (sessionStorage.getItem('efb_authenticated') === 'true') {
-            setupActivityTracking();
-            resetAutoLockTimer();
-        }
-    });
-
-    window.addEventListener('beforeunload', () => {
-        // Remove all event listeners
-    });
-
-    // Trigger Save on any input change (wait 500ms before saving to save performance)
-    window.addEventListener('input', (e) => {
-        if(window.saveTimeout) clearTimeout(window.saveTimeout);
-        window.saveTimeout = setTimeout(() => saveState(), 500);
-    });
-
-    window.addEventListener('resize', function() {
-        if (signaturePad) {
-            const canvas = document.getElementById('sig-canvas');
-            canvas.width = canvas.offsetWidth;
-            signaturePad.clear();
-        }
-    });
-
-    window.addEventListener('pagehide', () => {
-        saveState();
-    });
-
-    // 2. Save on Tab Switch
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-            saveState();
-        }
-    });
 
 })();
