@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "1.6";
+const APP_VERSION = "1.7";
 const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
 const ENCRYPTION_ALGO = {
     name: 'AES-GCM',
@@ -5190,18 +5190,24 @@ async function preVerifyServiceWorker() {
 
         // 3. Encrypt and save
         try {
-        const encryptedState = await encryptData(state);
-        localStorage.setItem('efb_log_state', encryptedState);
-        
-        // CRITICAL: Always save unencrypted fallback for iPad compatibility
-        const plainState = JSON.stringify(state);
-        localStorage.setItem('efb_log_state_fallback', plainState);
-            
-        } catch (error) {
-            console.error("Failed to save encrypted state:", error);
-            // Emergency fallback
             const plainState = JSON.stringify(state);
             localStorage.setItem('efb_log_state_fallback', plainState);
+            // Also save to the legacy key just in case
+            localStorage.setItem('efb_log_state_plain', plainState);
+        } catch (e) {
+            console.error("Fallback save failed (Quota exceeded?)", e);
+        }
+
+        // 3. Try Encrypted Save (Async)
+        // If this fails or gets killed by iOS, we already have the fallback above.
+        try {
+            // Check if crypto is actually available (often restricted in simple HTTP PWA contexts)
+            if (window.crypto && window.crypto.subtle) {
+                const encryptedState = await encryptData(state);
+                localStorage.setItem('efb_log_state', encryptedState);
+            }
+        } catch (error) {
+            console.warn("Encryption skipped or failed (using fallback):", error);
         }
     }
 
@@ -5330,46 +5336,6 @@ async function preVerifyServiceWorker() {
             updateAlternateETOs();
         }
     }
-
-    window.recoverLostData = async function() {
-    if (!confirm("This will attempt to recover any lost data. Continue?")) return;
-    
-    // Try all storage methods
-    const recoveryMethods = [
-        { key: 'efb_log_state', type: 'encrypted' },
-        { key: 'efb_log_state_fallback', type: 'unencrypted' },
-        { key: 'efb_log_state_plain', type: 'legacy' }
-    ];
-    
-    for (const method of recoveryMethods) {
-        try {
-            const data = localStorage.getItem(method.key);
-            if (data) {
-                let state;
-                if (method.type === 'encrypted') {
-                    state = await decryptData(data);
-                } else {
-                    state = JSON.parse(data);
-                }
-                
-                if (state && state.inputs) {
-                    // Restore inputs
-                    Object.keys(state.inputs).forEach(id => {
-                        if (state.inputs[id]) safeSet(id, state.inputs[id]);
-                    });
-                    
-                    alert(`Recovered data from ${method.type} storage`);
-                    return;
-                }
-            }
-        } catch (e) {
-            console.log(`Recovery from ${method.key} failed:`, e);
-        }
-    }
-    
-    alert("No recoverable data found");
-    };
-
 // ==========================================
 // 13. PDF STORAGE (IndexedDB)
 // ==========================================
