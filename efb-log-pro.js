@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "1.5";
+const APP_VERSION = "1.6";
 const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
 const ENCRYPTION_ALGO = {
     name: 'AES-GCM',
@@ -10,7 +10,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '1cc1e284cf62c93949a26b89a9d90902046a2ad73ed68a4e9d52912318bef490';
+const EXPECTED_SW_HASH = '120fd1126d072afd30fc85d8624abe81c2752b679c94e51bfdda09abf4cb2778';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
 // ==========================================
