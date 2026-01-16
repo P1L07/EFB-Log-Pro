@@ -3818,7 +3818,7 @@ async function preVerifyServiceWorker() {
         
         // Format with day indicator if needed
         if (dayOffset > 0) {
-            return `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')} (+${dayOffset}d)`;
+            return `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')}`;
         }
         
         return `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')}`;
@@ -5033,17 +5033,18 @@ async function preVerifyServiceWorker() {
 
         // 3. Encrypt and save
         try {
-            const encryptedState = await encryptData(state);
-            localStorage.setItem('efb_log_state', encryptedState);
+        const encryptedState = await encryptData(state);
+        localStorage.setItem('efb_log_state', encryptedState);
+        
+        // CRITICAL: Always save unencrypted fallback for iPad compatibility
+        const plainState = JSON.stringify(state);
+        localStorage.setItem('efb_log_state_fallback', plainState);
             
-            // Remove old unencrypted data if it exists
-            localStorage.removeItem('efb_log_state_plain');
         } catch (error) {
             console.error("Failed to save encrypted state:", error);
-            // Emergency fallback (not encrypted)
+            // Emergency fallback
             const plainState = JSON.stringify(state);
-            localStorage.setItem('efb_log_state_plain', plainState);
-            console.warn("Saved unencrypted fallback");
+            localStorage.setItem('efb_log_state_fallback', plainState);
         }
     }
 
@@ -5172,6 +5173,45 @@ async function preVerifyServiceWorker() {
             updateAlternateETOs();
         }
     }
+
+    window.recoverLostData = async function() {
+    if (!confirm("This will attempt to recover any lost data. Continue?")) return;
+    
+    // Try all storage methods
+    const recoveryMethods = [
+        { key: 'efb_log_state', type: 'encrypted' },
+        { key: 'efb_log_state_fallback', type: 'unencrypted' },
+        { key: 'efb_log_state_plain', type: 'legacy' }
+    ];
+    
+    for (const method of recoveryMethods) {
+        try {
+            const data = localStorage.getItem(method.key);
+            if (data) {
+                let state;
+                if (method.type === 'encrypted') {
+                    state = await decryptData(data);
+                } else {
+                    state = JSON.parse(data);
+                }
+                
+                if (state && state.inputs) {
+                    // Restore inputs
+                    Object.keys(state.inputs).forEach(id => {
+                        if (state.inputs[id]) safeSet(id, state.inputs[id]);
+                    });
+                    
+                    alert(`Recovered data from ${method.type} storage`);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.log(`Recovery from ${method.key} failed:`, e);
+        }
+    }
+    
+    alert("No recoverable data found");
+    };
 
 // ==========================================
 // 13. PDF STORAGE (IndexedDB)
@@ -5556,6 +5596,52 @@ async function preVerifyServiceWorker() {
             showToast('Export failed: ' + error.message, 'error');
         }
     }
+
+    // Try data recovery
+    window.recoverLostData = async function() {
+        const confirmed = await showConfirmModal(
+            'Data Recovery Mode',
+            '⚠️ WARNING: This will attempt to recover any lost data.<br>' +
+            '<br>Continue?',
+            'error'
+        );
+        
+        if (confirmed) {
+        // Try all storage methods
+        const recoveryMethods = [
+            { key: 'efb_log_state', type: 'encrypted' },
+            { key: 'efb_log_state_fallback', type: 'unencrypted' },
+            { key: 'efb_log_state_plain', type: 'legacy' }
+        ];
+        
+        for (const method of recoveryMethods) {
+            try {
+                const data = localStorage.getItem(method.key);
+                if (data) {
+                    let state;
+                    if (method.type === 'encrypted') {
+                        state = await decryptData(data);
+                    } else {
+                        state = JSON.parse(data);
+                    }
+                    
+                    if (state && state.inputs) {
+                        // Restore inputs
+                        Object.keys(state.inputs).forEach(id => {
+                            if (state.inputs[id]) safeSet(id, state.inputs[id]);
+                        });
+                        
+                        alert(`Recovered data from ${method.type} storage`);
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.log(`Recovery from ${method.key} failed:`, e);
+            }
+        }
+        }
+        alert("No recoverable data found");
+    };
 
     // Factory reset
     async function confirmFactoryReset() {
