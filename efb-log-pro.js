@@ -142,6 +142,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             setupActivityTracking();
             resetAutoLockTimer();
         }
+        loadState();
     });
 
     window.addEventListener('beforeunload', () => {
@@ -1111,6 +1112,7 @@ async function preVerifyServiceWorker() {
     let dutyStartTime = null;
     let recalcTimeout, syncTimeout, cruiseTimeout;
     let autoLockTimer = null;
+    let isLoaded = false;
     let lastActivityTime = Date.now();
     let waypointTableCache = {
         waypoints: [],
@@ -5163,6 +5165,7 @@ async function preVerifyServiceWorker() {
 
     // Save Inputs
     async function saveState() {
+        if (!isLoaded) return;
         // 1. Capture the "User Inputs" from the DOM
         const userInputs = waypoints.map((wp, i) => ({
             ato: el(`o-a-${i}`)?.value || "",
@@ -5316,6 +5319,7 @@ async function preVerifyServiceWorker() {
                 console.log("Corrupted data detected. Storage has been cleared.");
             }
         }
+        isLoaded = true;
     }
 
     async function loadSavedState() {
