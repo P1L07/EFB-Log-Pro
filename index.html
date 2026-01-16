@@ -995,74 +995,8 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
             </div>
         </div>
     </div>
-    <button onclick="diagnoseIPadIssue()" style="
-    position: fixed;
-    bottom: 60px;
-    right: 10px;
-    background: #007AFF;
-    color: white;
-    border: none;
-    padding: 10px 15px;
-    border-radius: 20px;
-    z-index: 9999;
-    font-size: 12px;
-">
-    🔍 Debug iPad
-</button>
     </main>
 </div>
-
-<script>
-window.diagnoseIPadIssue = async function() {
-    console.clear();
-    console.log("=== iPad Diagnosis ===");
-    
-    // 1. Check localStorage
-    const encrypted = localStorage.getItem('efb_log_state');
-    console.log("Encrypted data exists:", encrypted ? `YES (${encrypted.length} chars)` : "NO");
-    
-    // 2. Check DOM elements
-    const elements = [
-        'front-atis', 'front-atc', 'front-altm1', 
-        'front-stby', 'front-altm2', 'view-pic-block'
-    ];
-    
-    elements.forEach(id => {
-        const el = document.getElementById(id);
-        console.log(`${id}:`, el ? 
-            `FOUND (value="${el.value}", tag="${el.tagName}")` : 
-            "NOT FOUND IN DOM");
-    });
-    
-    // 3. Try to decrypt and see what we have
-    if (encrypted) {
-        try {
-            const state = await decryptData(encrypted);
-            console.log("Decryption successful!");
-            console.log("State contains inputs:", Object.keys(state.inputs || {}).length);
-            
-            // Show what values should be set
-            elements.forEach(id => {
-                if (state.inputs && state.inputs[id]) {
-                    console.log(`Should set ${id} to: "${state.inputs[id]}"`);
-                }
-            });
-        } catch (e) {
-            console.log("Decryption failed:", e.message);
-        }
-    }
-    
-    // 4. Check if we're in the right tab
-    const activeTab = document.querySelector('.tool-section.active');
-    console.log("Active tab:", activeTab ? activeTab.id : "Unknown");
-    
-    // 5. Try to force restore
-    console.log("Attempting manual restore...");
-    await loadState();
-    
-    alert("Check browser console for diagnosis results!");
-};
-</script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js');

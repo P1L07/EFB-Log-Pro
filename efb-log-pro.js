@@ -1308,8 +1308,8 @@ async function preVerifyServiceWorker() {
                 window.ofpPdfBytes = await savedPdfBlob.arrayBuffer();
                 window.originalFileName = savedPdfBlob.name || "Logged_OFP.pdf"; 
                 // Then run analysis with the PDF Blob
-                await loadState();
                 await runAnalysis(savedPdfBlob); 
+                await loadState();
             } else {
                 // If no PDF, just load the text inputs from LocalStorage
                 loadState();
@@ -5314,7 +5314,7 @@ async function preVerifyServiceWorker() {
 
     async function loadSavedState() {
         // Load from localStorage
-        loadState();
+        await loadState();
         
         // Restore waypoints if saved
         if (window.savedWaypointData && window.savedWaypointData.length > 0) {
