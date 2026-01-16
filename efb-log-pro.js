@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "1.7";
+const APP_VERSION = "1.8";
 const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
 const ENCRYPTION_ALGO = {
     name: 'AES-GCM',
@@ -10,7 +10,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '120fd1126d072afd30fc85d8624abe81c2752b679c94e51bfdda09abf4cb2778';
+const EXPECTED_SW_HASH = '6885952cdc877f546ae6632220c2228171d8c9bb2982205e5e85313f5585ae3a';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
 // ==========================================
@@ -5149,178 +5149,176 @@ async function preVerifyServiceWorker() {
     }
 
 // ==========================================
-// 12. LOCAL STORAGE (AUTO-SAVE)
+// 12. LOCAL STORAGE (AUTO-SAVE) - ROBUST FIX
 // ==========================================
 
-    // Input ID
-    const SAVE_IDS = [
-        'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-alt2', 'j-std','front-extra-kg',
-        'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
-        'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
-        'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
-        'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
-        'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-reason',
-        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block',
-    ];
+const SAVE_IDS = [
+    'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-alt2', 'j-std','front-extra-kg',
+    'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
+    'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
+    'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
+    'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
+    'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-reason',
+    'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block',
+];
 
-    // Save Inputs
-    async function saveState() {
-        if (!isLoaded) return;
-        // 1. Capture the "User Inputs" from the DOM
-        const userInputs = waypoints.map((wp, i) => ({
-            ato: el(`o-a-${i}`)?.value || "",
-            fuel: el(`o-f-${i}`)?.value || "",
-            notes: el(`o-n-${i}`)?.value || "",
-            agl: el(`o-agl-${i}`)?.value || ""
-        }));
+// 1. SAVE FUNCTION (Defensive & Synchronous)
+async function saveState() {
+    // GUARD: STOP if the app hasn't finished loading yet!
+    if (!isAppLoaded) {
+        console.log("Save blocked: App is still loading.");
+        return; 
+    }
 
-        const state = {
-            inputs: {},
-            dailyLegs: dailyLegs, 
-            dutyStartTime: dutyStartTime,
-            routeStructure: waypoints, 
-            waypointUserValues: userInputs,
-            version: APP_VERSION,
-            timestamp: new Date().toISOString(),
-            savedTaxiValue: fuelData.find(x => x.name === "TAXI")?.fuel || 200
-        };
+    // Capture User Inputs
+    const userInputs = waypoints.map((wp, i) => ({
+        ato: el(`o-a-${i}`)?.value || "",
+        fuel: el(`o-f-${i}`)?.value || "",
+        notes: el(`o-n-${i}`)?.value || "",
+        agl: el(`o-agl-${i}`)?.value || ""
+    }));
 
-        // 2. Save the "User Inputs"
-        SAVE_IDS.forEach(id => {
-            const e = el(id);
-            if(e) state.inputs[id] = e.value;
-        });
+    const state = {
+        inputs: {},
+        dailyLegs: dailyLegs,
+        dutyStartTime: dutyStartTime,
+        routeStructure: waypoints,
+        waypointUserValues: userInputs,
+        version: APP_VERSION,
+        timestamp: new Date().toISOString(),
+        savedTaxiValue: fuelData.find(x => x.name === "TAXI")?.fuel || 200
+    };
 
-        // 3. Encrypt and save
-        try {
-            const plainState = JSON.stringify(state);
-            localStorage.setItem('efb_log_state_fallback', plainState);
-            // Also save to the legacy key just in case
-            localStorage.setItem('efb_log_state_plain', plainState);
-        } catch (e) {
-            console.error("Fallback save failed (Quota exceeded?)", e);
+    SAVE_IDS.forEach(id => {
+        const e = el(id);
+        if(e) state.inputs[id] = e.value;
+    });
+
+    // STEP A: Synchronous Save (The "Safety Net")
+    // This MUST happen before any 'await' calls to prevent data loss on iOS close/reload
+    try {
+        const plainState = JSON.stringify(state);
+        localStorage.setItem('efb_log_state_fallback', plainState); 
+    } catch (e) {
+        console.error("Storage full or error:", e);
+    }
+
+    // STEP B: Encrypted Save (Async)
+    try {
+        if (typeof encryptData === 'function') {
+            const encryptedState = await encryptData(state);
+            localStorage.setItem('efb_log_state', encryptedState);
+        }
+    } catch (error) {
+        // Fail silently here because we already saved the fallback above
+        console.warn("Encryption save failed, relying on fallback.");
+    }
+}
+
+// 2. LOAD FUNCTION (Corrected Keys & Fallback)
+async function loadState() {
+    console.log("Starting Load Sequence...");
+    
+    // Try encrypted first, then fallback
+    let raw = localStorage.getItem('efb_log_state');
+    let isEncrypted = true;
+
+    // FIX: Check the CORRECT fallback key if encrypted is missing
+    if (!raw) {
+        raw = localStorage.getItem('efb_log_state_fallback'); 
+        isEncrypted = false;
+        
+        // Final attempt: Check legacy key just in case
+        if (!raw) {
+            raw = localStorage.getItem('efb_log_state_plain');
         }
 
-        // 3. Try Encrypted Save (Async)
-        // If this fails or gets killed by iOS, we already have the fallback above.
-        try {
-            // Check if crypto is actually available (often restricted in simple HTTP PWA contexts)
-            if (window.crypto && window.crypto.subtle) {
-                const encryptedState = await encryptData(state);
-                localStorage.setItem('efb_log_state', encryptedState);
-            }
-        } catch (error) {
-            console.warn("Encryption skipped or failed (using fallback):", error);
+        if (!raw) {
+            console.log("No saved data found.");
+            isAppLoaded = true; // Still mark as loaded so user can start typing!
+            return;
         }
     }
 
-    // Reload Inputs
-    async function loadState() {
-        // Try encrypted first, then fallback
-        let raw = localStorage.getItem('efb_log_state');
-        let isEncrypted = true;
+    try {
+        let state;
         
-        if (!raw) {
-            // Try unencrypted fallback
-            raw = localStorage.getItem('efb_log_state_fallback');
-            isEncrypted = false;
-            
-            if (!raw) return;
+        if (isEncrypted) {
+            try {
+                state = await decryptData(raw);
+            } catch (decryptError) {
+                console.error("Decryption failed, switching to fallback.");
+                // FIX: Check the CORRECT fallback key
+                raw = localStorage.getItem('efb_log_state_fallback'); 
+                if (raw) {
+                    state = JSON.parse(raw);
+                    isEncrypted = false;
+                } else {
+                    // Try legacy key
+                    raw = localStorage.getItem('efb_log_state_plain');
+                    if (raw) state = JSON.parse(raw);
+                    else throw new Error("Decryption failed and no fallback found.");
+                }
+            }
+        } else {
+            state = JSON.parse(raw);
         }
 
-        try {
-            let state;
+        // Restore Data Logic (Same as before)
+        if(state.inputs) {
+            Object.keys(state.inputs).forEach(id => {
+                const val = state.inputs[id];
+                if (val !== "" && val !== null) safeSet(id, val);
+            });
+        }
+        
+        if(state.routeStructure && Array.isArray(state.routeStructure)) {
+            waypoints = state.routeStructure;
+            if (typeof renderFlightLogTables === 'function') renderFlightLogTables(); 
             
-            if (isEncrypted) {
-                try {
-                    state = await decryptData(raw);
-                } catch (decryptError) {
-                    console.error("Decryption failed:", decryptError);
-                    // Try unencrypted fallback
-                    raw = localStorage.getItem('efb_log_state_fallback');
-                    if (raw) {
-                        state = JSON.parse(raw);
-                        isEncrypted = false;
-                    } else {
-                        throw new Error("Could not decrypt data and no fallback found");
+            if(state.waypointUserValues) {
+                state.waypointUserValues.forEach((data, i) => {
+                    if (i < waypoints.length) {
+                        if(data.ato) safeSet(`o-a-${i}`, data.ato);
+                        if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                        if(data.notes) safeSet(`o-n-${i}`, data.notes);
+                        if(data.agl) safeSet(`o-agl-${i}`, data.agl);
                     }
-                }
-            } else {
-                state = JSON.parse(raw);
-            }
-            
-            // Check version compatibility
-            if (state.version && state.version !== APP_VERSION) {
-                console.log(`Migrating from v${state.version} to v${APP_VERSION}`);
-            }
-
-            // 1. Restore User Inputs
-            if(state.inputs) {
-                Object.keys(state.inputs).forEach(id => {
-                    const val = state.inputs[id];
-                    if (val !== "" && val !== null) safeSet(id, val);
                 });
             }
-            
-            // 2. Restore Route Structure
-            if(state.routeStructure && Array.isArray(state.routeStructure) && state.routeStructure.length > 0) {
-                waypoints = state.routeStructure;
-                
-                // 2.1 Draw the empty table first
-                if (typeof renderFlightLogTables === 'function') {
-                    renderFlightLogTables(); 
-                }
-                
-                // 2.2 Restore Waypoint Inputs (ATO, Fuel, Notes) into the table
-                if(state.waypointUserValues && Array.isArray(state.waypointUserValues)) {
-                    state.waypointUserValues.forEach((data, i) => {
-                        if (i < waypoints.length) {
-                            if(data.ato) safeSet(`o-a-${i}`, data.ato);
-                            if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                            if(data.notes) safeSet(`o-n-${i}`, data.notes);
-                            if(data.agl) safeSet(`o-agl-${i}`, data.agl);
-                        }
-                    });
-                }
-            }
-
-            // 3. Restore Daily Legs (Journey Log)
-            if(state.dailyLegs && Array.isArray(state.dailyLegs)) {
-                dailyLegs = state.dailyLegs;
-                renderJourneyList(); 
-            }
-
-            // 4. Restore Taxi Fuel (To prevent jump to 200)
-            if (state.savedTaxiValue) {
-                if (typeof fuelData === 'undefined') fuelData = [];
-                if (!fuelData.find(x => x.name === 'TAXI')) {
-                    fuelData.push({ name: "TAXI", fuel: state.savedTaxiValue });
-                }
-            }
-
-            // 5. Restore Duty Start
-            if(state.dutyStartTime !== undefined) {
-                dutyStartTime = state.dutyStartTime;
-                calcDutyLogic(); 
-            }
-
-            // 6. Run Calculations
-            runFlightLogCalculations();
-            if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
-            console.log("Reloaded input data from auto-save (local storage)");
-
-        } catch(e) { 
-            console.error("Load error", e);
-            
-            // If corrupted, clear storage
-            if (e.message && (e.message.includes('corrupted') || e.message.includes('decrypt') || e.message.includes('JSON'))) {
-                localStorage.removeItem('efb_log_state');
-                localStorage.removeItem('efb_log_state_fallback');
-                console.log("Corrupted data detected. Storage has been cleared.");
-            }
         }
-        isLoaded = true;
+
+        if(state.dailyLegs) {
+            dailyLegs = state.dailyLegs;
+            if (typeof renderJourneyList === 'function') renderJourneyList(); 
+        }
+
+        if(state.dutyStartTime !== undefined) {
+            dutyStartTime = state.dutyStartTime;
+            if (typeof calcDutyLogic === 'function') calcDutyLogic(); 
+        }
+
+        if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+        if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
+        
+        console.log("Data loaded successfully.");
+
+    } catch(e) { 
+        console.error("Fatal Load Error:", e);
+        // alert("Error loading data: " + e.message); // Uncomment for iPad debugging
+    } finally {
+        // CRITICAL: Mark app as loaded ONLY after everything is done.
+        // This releases the 'saveState' guard.
+        isAppLoaded = true;
+        console.log("App is now marked as Loaded. Saving enabled.");
     }
+}
+
+// 3. INITIALIZATION (Wait for DOM)
+document.addEventListener('DOMContentLoaded', () => {
+    // Ensure we load before any user interaction happens
+    loadState();
+});
 
     async function loadSavedState() {
         // Load from localStorage
