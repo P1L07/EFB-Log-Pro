@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "1.8";
+const APP_VERSION = "1.9";
 const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
 const ENCRYPTION_ALGO = {
     name: 'AES-GCM',
@@ -10,7 +10,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '6885952cdc877f546ae6632220c2228171d8c9bb2982205e5e85313f5585ae3a';
+const EXPECTED_SW_HASH = 'e23232d1cc7b28abf56c8c3a619f72fbfcd3c9489c86cdc0ae7ece9b85fd1e46';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
 // ==========================================
@@ -155,6 +155,13 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         window.saveTimeout = setTimeout(() => saveState(), 500);
     });
 
+    // Trigger Save on tab change
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            saveState();
+        }
+    });
+
     window.addEventListener('resize', function() {
         if (signaturePad) {
             const canvas = document.getElementById('sig-canvas');
@@ -165,13 +172,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
     window.addEventListener('pagehide', () => {
         saveState();
-    });
-
-    // 2. Save on Tab Switch
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-            saveState();
-        }
     });
 
     function verifyUpdateOrigin(registration) {
@@ -240,27 +240,38 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     }
 
     window.viewAuditLog = async function() {
-        try {
-            const encryptedLog = localStorage.getItem(AUDIT_LOG_KEY);
-            if (!encryptedLog) {
-                alert('No audit logs found');
-                return;
+            try {
+                const encryptedLog = localStorage.getItem(AUDIT_LOG_KEY);
+                if (!encryptedLog) {
+                    alert('No audit logs found');
+                    return;
+                }
+                
+                const log = await decryptData(encryptedLog);
+                const logText = log.map(entry => 
+                    `${entry.timestamp} - ${entry.event}\n${JSON.stringify(entry.details, null, 2)}`
+                ).join('\n\n---\n\n');
+                
+                const win = window.open('', '_blank');
+                if (!win) {
+                    alert('Pop-up blocked. Please allow pop-ups for this site.');
+                    return;
+                }
+
+                win.document.title = "Audit Log Viewer";
+                const pre = win.document.createElement('pre');
+                pre.textContent = logText;
+                pre.style.padding = "20px";
+                pre.style.fontFamily = "monospace";
+                pre.style.whiteSpace = "pre-wrap"; 
+
+                win.document.body.appendChild(pre);
+                
+            } catch (error) {
+                console.error('Failed to view audit log:', error);
+                alert('Error accessing audit log');
             }
-            
-            const log = await decryptData(encryptedLog);
-            const logText = log.map(entry => 
-                `${entry.timestamp} - ${entry.event}\n${JSON.stringify(entry.details, null, 2)}`
-            ).join('\n\n---\n\n');
-            
-            // Display in new window or console
-            const win = window.open();
-            win.document.write('<pre>' + sanitizeHTML(logText) + '</pre>');
-            
-        } catch (error) {
-            console.error('Failed to view audit log:', error);
-            alert('Error accessing audit log');
-        }
-    };
+        };
 
     // Setup for Authentication
     async function setupAuthentication() {
@@ -457,7 +468,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     }
 
     function autoLockApp() {
-
         // Clear authentication
         sessionStorage.removeItem('efb_authenticated');
         
@@ -485,7 +495,8 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         
         // Get settings
         const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-        const autoLockMinutes = parseInt(settings.autoLockTime) || 15;
+        let setting = parseInt(settings.autoLockTime);
+        const autoLockMinutes = isNaN(setting) ? 15 : setting;
         
         // Only set timer if auto-lock is enabled (not 0)
         if (autoLockMinutes > 0) {
@@ -737,94 +748,94 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     }
     
     // Add a pre-verification check before registering
-async function preVerifyServiceWorker() {
-    try {
-        let response;
-        let fromCache = false;
-        
-        // Try to fetch from network first
+    async function preVerifyServiceWorker() {
         try {
-            response = await fetch('sw.js', {
-                cache: 'no-store',
-                headers: {
-                    'Cache-Control': 'no-cache'
-                }
-            });
+            let response;
+            let fromCache = false;
             
-            if (!response.ok) throw new Error('Failed to fetch service worker');
-        } catch (networkError) {
-            console.log('Network fetch failed, device may be offline:', networkError);
-            
-            // Check if we have a cached hash for offline verification
-            const cachedHashData = localStorage.getItem(SW_HASH_STORAGE_KEY);
-            if (cachedHashData) {
-                try {
-                    const { hash, timestamp, version } = JSON.parse(cachedHashData);
-                    
-                    // Check if cache is not too old (e.g., less than 30 days)
-                    const cacheAge = Date.now() - timestamp;
-                    const MAX_CACHE_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
-                    
-                    if (cacheAge < MAX_CACHE_AGE && hash === EXPECTED_SW_HASH) {
-                        console.log('Using cached service worker hash for offline verification');
-                        return true; // Accept cached verification
-                    } else {
-                        console.log('Cached hash is expired or invalid');
+            // Try to fetch from network first
+            try {
+                response = await fetch('sw.js', {
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache'
                     }
-                } catch (e) {
-                    console.log('Failed to parse cached hash:', e);
+                });
+                
+                if (!response.ok) throw new Error('Failed to fetch service worker');
+            } catch (networkError) {
+                console.log('Network fetch failed, device may be offline:', networkError);
+                
+                // Check if we have a cached hash for offline verification
+                const cachedHashData = localStorage.getItem(SW_HASH_STORAGE_KEY);
+                if (cachedHashData) {
+                    try {
+                        const { hash, timestamp, version } = JSON.parse(cachedHashData);
+                        
+                        // Check if cache is not too old (e.g., less than 30 days)
+                        const cacheAge = Date.now() - timestamp;
+                        const MAX_CACHE_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
+                        
+                        if (cacheAge < MAX_CACHE_AGE && hash === EXPECTED_SW_HASH) {
+                            console.log('Using cached service worker hash for offline verification');
+                            return true; // Accept cached verification
+                        } else {
+                            console.log('Cached hash is expired or invalid');
+                        }
+                    } catch (e) {
+                        console.log('Failed to parse cached hash:', e);
+                    }
                 }
+                
+                // If we get here, we can't verify
+                const shouldContinue = confirm(
+                    'Cannot verify service worker while offline.\n\n' +
+                    'Continue without service worker verification?\n\n' +
+                    'Note: Some offline features may not work properly.'
+                );
+                
+                if (shouldContinue) {
+                    return false; // Don't register service worker
+                }
+                throw new Error('Service worker verification failed: Device is offline');
             }
             
-            // If we get here, we can't verify
-            const shouldContinue = confirm(
-                'Cannot verify service worker while offline.\n\n' +
-                'Continue without service worker verification?\n\n' +
-                'Note: Some offline features may not work properly.'
-            );
+            // We have a response, calculate hash
+            const swText = await response.text();
+            const encoder = new TextEncoder();
+            const data = encoder.encode(swText);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const calculatedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
             
+            // Cache the hash for future offline use
+            try {
+                localStorage.setItem(SW_HASH_STORAGE_KEY, JSON.stringify({
+                    hash: calculatedHash,
+                    timestamp: Date.now(),
+                    version: APP_VERSION
+                }));
+            } catch (e) {
+                console.log('Failed to cache service worker hash:', e);
+            }
+            
+            if (calculatedHash !== EXPECTED_SW_HASH) {
+                console.error('Service worker integrity check failed');
+                throw new Error('Service worker has been modified');
+            }
+            
+            return true;
+        } catch (error) {
+            console.error('Service worker verification failed:', error);
+            
+            // Ask user if they want to continue without verification
+            const shouldContinue = confirm(`Service worker verification failed: ${error.message}\n\nContinue without service worker?`);
             if (shouldContinue) {
                 return false; // Don't register service worker
             }
-            throw new Error('Service worker verification failed: Device is offline');
+            throw error;
         }
-        
-        // We have a response, calculate hash
-        const swText = await response.text();
-        const encoder = new TextEncoder();
-        const data = encoder.encode(swText);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const calculatedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        
-        // Cache the hash for future offline use
-        try {
-            localStorage.setItem(SW_HASH_STORAGE_KEY, JSON.stringify({
-                hash: calculatedHash,
-                timestamp: Date.now(),
-                version: APP_VERSION
-            }));
-        } catch (e) {
-            console.log('Failed to cache service worker hash:', e);
-        }
-        
-        if (calculatedHash !== EXPECTED_SW_HASH) {
-            console.error('Service worker integrity check failed');
-            throw new Error('Service worker has been modified');
-        }
-        
-        return true;
-    } catch (error) {
-        console.error('Service worker verification failed:', error);
-        
-        // Ask user if they want to continue without verification
-        const shouldContinue = confirm(`Service worker verification failed: ${error.message}\n\nContinue without service worker?`);
-        if (shouldContinue) {
-            return false; // Don't register service worker
-        }
-        throw error;
     }
-}
     
     // Pre-verify before registering
     preVerifyServiceWorker().then(shouldRegister => {
@@ -4470,6 +4481,8 @@ async function preVerifyServiceWorker() {
             }
 
             // CREW DUTY DATA
+            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+            const shouldHideAll = settings.hideAllDuty === true;
             const crewStart = 333 + CREW_OFFSET;
             const crewGap = 17;    
             
@@ -4510,9 +4523,11 @@ async function preVerifyServiceWorker() {
 
             // DRAW DUTY ROWS
             for(let i = 0; i < totalRows; i++) {
+                if (shouldHideAll) {
+                    continue; // Skip
+                }
                 const y = crewStart - (i * crewGap);
                 const isFlightCrew = (i < numFC);
-                
                 const myStart = isFlightCrew ? fcStartMins : ccStartMins;
                 const myMaxFDP = isFlightCrew ? fcMaxFDPStr : ccMaxFDPStr;
                 const myFDP = getFDP(myStart);
@@ -5149,176 +5164,174 @@ async function preVerifyServiceWorker() {
     }
 
 // ==========================================
-// 12. LOCAL STORAGE (AUTO-SAVE) - ROBUST FIX
+// 12. LOCAL STORAGE (AUTO-SAVE)
 // ==========================================
 
-const SAVE_IDS = [
-    'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-alt2', 'j-std','front-extra-kg',
-    'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
-    'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
-    'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
-    'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
-    'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-reason',
-    'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block',
-];
+    const SAVE_IDS = [
+        'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-alt2', 'j-std','front-extra-kg',
+        'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
+        'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
+        'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
+        'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
+        'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-reason',
+        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block',
+    ];
 
-// 1. SAVE FUNCTION (Defensive & Synchronous)
-async function saveState() {
-    // GUARD: STOP if the app hasn't finished loading yet!
-    if (!isAppLoaded) {
-        console.log("Save blocked: App is still loading.");
-        return; 
-    }
-
-    // Capture User Inputs
-    const userInputs = waypoints.map((wp, i) => ({
-        ato: el(`o-a-${i}`)?.value || "",
-        fuel: el(`o-f-${i}`)?.value || "",
-        notes: el(`o-n-${i}`)?.value || "",
-        agl: el(`o-agl-${i}`)?.value || ""
-    }));
-
-    const state = {
-        inputs: {},
-        dailyLegs: dailyLegs,
-        dutyStartTime: dutyStartTime,
-        routeStructure: waypoints,
-        waypointUserValues: userInputs,
-        version: APP_VERSION,
-        timestamp: new Date().toISOString(),
-        savedTaxiValue: fuelData.find(x => x.name === "TAXI")?.fuel || 200
-    };
-
-    SAVE_IDS.forEach(id => {
-        const e = el(id);
-        if(e) state.inputs[id] = e.value;
-    });
-
-    // STEP A: Synchronous Save (The "Safety Net")
-    // This MUST happen before any 'await' calls to prevent data loss on iOS close/reload
-    try {
-        const plainState = JSON.stringify(state);
-        localStorage.setItem('efb_log_state_fallback', plainState); 
-    } catch (e) {
-        console.error("Storage full or error:", e);
-    }
-
-    // STEP B: Encrypted Save (Async)
-    try {
-        if (typeof encryptData === 'function') {
-            const encryptedState = await encryptData(state);
-            localStorage.setItem('efb_log_state', encryptedState);
-        }
-    } catch (error) {
-        // Fail silently here because we already saved the fallback above
-        console.warn("Encryption save failed, relying on fallback.");
-    }
-}
-
-// 2. LOAD FUNCTION (Corrected Keys & Fallback)
-async function loadState() {
-    console.log("Starting Load Sequence...");
-    
-    // Try encrypted first, then fallback
-    let raw = localStorage.getItem('efb_log_state');
-    let isEncrypted = true;
-
-    // FIX: Check the CORRECT fallback key if encrypted is missing
-    if (!raw) {
-        raw = localStorage.getItem('efb_log_state_fallback'); 
-        isEncrypted = false;
-        
-        // Final attempt: Check legacy key just in case
-        if (!raw) {
-            raw = localStorage.getItem('efb_log_state_plain');
+    // 1. SAVE FUNCTION 
+    async function saveState() {
+        // GUARD: STOP if the app hasn't finished loading yet!
+        if (!isAppLoaded) {
+            return; 
         }
 
-        if (!raw) {
-            console.log("No saved data found.");
-            isAppLoaded = true; // Still mark as loaded so user can start typing!
-            return;
-        }
-    }
+        // Capture User Inputs
+        const userInputs = waypoints.map((wp, i) => ({
+            ato: el(`o-a-${i}`)?.value || "",
+            fuel: el(`o-f-${i}`)?.value || "",
+            notes: el(`o-n-${i}`)?.value || "",
+            agl: el(`o-agl-${i}`)?.value || ""
+        }));
 
-    try {
-        let state;
-        
-        if (isEncrypted) {
-            try {
-                state = await decryptData(raw);
-            } catch (decryptError) {
-                console.error("Decryption failed, switching to fallback.");
-                // FIX: Check the CORRECT fallback key
-                raw = localStorage.getItem('efb_log_state_fallback'); 
-                if (raw) {
-                    state = JSON.parse(raw);
-                    isEncrypted = false;
-                } else {
-                    // Try legacy key
-                    raw = localStorage.getItem('efb_log_state_plain');
-                    if (raw) state = JSON.parse(raw);
-                    else throw new Error("Decryption failed and no fallback found.");
-                }
+        const state = {
+            inputs: {},
+            dailyLegs: dailyLegs,
+            dutyStartTime: dutyStartTime,
+            routeStructure: waypoints,
+            waypointUserValues: userInputs,
+            version: APP_VERSION,
+            timestamp: new Date().toISOString(),
+            savedTaxiValue: fuelData.find(x => x.name === "TAXI")?.fuel || 200
+        };
+
+        SAVE_IDS.forEach(id => {
+            const e = el(id);
+            if(e) state.inputs[id] = e.value;
+        });
+
+        // STEP A: Synchronous Save (The "Safety Net")
+        // This MUST happen before any 'await' calls to prevent data loss on iOS close/reload
+        try {
+            const plainState = JSON.stringify(state);
+            localStorage.setItem('efb_log_state_fallback', plainState); 
+        } catch (e) {
+            console.error("Storage full or error:", e);
+        }
+
+        // STEP B: Encrypted Save (Async)
+        try {
+            if (typeof encryptData === 'function') {
+                const encryptedState = await encryptData(state);
+                localStorage.setItem('efb_log_state', encryptedState);
             }
-        } else {
-            state = JSON.parse(raw);
+        } catch (error) {
+            // Fail silently here because we already saved the fallback above
+            console.warn("Encryption save failed, relying on fallback.");
+        }
+    }
+
+    // 2. LOAD FUNCTION 
+    async function loadState() {
+        console.log("Starting Load Sequence...");
+        
+        // Try encrypted first, then fallback
+        let raw = localStorage.getItem('efb_log_state');
+        let isEncrypted = true;
+
+        // FIX: Check the CORRECT fallback key if encrypted is missing
+        if (!raw) {
+            raw = localStorage.getItem('efb_log_state_fallback'); 
+            isEncrypted = false;
+            
+            // Final attempt: Check legacy key just in case
+            if (!raw) {
+                raw = localStorage.getItem('efb_log_state_plain');
+            }
+
+            if (!raw) {
+                console.log("No saved data found.");
+                isAppLoaded = true; // Still mark as loaded so user can start typing!
+                return;
+            }
         }
 
-        // Restore Data Logic (Same as before)
-        if(state.inputs) {
-            Object.keys(state.inputs).forEach(id => {
-                const val = state.inputs[id];
-                if (val !== "" && val !== null) safeSet(id, val);
-            });
-        }
-        
-        if(state.routeStructure && Array.isArray(state.routeStructure)) {
-            waypoints = state.routeStructure;
-            if (typeof renderFlightLogTables === 'function') renderFlightLogTables(); 
+        try {
+            let state;
             
-            if(state.waypointUserValues) {
-                state.waypointUserValues.forEach((data, i) => {
-                    if (i < waypoints.length) {
-                        if(data.ato) safeSet(`o-a-${i}`, data.ato);
-                        if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                        if(data.notes) safeSet(`o-n-${i}`, data.notes);
-                        if(data.agl) safeSet(`o-agl-${i}`, data.agl);
+            if (isEncrypted) {
+                try {
+                    state = await decryptData(raw);
+                } catch (decryptError) {
+                    console.error("Decryption failed, switching to fallback.");
+                    // FIX: Check the CORRECT fallback key
+                    raw = localStorage.getItem('efb_log_state_fallback'); 
+                    if (raw) {
+                        state = JSON.parse(raw);
+                        isEncrypted = false;
+                    } else {
+                        // Try legacy key
+                        raw = localStorage.getItem('efb_log_state_plain');
+                        if (raw) state = JSON.parse(raw);
+                        else throw new Error("Decryption failed and no fallback found.");
                     }
+                }
+            } else {
+                state = JSON.parse(raw);
+            }
+
+            // Restore Data Logic (Same as before)
+            if(state.inputs) {
+                Object.keys(state.inputs).forEach(id => {
+                    const val = state.inputs[id];
+                    if (val !== "" && val !== null) safeSet(id, val);
                 });
             }
+            
+            if(state.routeStructure && Array.isArray(state.routeStructure)) {
+                waypoints = state.routeStructure;
+                if (typeof renderFlightLogTables === 'function') renderFlightLogTables(); 
+                
+                if(state.waypointUserValues) {
+                    state.waypointUserValues.forEach((data, i) => {
+                        if (i < waypoints.length) {
+                            if(data.ato) safeSet(`o-a-${i}`, data.ato);
+                            if(data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                            if(data.notes) safeSet(`o-n-${i}`, data.notes);
+                            if(data.agl) safeSet(`o-agl-${i}`, data.agl);
+                        }
+                    });
+                }
+            }
+
+            if(state.dailyLegs) {
+                dailyLegs = state.dailyLegs;
+                if (typeof renderJourneyList === 'function') renderJourneyList(); 
+            }
+
+            if(state.dutyStartTime !== undefined) {
+                dutyStartTime = state.dutyStartTime;
+                if (typeof calcDutyLogic === 'function') calcDutyLogic(); 
+            }
+
+            if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+            if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
+            
+            console.log("Data loaded successfully.");
+
+        } catch(e) { 
+            console.error("Fatal Load Error:", e);
+            // alert("Error loading data: " + e.message); // Uncomment for iPad debugging
+        } finally {
+            // CRITICAL: Mark app as loaded ONLY after everything is done.
+            // This releases the 'saveState' guard.
+            isAppLoaded = true;
         }
-
-        if(state.dailyLegs) {
-            dailyLegs = state.dailyLegs;
-            if (typeof renderJourneyList === 'function') renderJourneyList(); 
-        }
-
-        if(state.dutyStartTime !== undefined) {
-            dutyStartTime = state.dutyStartTime;
-            if (typeof calcDutyLogic === 'function') calcDutyLogic(); 
-        }
-
-        if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
-        if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
-        
-        console.log("Data loaded successfully.");
-
-    } catch(e) { 
-        console.error("Fatal Load Error:", e);
-        // alert("Error loading data: " + e.message); // Uncomment for iPad debugging
-    } finally {
-        // CRITICAL: Mark app as loaded ONLY after everything is done.
-        // This releases the 'saveState' guard.
-        isAppLoaded = true;
-        console.log("App is now marked as Loaded. Saving enabled.");
     }
-}
 
-// 3. INITIALIZATION (Wait for DOM)
-document.addEventListener('DOMContentLoaded', () => {
-    // Ensure we load before any user interaction happens
-    loadState();
-});
+    // 3. INITIALIZATION (Wait for DOM)
+    document.addEventListener('DOMContentLoaded', () => {
+        // Ensure we load before any user interaction happens
+        loadState();
+    });
 
     async function loadSavedState() {
         // Load from localStorage
@@ -5426,7 +5439,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         
         // Auto-save settings when changed
-        ['auto-lock-time', 'pdf-quality'].forEach(id => {
+        ['auto-lock-time', 'pdf-quality', 'hide-all-duty'].forEach(id => {
             const element = document.getElementById(id);
             if (element) {
                 element.addEventListener('change', saveSettings);
@@ -5474,6 +5487,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pdfQualitySelect = document.getElementById('pdf-quality');
                 if (pdfQualitySelect) pdfQualitySelect.value = settings.pdfQuality;
             }
+
+            // Load Hide FC Duty Checkbox
+            const hideFCDutyBox = document.getElementById('hide-all-duty');
+            if (hideFCDutyBox) {
+                hideFCDutyBox.checked = settings.hideFCDuty === true; 
+            }
             
             // Set app version
             const versionEl = document.getElementById('settings-version');
@@ -5496,7 +5515,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function saveSettings() {
         const settings = {
             autoLockTime: document.getElementById('auto-lock-time')?.value || '15',
-            pdfQuality: document.getElementById('pdf-quality')?.value || '2.0', //
+            pdfQuality: document.getElementById('pdf-quality')?.value || '2.0',
+            hideAllDuty: document.getElementById('hide-all-duty')?.checked || false,
             lastSaved: new Date().toISOString()
         };
         localStorage.setItem('efb_settings', JSON.stringify(settings));
@@ -5859,9 +5879,5 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(() => toast.remove(), 300);
         }, 3000);
     }
-
-// ==========================================
-// 15. EVENT LISTENERS
-// ==========================================
 
 })();
