@@ -1,5 +1,26 @@
 (function() {
-const APP_VERSION = "1.9";
+const APP_VERSION = "2.0";
+const RELEASE_NOTES = {
+    "2.0": {
+        title: "OFP Manager & Batch Upload",
+        notes: [
+            "📁 Upload multiple OFPs at once",
+            "📋 OFP Manager table with Trip Time, Max SR, Request #",
+            "🔄 Replace existing OFPs (same flight/date)",
+            "✅ Finalized OFP indicator and download",
+            "🎨 New Sectors tab with search & reorder"
+        ]
+    },
+    "1.9": {
+        title: "Signature & Validation Improvements",
+        notes: [
+            "✍️ Signature pad scaling fixed",
+            "✅ Flight Log validation now checks any ATO",
+            "📝 Journey Log requires current flight number",
+            "🔒 Auto-lock timer improvements"
+        ]
+    },
+};
 const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
 const ENCRYPTION_ALGO = {
     name: 'AES-GCM',
@@ -10,7 +31,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = 'e23232d1cc7b28abf56c8c3a619f72fbfcd3c9489c86cdc0ae7ece9b85fd1e46';
+const EXPECTED_SW_HASH = 'a18aa733eb0fea04d0bb4f46e968146c2c88f3e7a2980702a3f602db67765793';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
 // ==========================================
@@ -106,21 +127,26 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             const canvas = document.getElementById('sig-canvas');
             if (canvas) {
                 const ratio = Math.max(window.devicePixelRatio || 1, 1);
-                canvas.width = canvas.offsetWidth * ratio;
-                canvas.height = canvas.offsetHeight * ratio;
-                canvas.getContext("2d").scale(ratio, ratio);
+                const containerWidth = canvas.offsetWidth;
+                const containerHeight = canvas.offsetHeight;
+
+                canvas.width = containerWidth * ratio;
+                canvas.height = containerHeight * ratio;
                 
+                const ctx = canvas.getContext("2d");
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.scale(ratio, ratio);
+
                 signaturePad = new SignaturePad(canvas, {
                     backgroundColor: 'rgba(0,0,0,0)',
                     penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
                 });
-                
+
                 // Restore saved signature if exists
                 if (savedSignatureData) {
                     signaturePad.fromDataURL(savedSignatureData, { ratio: ratio });
                 }
-                
-                // Update save button state
+
                 updateSaveButtonState();
             }
         }, 100);
@@ -874,13 +900,13 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                 const installingWorker = reg.installing;
                 installingWorker.onstatechange = async () => {
                     if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                        
+                        console.log('New service worker installed and waiting');
                         try {
-                            // Verify new worker before prompting
-                            const response = await fetch(installingWorker.scriptURL);
+                            // Fetch the new service worker script
+                            const response = await fetch(installingWorker.scriptURL, { cache: 'no-store' });
                             const swText = await response.text();
                             
-                            // Calculate hash of new worker
+                            // Hash Verification
                             const encoder = new TextEncoder();
                             const data = encoder.encode(swText);
                             const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -889,27 +915,44 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                             
                             const hashValid = (calculatedHash === EXPECTED_SW_HASH);
                             
-                            if (hashValid) {
-                                if(confirm("New version available! Reload now?")) {
-                                    installingWorker.postMessage({ type: 'SKIP_WAITING' });
-                                    setTimeout(() => window.location.reload(), 500);
-                                }
-                            } else {
+                            if (!hashValid) {
                                 console.error('New service worker failed hash check:', { calculatedHash, expected: EXPECTED_SW_HASH });
                                 installingWorker.postMessage({ type: 'UNINSTALL' });
                                 alert('Update verification failed. Update rejected.');
                                 
-                                // Log this security event
                                 if (typeof logSecurityEvent === 'function') {
                                     await logSecurityEvent('SERVICE_WORKER_HASH_MISMATCH', {
-                                        calculatedHash: calculatedHash,
+                                        calculatedHash,
                                         expectedHash: EXPECTED_SW_HASH,
                                         scriptURL: installingWorker.scriptURL
                                     });
                                 }
+                                return;
                             }
+                            
+                            // EXTRACT VERSION from sw.js
+                            const versionMatch = swText.match(/SW_VERSION\s*=\s*['"]([^'"]+)['"]/);
+                            const newVersion = versionMatch ? versionMatch[1] : '0.0';
+                            console.log('📦 New version extracted:', newVersion);
+                            console.log('📦 Current app version:', APP_VERSION);
+                            
+                            // COMPARE with current app version
+                            if (isNewerVersion(newVersion, APP_VERSION)) {
+                                // Get release notes (fallback to generic)
+                                const releaseData = RELEASE_NOTES[newVersion] || {
+                                    title: "New Version Available",
+                                    notes: ["Improvements and bug fixes"]
+                                };
+                                console.log('🎯 Showing update modal for version', newVersion);
+                                showUpdateModal(newVersion, releaseData, () => {
+                                    installingWorker.postMessage({ type: 'SKIP_WAITING' });
+                                    setTimeout(() => window.location.reload(), 500);
+                                });
+                            }
+                            // else: silently ignore – already up to date
+                            
                         } catch(err) {
-                            console.error('Failed to verify update:', err);
+                            console.error('Failed to verify/parse update:', err);
                         }
                     }
                 };
@@ -1246,9 +1289,24 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         
         addTimeInputMasks();
 
-        // OFP Upload
+        // OFP Upload – now supports multiple files
         const ofpFileInput = el('ofp-file-in');
-        if (ofpFileInput) ofpFileInput.onchange = runAnalysis;
+        if (ofpFileInput) {
+            ofpFileInput.onchange = async function(e) {
+                const files = Array.from(e.target.files);
+                if (files.length === 0) return;
+                
+                if (files.length === 1) {
+                    // Single file – use original flow
+                    await runAnalysis(files[0], false);
+                } else {
+                    // Multiple files – use batch upload
+                    await uploadMultipleOFPs(files);
+                }
+                // Clear the input so same files can be uploaded again
+                e.target.value = '';
+            };
+        }
         
         // Journey Log Upload
         const journeyLogFile = el('journey-log-file');
@@ -1311,28 +1369,48 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             if(e) e.addEventListener('input', debounce(validateOFPInputs, 500));
         });
 
-        // OFFLINE AUTO-LOAD LOGIC //
+        // ===== OFFLINE AUTO‑LOAD LOGIC (Multi‑OFP) =====
         try {
-            // 1. Check if we have a saved PDF in the database
-            const savedPdfBlob = await loadPdfFromDB();    
-            if (savedPdfBlob && savedPdfBlob.size > 0) {
+            // First try to load the active OFP from the new store
+            const activeOFP = await getActiveOFPFromDB();
+            if (activeOFP && activeOFP.data) {
                 setOFPLoadedState(true);
-                // Convert Blob to ArrayBuffer and set global variable
-                window.ofpPdfBytes = await savedPdfBlob.arrayBuffer();
-                window.originalFileName = savedPdfBlob.name || "Logged_OFP.pdf"; 
-                // Then run analysis with the PDF Blob
-                await runAnalysis(savedPdfBlob); 
+                window.ofpPdfBytes = await activeOFP.data.arrayBuffer();
+                window.originalFileName = activeOFP.fileName || "Logged_OFP.pdf";
+                await runAnalysis(activeOFP.data, true);
                 await loadState();
             } else {
-                // If no PDF, just load the text inputs from LocalStorage
-                loadState();
-                console.log("OFP PDF not found");
-                setOFPLoadedState(false);
+                // Fallback: check old single‑OFP store
+                const savedPdfBlob = await loadPdfFromDB();
+                if (savedPdfBlob && savedPdfBlob.size > 0) {
+                    setOFPLoadedState(true);
+                    window.ofpPdfBytes = await savedPdfBlob.arrayBuffer();
+                    window.originalFileName = savedPdfBlob.name || "Logged_OFP.pdf";
+                    await runAnalysis(savedPdfBlob, true);
+                    await loadState();
+                    
+                    // Migrate to new store (optional)
+                    const metadata = {
+                        flight: document.getElementById('view-flt')?.innerText || 'N/A',
+                        date: document.getElementById('view-date')?.innerText || 'N/A',
+                        departure: document.getElementById('view-dep')?.innerText || 'N/A',
+                        destination: document.getElementById('view-dest')?.innerText || 'N/A'
+                    };
+                    await saveOFPToDB(savedPdfBlob, metadata);
+                } else {
+                    loadState();
+                    setOFPLoadedState(false);
+                }
             }
         } catch (e) {
-            console.error("Auto-load error:", e);
+            console.error("Auto‑load error:", e);
             loadState();
             setOFPLoadedState(false);
+        }
+        const allOFPs = await getAllOFPsFromDB();
+        if (allOFPs.length > 0 && !localStorage.getItem('activeOFPId')) {
+            console.log("No active OFP set – activating the newest OFP.");
+            await activateOFP(allOFPs[0].id);
         }
         // Add event listener for file input change
         const fileInput = document.getElementById('ofp-file-in');
@@ -1404,15 +1482,79 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         }
     }
 
+    // Upload multiple OFPs sequentially with progress indicator
+    async function uploadMultipleOFPs(files) {
+        const modal = document.getElementById('upload-progress-modal');
+        const progressBar = document.getElementById('upload-progress-bar');
+        const progressText = document.getElementById('upload-progress-text');
+        const progressDetail = document.getElementById('upload-progress-detail');
+        const closeBtn = document.getElementById('upload-progress-close');
+
+        // Reset and show modal
+        progressDetail.innerHTML = '';
+        progressBar.style.width = '0%';
+        progressText.textContent = `Processing 0 of ${files.length}...`;
+        closeBtn.style.display = 'none';
+        modal.style.display = 'block';
+
+        let successCount = 0;
+        let failCount = 0;
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const fileInfo = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+            progressText.textContent = `Processing ${i + 1} of ${files.length}: ${file.name}`;
+            
+            // Add log entry
+            const logEntry = document.createElement('div');
+            logEntry.style.padding = '4px 0';
+            logEntry.style.borderBottom = '1px solid var(--border)';
+            logEntry.innerHTML = `⏳ ${fileInfo} – uploading...`;
+            progressDetail.appendChild(logEntry);
+            progressDetail.scrollTop = progressDetail.scrollHeight;
+
+            try {
+                // Call the existing runAnalysis with the file
+                await runAnalysis(file, false); 
+                
+                // Update log on success
+                logEntry.innerHTML = `✅ ${fileInfo} – success`;
+                successCount++;
+            } catch (error) {
+                console.error(`Failed to upload ${file.name}:`, error);
+                logEntry.innerHTML = `❌ ${fileInfo} – failed: ${error.message || 'Unknown error'}`;
+                failCount++;
+            }
+
+            // Update progress bar
+            const percent = ((i + 1) / files.length) * 100;
+            progressBar.style.width = `${percent}%`;
+        }
+
+        // Final summary
+        progressText.textContent = `Completed: ${successCount} succeeded, ${failCount} failed`;
+        closeBtn.style.display = 'block';
+        
+        // Refresh OFP Manager table if visible
+        if (document.getElementById('section-sectors')?.classList.contains('active')) {
+            await renderOFPMangerTable();
+        }
+
+        // Close button handler
+        closeBtn.onclick = () => {
+            modal.style.display = 'none';
+        };
+    }
+
     // Analyze OFP
-    async function runAnalysis(fileOrEvent) {
+    async function runAnalysis(fileOrEvent, isAutoLoad = false) {
+        const isBatchUpload = !isAutoLoad && 
+                            document.getElementById('upload-progress-modal')?.style.display === 'block';
         let blob = null;
-        let isAutoLoad = false;
 
         // 1. Determine source
         if (fileOrEvent instanceof Blob) {
             blob = fileOrEvent;
-            isAutoLoad = true;
         } else {
             const fileInput = document.getElementById('ofp-file-in');
             if (fileInput && fileInput.files.length > 0) {
@@ -1420,11 +1562,11 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                 try {
                     const isValid = await validatePDF(blob);
                     if (!isValid) {
-                        fileInput.value = ''; 
+                        fileInput.value = '';
                         if (typeof setOFPLoadedState === 'function') {
                             setOFPLoadedState(false);
                         } else {
-                            window.isOFPLoaded = false; 
+                            window.isOFPLoaded = false;
                             updateUploadButtonVisibility();
                         }
                         return;
@@ -1438,69 +1580,45 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                     return;
                 }
                 window.savedWaypointData = [];
-                localStorage.removeItem('efb_log_state'); 
+                localStorage.removeItem('efb_log_state');
             }
         }
 
         if (!blob) return;
 
-        // 2. Save PDF
-        window.ofpPdfBytes = await blob.arrayBuffer(); 
+        // 2. Save PDF bytes to memory (required for parsing)
+        window.ofpPdfBytes = await blob.arrayBuffer();
         window.originalFileName = blob.name || "Logged_OFP.pdf";
-        
-        // 3. Save to IndexedDB (only for manual uploads)
-        if (!isAutoLoad) {
-            try {
-                await savePdfToDB(blob);
-                setOFPLoadedState(true);
-            } catch (error) {
-                console.error("Failed to save PDF to IndexedDB:", error);
-            }
-        }
 
-        // 4. Show journey log form for new uploads
-        if (!isAutoLoad) {
-            if (typeof clearOFPInputs === 'function') clearOFPInputs();
-            const legForm = document.getElementById('leg-input-form');
-            if(legForm) legForm.style.display = 'block';
-        }
-
-        // 5. Render PDF preview (don't fail if parsing fails)
+        // 3. Render PDF preview (non‑critical)
         renderPDFPreview(window.ofpPdfBytes).catch(console.error);
 
-        // 6. Parse PDF with error handling
+        // 4. For manual uploads: CLEAR OLD DATA and show journey log form (BEFORE parsing)
+        if (!isAutoLoad && !isBatchUpload) {
+            if (typeof clearOFPInputs === 'function') clearOFPInputs();
+            const legForm = document.getElementById('leg-input-form');
+            if (legForm) legForm.style.display = 'block';
+        }
+
+        // 5. PARSE PDF – this populates the UI with the new OFP data
+        let parseResult;
         try {
-            await parsePDFData(window.ofpPdfBytes, isAutoLoad);
-            
-            // Only log success if parsing succeeded
-            try {
-                await logSecurityEvent('PDF_UPLOAD', {
-                    fileName: blob.name,
-                    fileSize: blob.size,
-                    fileType: blob.type,
-                    success: true
-                });
-            } catch (logError) {
-                console.error('Failed to log upload:', logError);
-            }
-            
+            parseResult = await parsePDFData(window.ofpPdfBytes, isAutoLoad);
         } catch (error) {
             console.error('PDF parsing failed:', error);
-            
+
             // Set OFP loaded to false so upload overlay shows again
             if (typeof setOFPLoadedState === 'function') {
                 setOFPLoadedState(false);
             }
-            
-            // Clear the file input so they can retry (only for manual uploads)
+
+            // Clear file input for manual uploads
             if (!isAutoLoad) {
                 const fileInput = document.getElementById('ofp-file-in');
-                if (fileInput) {
-                    fileInput.value = '';
-                }
+                if (fileInput) fileInput.value = '';
             }
-            
-            // Log the failure
+
+            // Log failure
             try {
                 await logSecurityEvent('PDF_UPLOAD', {
                     fileName: blob.name,
@@ -1515,14 +1633,214 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             return;
         }
 
-        // 7. Handle state (only if parsing succeeded)
-        if (isAutoLoad) { 
+        // 6. SAVE TO INDEXEDDB (only for manual uploads) – NOW with complete metadata
+        if (!isAutoLoad) {
+            const metadata = parseResult.metadata;
+            const flight = metadata.flight;
+            const date = metadata.date;
+
+            // Remember which OFP was active BEFORE we do anything
+            const previouslyActiveId = localStorage.getItem('activeOFPId');
+
+            // Check if an OFP with the same flight number and date already exists
+            const existingOFP = await findOFPByFlightAndDate(flight, date);
+
+            if (existingOFP) {
+                try {
+                    // Preserve original active state and order
+                    const wasActive = existingOFP.isActive;
+                    const originalOrder = existingOFP.order;
+                    const replacedId = existingOFP.id;
+
+                    const updatedData = {
+                        data: blob,
+                        fileName: blob.name || "Logged_OFP.pdf",
+                        uploadTime: new Date().toISOString(),
+                        flight: metadata.flight,
+                        date: metadata.date,
+                        departure: metadata.departure,
+                        destination: metadata.destination,
+                        tripTime: metadata.tripTime,
+                        maxSR: metadata.maxSR,
+                        requestNumber: metadata.requestNumber,
+                        finalized: false,
+                        loggedPdfData: null,
+                        isActive: wasActive,      // keep original active state
+                        order: originalOrder      // keep original order position
+                    };
+
+                    await updateOFP(replacedId, updatedData);
+
+                    if (!wasActive) {
+                        // Clear the current UI (which shows the newly uploaded OFP)
+                        if (typeof clearOFPInputs === 'function') clearOFPInputs();
+
+                        if (previouslyActiveId && previouslyActiveId !== String(replacedId)) {
+                            // There is a different active OFP – reload it
+                            await activateOFP(previouslyActiveId, false);
+                            showToast(`OFP updated: ${flight} (inactive)`, 'success');
+                        } else {
+                            // No other active OFP – show upload overlay
+                            setOFPLoadedState(false);
+                            showToast(`OFP updated: ${flight} (no active OFP)`, 'success');
+                        }
+                    } else {
+                        // Replaced OFP was active – it remains active and UI is already updated
+                        setOFPLoadedState(true);
+                        showToast(`OFP updated: ${flight} (active)`, 'success');
+                    }
+
+                    // Refresh OFP manager table if visible
+                    if (document.getElementById('section-sectors')?.classList.contains('active')) {
+                        renderOFPMangerTable();
+                    }
+
+                } catch (error) {
+                   console.error("Failed to replace OFP:", error);
+                // Emergency: at least try to save the PDF to old store
+                await savePdfToDB(blob);
+                // Also create/update a minimal ofps record (keep existing ID if possible)
+                try {
+                    const minimalMetadata = {
+                        flight: metadata.flight || 'N/A',
+                        date: metadata.date || 'N/A',
+                        departure: metadata.departure || 'N/A',
+                        destination: metadata.destination || 'N/A',
+                        tripTime: metadata.tripTime || '',
+                        maxSR: metadata.maxSR || '',
+                        requestNumber: metadata.requestNumber || ''
+                    };
+                    // Try to update existing record (if ID still exists), otherwise create new
+                    if (existingOFP && existingOFP.id) {
+                        await updateOFP(existingOFP.id, {
+                            ...minimalMetadata,
+                            data: null,
+                            loggedPdfData: null,
+                            finalized: false,
+                            isActive: existingOFP.isActive || false,
+                            order: existingOFP.order,
+                            uploadTime: new Date().toISOString(),
+                            fileName: blob.name || "Unknown"
+                        });
+                    } else {
+                        // Create new minimal record
+                        const all = await getAllOFPsFromDB();
+                        const maxOrder = all.length > 0 ? Math.max(...all.map(o => o.order || 0)) : 0;
+                        const ofpRecord = {
+                            ...minimalMetadata,
+                            data: null,
+                            loggedPdfData: null,
+                            finalized: false,
+                            isActive: false,
+                            order: maxOrder + 1,
+                            uploadTime: new Date().toISOString(),
+                            fileName: blob.name || "Unknown"
+                        };
+                        const db = await openDB();
+                        const tx = db.transaction("ofps", "readwrite");
+                        const store = tx.objectStore("ofps");
+                        store.add(ofpRecord);
+                        tx.oncomplete = () => db.close();
+                    }
+                } catch (e2) {
+                    console.error("Emergency ofps record creation failed:", e2);
+                }
+                showToast("OFP replaced (emergency mode – PDF may be missing)", 'error');
+            }
+            } else {
+                //  New OFP
+                try {
+                    // Determine whether this new OFP should become active
+                    const currentActiveId = localStorage.getItem('activeOFPId');
+                    const shouldActivate = !currentActiveId; // only activate if no active OFP
+
+                    const ofpId = await saveOFPToDB(blob, metadata, shouldActivate);
+                    console.log("OFP saved with ID:", ofpId, "Active:", shouldActivate);
+
+                    if (shouldActivate) {
+                        setOFPLoadedState(true);
+                        showToast(`OFP saved & activated: ${flight}`, 'success');
+                    } else {
+                        // If saved as inactive, we should NOT show this OFP in the UI.
+                        // Instead, revert to the currently active OFP (or clear if none).
+                        setOFPLoadedState(false); // will be restored by activateOFP below
+                        if (currentActiveId) {
+                            await activateOFP(currentActiveId, false);
+                            showToast(`OFP saved (inactive): ${flight}`, 'success');
+                        } else {
+                            setOFPLoadedState(false);
+                            showToast(`OFP saved: ${flight}`, 'success');
+                        }
+                    }
+
+                    if (document.getElementById('section-sectors')?.classList.contains('active')) {
+                        renderOFPMangerTable();
+                    }
+                } catch (error) {
+                    // 1. Save to old files store as emergency fallback
+                    await savePdfToDB(blob);
+                    // 2. Create minimal ofps record (without PDF blob) so the OFP Manager shows it
+                    try {
+                        const minimalMetadata = {
+                            flight: metadata.flight || 'N/A',
+                            date: metadata.date || 'N/A',
+                            departure: metadata.departure || 'N/A',
+                            destination: metadata.destination || 'N/A',
+                            tripTime: metadata.tripTime || '',
+                            maxSR: metadata.maxSR || '',
+                            requestNumber: metadata.requestNumber || ''
+                        };
+                        // Determine next order
+                        const all = await getAllOFPsFromDB();
+                        const maxOrder = all.length > 0 ? Math.max(...all.map(o => o.order || 0)) : 0;
+                        const ofpRecord = {
+                            ...minimalMetadata,
+                            data: null,          // PDF missing – will need re‑upload to activate
+                            loggedPdfData: null,
+                            finalized: false,
+                            isActive: false,     // never activate automatically
+                            order: maxOrder + 1,
+                            uploadTime: new Date().toISOString(),
+                            fileName: blob.name || "Unknown"
+                        };
+                        const db = await openDB();
+                        const tx = db.transaction("ofps", "readwrite");
+                        const store = tx.objectStore("ofps");
+                        const addRequest = store.add(ofpRecord);
+                        addRequest.onsuccess = (e) => {
+                            console.log("Emergency: minimal ofps record created, ID =", e.target.result);
+                            showToast("OFP record created (PDF missing) – re‑upload to activate", 'warning');
+                        };
+                        tx.oncomplete = () => db.close();
+                    } catch (e2) {
+                        console.error("Emergency ofps record creation failed:", e2);
+                    }
+                    setOFPLoadedState(true);
+                    showToast("OFP saved (fallback)", 'success');
+                }
+            }
+        }
+
+        // 7. Log success event
+        try {
+            await logSecurityEvent('PDF_UPLOAD', {
+                fileName: blob.name,
+                fileSize: blob.size,
+                fileType: blob.type,
+                success: true
+            });
+        } catch (logError) {
+            console.error('Failed to log upload:', logError);
+        }
+
+        // 8. Handle state (original behaviour)
+        if (isAutoLoad) {
             await loadSavedState();
-        } else { 
-            saveState(); 
+        } else {
+            saveState();
         }
     }
-    
+        
     // Validate Altimeter
     window.validateAltimeter = function(el) {
         el.value = el.value.replace(/[^0-9]/g, '').substring(0, 4);
@@ -1938,14 +2256,24 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     }
 
     function extractRoutes(text) {
-        const dr = text.match(/DEST\s+ROUTE[:\s]+([^\n]+?)(?=\s+ALTN\s+ROUTE|\s+FUEL|\s+$)/i);
-        safeText('view-dest-route', dr ? dr[1].trim() : '-');
-        const ar = text.match(/ALTN\s+ROUTE[:\s]+([^\n]+?)(?=\s+FUEL|\s+$)/i);
-        safeText('view-altn-route', ar ? ar[1].trim() : '-');
+        // Destination Route
+        const destRouteMatch = text.match(/DEST\s+ROUTE[:\s]+(.*?)(?=\s+ALTN\d?\s+ROUTE|\s+FUEL|\s+$)/is);
+        safeText('view-dest-route', destRouteMatch ? destRouteMatch[1].trim() : '-');
+
+        // Alternate Route
+        const altn1Match = text.match(/ALTN1?\s+ROUTE[:\s]+(.*?)(?=\s+ALTN2?\s+ROUTE|\s+FUEL|\s+$)/is);
+        safeText('view-altn-route', altn1Match ? altn1Match[1].trim() : '-');
+
+        // Alternate Route 2
+        const altn2Match = text.match(/ALTN2\s+ROUTE[:\s]+(.*?)(?=\s+FUEL|\s+$)/is);
+        if (altn2Match) {
+            safeText('view-altn2-route', altn2Match[1].trim());
+        } else {
+            safeText('view-altn2-route', '-');
+        }
     }
     
     function extractAdditionalFlightInfo(textContent) {
-        
         // Join all lines into one string for easier pattern matching
         const singleLine = textContent.replace(/\n/g, ' ').replace(/\s+/g, ' ');
         
@@ -1959,24 +2287,24 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         
         let row1Text = "-";
         let row2Text = "-";
+        let maxSR = '';
         
         if (row1Match) {
-            // Format: CRZ WIND [M032] AVG TEMP [M54] ISA DEV [M08] LOWEST TEMP [M60] MAX SR [08]
+            maxSR = row1Match[5]; // Capture the SR value
             row1Text = `CRZ WIND ${row1Match[1]} AVG TEMP ${row1Match[2]} ISA DEV ${row1Match[3]} LOWEST TEMP ${row1Match[4]} MAX SR ${row1Match[5]}`;
         } else {
             // Try alternative pattern without the M prefix
             const altRow1Pattern = /CRZ WIND\s+(\w+)\s+AVG TEMP\s+(\w+)\s+ISA DEV\s+(\w+)\s+LOWEST TEMP\s+(\w+)\s+MAX SR\s+(\w+)/i;
             const altRow1Match = singleLine.match(altRow1Pattern);
             if (altRow1Match) {
+                maxSR = altRow1Match[5];
                 row1Text = `CRZ WIND ${altRow1Match[1]} AVG TEMP ${altRow1Match[2]} ISA DEV ${altRow1Match[3]} LOWEST TEMP ${altRow1Match[4]} MAX SR ${altRow1Match[5]}`;
             }
         }
         
         if (row2Match) {
-            // Format: IDLE/PERF [-0.1/2.0] SEATS [166 (16/150)] STN [7] JMP [2]
             row2Text = `IDLE/PERF ${row2Match[1]}/${row2Match[2]} SEATS ${row2Match[3]} (${row2Match[4]}/${row2Match[5]}) STN ${row2Match[6]} JMP ${row2Match[7]}`;
         } else {
-            // Try simpler pattern for row 2
             const altRow2Pattern = /IDLE\/PERF\s+([^ ]+)\s+SEATS\s+([^ ]+)\s+STN\s+([^ ]+)\s+JMP\s+([^ ]+)/i;
             const altRow2Match = singleLine.match(altRow2Pattern);
             if (altRow2Match) {
@@ -1988,7 +2316,14 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         safeText('view-crz-wind-temp', row1Text);
         safeText('view-seats-stn-jmp', row2Text);
         
-        return { row1: row1Text, row2: row2Text };
+        return { row1: row1Text, row2: row2Text, maxSR: maxSR };
+    }
+
+    function extractRequestNumber(textContent) {
+        if (!textContent) return '';
+        // Pattern: REQUEST # 03251  or  REQUEST#03251  or  REQUEST #03251
+        const match = textContent.match(/REQUEST\s*#\s*(\d+)/i);
+        return match ? match[1] : '';
     }
 
     function buildRows(items) {
@@ -2131,7 +2466,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                 ] = match;
                 
                 // Now look for ERA and ALTN2 AFTER the flight pattern
-                // Get the text after the matched pattern
                 const afterFlight = cleanText.substring(match.index + match[0].length);
                 
                 // Look for 4-letter airport codes after the flight pattern, but stop at "MET" or "MTOW"
@@ -2378,16 +2712,16 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     async function parsePDFData(pdfBytes, isAutoLoad) {
         try {
             // Reset Variables
-            waypoints = []; 
-            alternateWaypoints = []; 
-            fuelData = []; 
+            waypoints = [];
+            alternateWaypoints = [];
+            fuelData = [];
             blockFuelValue = 0;
             window.cutoffPageIndex = -1;
-            
-            // Reset frontCoords to null values
-            frontCoords = { 
-                atis: null, atcLabel: null, altm1: null, stby: null, 
-                altm2: null, picBlockLabel: null, reasonLabel: null 
+
+            // Reset frontCoords
+            frontCoords = {
+                atis: null, atcLabel: null, altm1: null, stby: null,
+                altm2: null, picBlockLabel: null, reasonLabel: null
             };
 
             const pdf = await pdfjsLib.getDocument(pdfBytes).promise;
@@ -2402,131 +2736,146 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                 if (i > 3 && window.cutoffPageIndex === -1) {
                     const upper = textContent.toUpperCase();
                     if (upper.includes("END OF ALTERNATE FLIGHT PLAN") ||
-                        (upper.includes("END") && upper.includes("FLIGHT") && upper.includes("PLAN")) || 
+                        (upper.includes("END") && upper.includes("FLIGHT") && upper.includes("PLAN")) ||
                         (upper.includes("WEATHER") && upper.includes("CHART")) ||
                         (upper.includes("NOTAM") && upper.includes("BRIEFING"))) {
-                        window.cutoffPageIndex = i - 1; 
+                        window.cutoffPageIndex = i - 1;
                     }
                 }
 
-                // Page 1 - with error handling
+                // Page 1
                 if (i === 1) {
                     extractFrontCoords(content.items);
-                    
-                    // Try to parse page one, but don't crash on failure
                     try {
                         parsePageOne(textContent);
+                        const requestNumber = extractRequestNumber(textContent);
                     } catch (parseError) {
                         console.warn('Failed to parse page 1:', parseError);
-                        // Set OFP loaded state to false so user can retry
                         if (typeof setOFPLoadedState === 'function') {
                             setOFPLoadedState(false);
                         }
-                        throw parseError; // Re-throw to stop further processing
+                        throw parseError;
                     }
                 }
-                
-                // Page 2+ (Waypoints) - only parse if page 1 succeeded
+
+                // Page 2+ (Waypoints)
                 if (i >= 2) {
                     const pageWaypoints = await parseWaypoints(page, i);
                     waypoints.push(...pageWaypoints);
                 }
             }
-            
-            // Validate that we extracted some data
+
+            // Validate waypoints
             if (waypoints.length === 0) {
                 console.warn('No waypoints found in PDF');
-                // Don't throw here, just continue with what we have
             }
-            
+
             // Process the extracted data
-            waypoints.forEach(wp => { 
-                wp.baseFuel = parseInt(wp.fob) || 0; 
-                wp.fuel = wp.baseFuel; 
+            waypoints.forEach(wp => {
+                wp.baseFuel = parseInt(wp.fob) || 0;
+                wp.fuel = wp.baseFuel;
             });
             processWaypointsList();
-            
-            // Update UI
+
+            // Extract Trip Time
+            let tripTime = '';
+            const tripEntry = fuelData.find(item => item.name === "TRIP");
+            if (tripEntry && tripEntry.time) {
+                tripTime = tripEntry.time; // e.g. "05.27" or "05:27"
+                // Normalize to HH:MM for consistency
+                if (tripTime.includes('.')) {
+                    tripTime = tripTime.replace('.', ':');
+                }
+            }
+
+            // Extract Max SR
+            let maxSR = '';
+            const crzWindTempEl = document.getElementById('view-crz-wind-temp');
+            if (crzWindTempEl) {
+                const text = crzWindTempEl.innerText || crzWindTempEl.textContent;
+                if (text) {
+                    // More flexible pattern: "MAX SR 08" or "MAX SR 08" at the end
+                    const match = text.match(/MAX SR\s+(\d{1,2})/i);
+                    if (match) {
+                        maxSR = match[1];
+                    } else {
+                        // Try to find just the number after "MAX SR"
+                        const altMatch = text.match(/MAX SR\s*(\d{1,2})/i);
+                        if (altMatch) maxSR = altMatch[1];
+                    }
+                }
+            }
+
+            // Extract Request Number
+            let requestNumber = '';
+            try {
+                const page1 = await pdf.getPage(1);
+                const content1 = await page1.getTextContent();
+                const text1 = content1.items.map(x => x.str).join(' ');
+                requestNumber = extractRequestNumber(text1);
+            } catch (e) {
+                console.warn('Could not extract request number:', e);
+            }
+
+            // Update UI elements (already done by earlier functions, but ensure they're called)
             if (document.getElementById('view-pic-block')) {
                 const elPic = document.getElementById('view-pic-block');
                 const val = blockFuelValue || 0;
-                if(elPic.tagName === 'INPUT') elPic.value = val; 
-                else elPic.innerText = val; 
+                if (elPic.tagName === 'INPUT') elPic.value = val;
+                else elPic.innerText = val;
             }
-        
-            // Run calculations
+
+            // Run calculations and render tables
             runFlightLogCalculations();
             renderFuelTable();
             renderFlightLogTables();
-            
+
+            // --- SECOND PASS: Re-extract tripTime from the rendered fuel table? Not needed, fuelData is already correct.
+            // But we can double-check if the fuel table was rendered and maybe read from the DOM as fallback.
+            if (!tripTime) {
+                // Fallback: read from the fuel table in the DOM
+                const fuelRows = document.querySelectorAll('#fuel-tbody tr');
+                fuelRows.forEach(row => {
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length >= 2 && cells[0].innerText === 'TRIP') {
+                        tripTime = cells[1].innerText;
+                    }
+                });
+            }
+
+            // --- SECOND PASS: Re-extract maxSR from the DOM again (safety) ---
+            if (!maxSR) {
+                const crzWindTempEl2 = document.getElementById('view-crz-wind-temp');
+                if (crzWindTempEl2) {
+                    const text = crzWindTempEl2.innerText || crzWindTempEl2.textContent;
+                    const match = text?.match(/MAX SR\s+(\d{1,2})/i);
+                    if (match) maxSR = match[1];
+                }
+            }
+
+            // --- Build metadata object with guaranteed values ---
+            const metadata = {
+                flight: document.getElementById('view-flt')?.innerText || 'N/A',
+                date: document.getElementById('view-date')?.innerText || 'N/A',
+                departure: document.getElementById('view-dep')?.innerText || 'N/A',
+                destination: document.getElementById('view-dest')?.innerText || 'N/A',
+                tripTime: tripTime || '',
+                maxSR: maxSR || '',
+                requestNumber: requestNumber || ''
+            };
+
+            return {
+                success: true,
+                metadata: metadata,
+                tripTime: tripTime,
+                maxSR: maxSR,
+                requestNumber: requestNumber
+            };
+
         } catch (error) {
             console.error('Error in parsePDFData:', error);
-            
-            // Make sure OFP state is set to false so user can retry
-            if (typeof setOFPLoadedState === 'function') {
-                setOFPLoadedState(false);
-            }
-            
-            // Clear any partially loaded data
-            waypoints = [];
-            alternateWaypoints = [];
-            fuelData = [];
-            blockFuelValue = 0;
-            
-            // Clear UI tables
-            ['ofp-tbody', 'altn-tbody', 'fuel-tbody'].forEach(id => {
-                const tb = document.getElementById(id);
-                if(tb) tb.innerHTML = '<tr><td colspan="13" style="text-align:center;color:gray;padding:20px">No data</td></tr>';
-            });
-            
-            // Clear flight summary
-            ['view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 
-            'view-altn', 'view-std-text', 'view-sta-text', 'view-ci',
-            'view-era-text', 'view-altn2', 'view-crz-wind-temp', 'view-seats-stn-jmp',
-            'view-dest-route', 'view-altn-route', 'view-min-block', 'view-pic-block'].forEach(id => {
-                safeText(id, '-');
-            });
-            
-            // Show error notification (only for manual uploads)
-            if (!isAutoLoad) {
-                setTimeout(() => {
-                    const errorDiv = document.createElement('div');
-                    errorDiv.style.cssText = `
-                        position: fixed;
-                        top: 20px;
-                        right: 20px;
-                        background: #ff3b30;
-                        color: white;
-                        padding: 15px 20px;
-                        border-radius: 8px;
-                        z-index: 10000;
-                        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                    `;
-                    errorDiv.innerHTML = `
-                        <strong>⚠️ OFP Parsing Failed</strong><br>
-                        <small>${error.message || 'Could not parse PDF data. Please check the file format.'}</small><br>
-                        <button onclick="this.parentElement.remove()" style="
-                            margin-top: 8px;
-                            background: rgba(255,255,255,0.2);
-                            border: none;
-                            color: white;
-                            padding: 5px 10px;
-                            border-radius: 4px;
-                            cursor: pointer;
-                        ">Dismiss</button>
-                    `;
-                    document.body.appendChild(errorDiv);
-                    
-                    // Auto-remove after 10 seconds
-                    setTimeout(() => {
-                        if (errorDiv.parentElement) {
-                            errorDiv.remove();
-                        }
-                    }, 10000);
-                }, 100);
-            }
-            
-            throw error; // Re-throw so runAnalysis knows it failed
+            // ... (your existing error handling) ...
+            throw error;
         }
     }
 
@@ -2568,6 +2917,306 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         }
     };
 
+    // Render the table in the Sectors tab
+    window.renderOFPMangerTable = async function() {
+        try {
+            const tbody = document.getElementById('ofp-manager-tbody');
+            if (!tbody) {
+                console.error('OFP Manager table body not found');
+                return;
+            }
+
+            const ofps = await getAllOFPsFromDB();
+            const filterText = document.getElementById('ofp-search-input')?.value.toLowerCase() || '';
+
+            if (ofps.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="9" style="text-align: center; padding: 30px; color: var(--dim);">
+                            No OFPs uploaded yet.<br>
+                            <button onclick="document.getElementById('ofp-file-in').click()" 
+                                    class="btn btn-save" style="margin-top:15px;">
+                                📁 Upload First OFP
+                            </button>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            // Filter logic
+            const filtered = ofps.filter(ofp => {
+                if (!filterText) return true;
+                const flight = (ofp.flight || '').toLowerCase();
+                const date = (ofp.date || '').toLowerCase();
+                const dep = (ofp.departure || '').toLowerCase();
+                const dest = (ofp.destination || '').toLowerCase();
+                return flight.includes(filterText) || date.includes(filterText) || 
+                    dep.includes(filterText) || dest.includes(filterText);
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 30px; color: var(--dim);">No matching OFPs found.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(ofp => {
+                const flight = ofp.flight || '—';
+                const date = ofp.date || '—';
+                const dep = ofp.departure || '—';
+                const dest = ofp.destination || '—';
+
+                // Status badge
+                let statusBadge = '';
+                if (ofp.finalized) {
+                    statusBadge = `<span class="status-badge status-finalized">✓ Finalized</span>`;
+                } else {
+                    statusBadge = `<span class="status-badge ${ofp.isActive ? 'status-active' : 'status-inactive'}">
+                        ${ofp.isActive ? '✓ Active' : 'Inactive'}
+                    </span>`;
+                }
+
+                const activateDisabled = ofp.finalized || ofp.isActive;
+                const activateTitle = ofp.finalized 
+                    ? 'Cannot activate – OFP is finalized' 
+                    : (ofp.isActive ? 'Already active' : 'Activate this OFP');
+
+                return `
+                    <tr data-ofp-id="${ofp.id}" ${ofp.isActive ? 'class="active-ofp-row"' : ''}>
+                        <td><strong>${sanitizeHTML(flight)}</strong></td>
+                        <td>${sanitizeHTML(date)}</td>
+                        <td>${sanitizeHTML(dep)}</td>
+                        <td>${sanitizeHTML(dest)}</td>
+                        <td>${sanitizeHTML(ofp.tripTime || '—')}</td>
+                        <td>${sanitizeHTML(ofp.maxSR || '—')}</td>
+                        <td>${sanitizeHTML(ofp.requestNumber || '—')}</td>
+                        <td>${statusBadge}</td>
+                        <td style="white-space: nowrap;">
+                            <button onclick="activateOFP(${ofp.id})" 
+                                    class="btn-icon activate" 
+                                    ${activateDisabled ? 'disabled' : ''}
+                                    title="${activateTitle}">
+                                ▶️
+                            </button>
+                            
+                            ${ofp.finalized ? 
+                                `<button onclick="downloadLoggedOFP(${ofp.id})" 
+                                        class="btn-icon download" 
+                                        title="Download Logged OFP">
+                                    ⬇️
+                                </button>` : 
+                                `<button class="btn-icon download" disabled style="opacity:0.3" 
+                                        title="Finalize OFP first">
+                                    ⬇️
+                                </button>`
+                            }
+                            
+                            <button onclick="moveOFP(${ofp.id}, -1)" 
+                                    class="btn-icon" 
+                                    title="Move Up">
+                                ▲
+                            </button>
+                            
+                            <button onclick="moveOFP(${ofp.id}, 1)" 
+                                    class="btn-icon" 
+                                    title="Move Down">
+                                ▼
+                            </button>
+                            
+                            <button onclick="deleteOFP(${ofp.id})" 
+                                    class="btn-icon delete" 
+                                    title="Delete OFP">
+                                🗑️
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            
+        } catch (error) {
+            console.error('Error rendering OFP Manager table:', error);
+            const tbody = document.getElementById('ofp-manager-tbody');
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 30px; color: var(--error);">
+                    Error loading OFPs: ${sanitizeHTML(error.message)}
+                </td></tr>`;
+            }
+        }
+    };
+
+    window.filterOFPs = function() {
+        renderOFPMangerTable();
+    };
+
+    // Move OFP up (decrease order) or down (increase order)
+    window.moveOFP = async function(id, direction) {
+        const db = await openDB();
+        const tx = db.transaction("ofps", "readwrite");
+        const store = tx.objectStore("ofps");
+        
+        const ofps = await new Promise((resolve) => {
+            const req = store.getAll();
+            req.onsuccess = () => resolve(req.result);
+        });
+        
+        // Sort by current order
+        ofps.sort((a, b) => (a.order || 0) - (b.order || 0));
+        
+        const index = ofps.findIndex(o => o.id === id);
+        if (index === -1) return;
+        
+        const swapIndex = index + direction;
+        if (swapIndex < 0 || swapIndex >= ofps.length) return;
+        
+        // Swap order values
+        const tempOrder = ofps[index].order;
+        ofps[index].order = ofps[swapIndex].order;
+        ofps[swapIndex].order = tempOrder;
+        
+        // Save both records
+        await Promise.all([
+            new Promise((res) => { store.put(ofps[index]); res(); }),
+            new Promise((res) => { store.put(ofps[swapIndex]); res(); })
+        ]);
+        
+        await renderOFPMangerTable();
+        showToast("OFP order updated", 'success');
+    };
+
+    async function getOFPById(id) {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readonly");
+            const store = tx.objectStore("ofps");
+            const request = store.get(Number(id));
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = (e) => reject(e);
+        });
+    }
+
+    // After deleting, renumber orders to be consecutive (1,2,3...)
+    async function renumberOFPOrders() {
+        const db = await openDB();
+        const tx = db.transaction("ofps", "readwrite");
+        const store = tx.objectStore("ofps");
+        const ofps = await new Promise((res) => {
+            const req = store.getAll();
+            req.onsuccess = () => res(req.result);
+        });
+        ofps.sort((a, b) => (a.order || 0) - (b.order || 0));
+        ofps.forEach((ofp, idx) => {
+            ofp.order = idx + 1;
+            store.put(ofp);
+        });
+    }
+
+    // Activate OFP
+    window.activateOFP = async function(id, switchTab = true) {
+        const ofpToActivate = await getOFPById(id);
+        if (ofpToActivate && ofpToActivate.finalized) {
+            showToast("Cannot activate a finalized OFP", 'error');
+            return;
+        }
+        try {
+            await setActiveOFP(id);
+            const ofp = await getActiveOFPFromDB();
+            if (ofp && ofp.data) {
+                // Load OFP into memory
+                setOFPLoadedState(true);
+                window.ofpPdfBytes = await ofp.data.arrayBuffer();
+                window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
+
+                // Run analysis and load saved state
+                await runAnalysis(ofp.data, true);
+                await loadState();
+
+                // Refresh table
+                await renderOFPMangerTable();
+
+                // Switch to Flight Summary tab ONLY if requested
+                if (switchTab) {
+                    const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
+                    if (summaryBtn) {
+                        if (typeof window.showTab === 'function') {
+                            window.showTab('summary', summaryBtn);
+                        } else {
+                            summaryBtn.click();
+                        }
+                    }
+                }
+
+                showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
+            }
+        } catch (error) {
+            console.error("Error activating OFP:", error);
+            showToast("Failed to activate OFP", 'error');
+        }
+    };
+
+    // Delete OFP
+    window.deleteOFP = async function(id) {
+        const confirmed = await showConfirmDialog(
+            'Delete OFP',
+            'Are you sure you want to delete this OFP? This action cannot be undone.',
+            'Delete',
+            'Cancel',
+            'error'
+        );
+        if (!confirmed) return;
+        
+        try {
+            const activeId = localStorage.getItem('activeOFPId');
+            const wasActive = (activeId && Number(activeId) === id);
+            
+            await deleteOFPFromDB(id);
+            
+            if (wasActive) {
+                // Remove active ID from storage
+                localStorage.removeItem('activeOFPId');
+                
+                // Try to find the most recent remaining OFP and activate it
+                const remainingOFPs = await getAllOFPsFromDB();
+                if (remainingOFPs.length > 0) {
+                    const newest = remainingOFPs[0]; // already sorted by uploadTime desc
+                    await activateOFP(newest.id);
+                } else {
+                    // No OFPs left – clear app state
+                    setOFPLoadedState(false);
+                    clearOFPInputs();
+                    window.ofpPdfBytes = null;
+                }
+            }
+            await renumberOFPOrders();
+            await renderOFPMangerTable();
+            showToast("OFP deleted", 'success');
+        } catch (error) {
+            console.error("Error deleting OFP:", error);
+            showToast("Failed to delete OFP", 'error');
+        }
+    };
+
+    // Clear all OFPs
+    window.clearAllOFPs = async function() {
+        const confirmed = await showConfirmDialog(
+            'Clear All OFPs',
+            '⚠️ This will delete ALL stored OFPs. Continue?',
+            'Clear All',
+            'Cancel',
+            'error'
+        );
+        if (!confirmed) return;
+        try {
+            await clearAllOFPsFromDB();
+            setOFPLoadedState(false);
+            clearOFPInputs();
+            await renderOFPMangerTable();
+            showToast("All OFPs cleared", 'success');
+        } catch (error) {
+            console.error("Error clearing OFPs:", error);
+            showToast("Failed to clear OFPs", 'error');
+        }
+    };
+
     // Handle changing tabs
     window.showTab = window.showTab || function(id, btn) {
         // Save signature before leaving
@@ -2584,38 +3233,47 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         if(el('section-'+id)) el('section-'+id).classList.add('active');
         if(btn) btn.classList.add('active');
         
+        if (id === 'sectors') {
+            // Refresh table
+            setTimeout(() => {
+                if (typeof renderOFPMangerTable === 'function') {
+                    renderOFPMangerTable();
+                }
+            }, 100);
+        }
+
         // Restore Signature if going to confirm tab
         if(id === 'confirm') {
             validateOFPInputs();
             setTimeout(() => {
                 const canvas = el('sig-canvas');
                 if (canvas) {
+                    // Always get fresh ratio and reset canvas size
                     const ratio = Math.max(window.devicePixelRatio || 1, 1);
-                    const newWidth = canvas.offsetWidth;
-                    const newHeight = canvas.offsetHeight;
+                    const containerWidth = canvas.offsetWidth;
+                    const containerHeight = canvas.offsetHeight;
+
+                    // Set canvas pixel dimensions to match CSS dimensions * ratio
+                    canvas.width = containerWidth * ratio;
+                    canvas.height = containerHeight * ratio;
                     
-                    if (canvas.width !== newWidth * ratio || canvas.height !== newHeight * ratio) {
-                        canvas.width = newWidth * ratio;
-                        canvas.height = newHeight * ratio;
-                        canvas.getContext("2d").scale(ratio, ratio);
-                        
-                        if (signaturePad) signaturePad.off();
-                        signaturePad = new SignaturePad(canvas, {
-                            backgroundColor: 'rgba(0,0,0,0)',
-                            penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
-                        });
-                    }
-                    
-                    if (!signaturePad) {
-                        signaturePad = new SignaturePad(canvas, {
-                            backgroundColor: 'rgba(0,0,0,0)',
-                            penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
-                        });
-                    }
-                    
+                    // Scale context so coordinates work in CSS pixels
+                    const ctx = canvas.getContext("2d");
+                    ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform
+                    ctx.scale(ratio, ratio);
+
+                    // (Re)create SignaturePad with the fresh canvas
+                    signaturePad = new SignaturePad(canvas, {
+                        backgroundColor: 'rgba(0,0,0,0)',
+                        penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+                    });
+
+                    // Restore saved signature if exists
                     if (savedSignatureData) {
                         signaturePad.fromDataURL(savedSignatureData, { ratio: ratio });
                     }
+
+                    updateSaveButtonState();
                 }
             }, 50);
         }
@@ -2954,6 +3612,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             }
         }
     }
+
     window.retryPDFRender = async function() {
         if (window.ofpPdfBytes) {
             await renderPDFPreview(window.ofpPdfBytes);
@@ -3189,29 +3848,43 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     };
 
     window.validateOFPInputs = function() {
-            const flt = el('j-flt')?.value;
-            const date = el('j-date')?.value;
-            const alt1 = el('front-altm1')?.value;
-            const summaryOK = !!flt && !!date && !!alt1;
-            const fuelOK = (blockFuelValue > 0);
-            const atd = el('j-on')?.value;
-            const flightLogOK = !!atd;
-            const journeyOK = dailyLegs.length > 0;
-            const checks = [
-                { label: "Flight Summary", valid: summaryOK },
-                { label: "Fuel", valid: fuelOK },
-                { label: "Flight Log", valid: flightLogOK },
-                { label: "Journey Log", valid: journeyOK }
-            ];
-            const list = el('validation-list');
-            if(list) {
-                list.innerHTML = checks.map(c => 
-                    `<div class="checklist-item"><span>${sanitizeHTML(c.label)}</span><span class="${c.valid?'status-ok':'status-fail'}">${c.valid?'✔':'✖'}</span></div>`
-                ).join('');
-                
-                const valid = checks.every(c => c.valid);
-                if(el('btn-send-ofp')) el('btn-send-ofp').disabled = !valid;
+        const flt = el('j-flt')?.value;
+        const date = el('j-date')?.value;
+        const alt1 = el('front-altm1')?.value;
+        const summaryOK = !!flt && !!date && !!alt1;
+        const fuelOK = (blockFuelValue > 0);
+
+        let flightLogOK = false;
+        const atoInputs = document.querySelectorAll('[id^="o-a-"]');
+        for (let input of atoInputs) {
+            if (input.value && input.value.trim() !== '') {
+                flightLogOK = true;
+                break;
             }
+        }
+
+        let journeyOK = false;
+        const currentFlight = el('j-flt')?.value || el('view-flt')?.innerText;
+        if (currentFlight && dailyLegs.length > 0) {
+            journeyOK = dailyLegs.some(leg => leg['j-flt'] === currentFlight);
+        }
+
+        const checks = [
+            { label: "Flight Summary", valid: summaryOK },
+            { label: "Fuel", valid: fuelOK },
+            { label: "Flight Log", valid: flightLogOK },
+            { label: "Journey Log (current flight)", valid: journeyOK }
+        ];
+
+        const list = el('validation-list');
+        if (list) {
+            list.innerHTML = checks.map(c => 
+                `<div class="checklist-item"><span>${sanitizeHTML(c.label)}</span><span class="${c.valid?'status-ok':'status-fail'}">${c.valid?'✔':'✖'}</span></div>`
+            ).join('');
+            
+            const valid = checks.every(c => c.valid);
+            if (el('btn-send-ofp')) el('btn-send-ofp').disabled = !valid;
+        }
     };
 
     function clearOFPInputs() {
@@ -3236,7 +3909,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         
         // 5. Reset 'Flight Summary' & 'Weights & Fuel' Tab Text placeholders
         ['view-min-block', 'view-pic-block', 'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 'view-dow', 'view-tow', 'view-lw', 'view-zfw'].forEach(id => safeText(id, '-'));
-        ['view-flt', 'view-reg', 'view-date','view-std-text', 'view-sta-text', 'view-dep', 'view-dest', 'view-altn', 'view-dest-route', 'view-altn-route', 'view-ci','view-etd-text', 'view-eta-text', 'view-era','view-crz-wind-temp', 'view-seats-stn-jmp'].forEach(id => safeText(id, '-'));
+        ['view-flt', 'view-reg', 'view-date','view-std-text', 'view-sta-text', 'view-dep', 'view-dest', 'view-altn', 'view-altn2', 'view-dest-route', 'view-altn-route', 'view-ci','view-etd-text', 'view-eta-text', 'view-era','view-crz-wind-temp', 'view-seats-stn-jmp'].forEach(id => safeText(id, '-'));
     }
 
     function updateFloatingButtonVisibility() {
@@ -3677,7 +4350,14 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             userInitiated: true,
             timestamp: new Date().toISOString()
         });
-        if(!confirm("Warning: This will delete ALL data (OFP, Flight Log, and Journey Log). Continue?")) return;
+        const confirmed = await showConfirmDialog(
+            'System Reset',
+            'Warning: This will delete ALL data (OFP, Flight Log, and Journey Log). Continue?',
+            'Reset',
+            'Cancel',
+            'error'
+        );
+        if (!confirmed) return;
 
         if (autoLockTimer) {
             clearTimeout(autoLockTimer);
@@ -4719,7 +5399,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                     const sourceDoc = await loadingTask.promise;
                     const totalPages = sourceDoc.numPages;
                 
-
                     // 3. Create a NEW, CLEAN PDF
                     const newPdf = await PDFLib.PDFDocument.create();
 
@@ -4844,15 +5523,17 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
                     // 6. SAVE
                     const bytes = await newPdf.save();
-                    
-                    const filename = (window.originalFileName || "Logged_OFP.pdf").replace(".pdf", "_Logged.pdf");
+                    const flight = el('view-flt')?.innerText || el('j-flt')?.value || 'OFP';
+                    const date = el('view-date')?.innerText || el('j-date')?.value || '';
+                    let filename = generateOFPDFilename(flight, date);
                     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+                    window.lastGeneratedOFPPdfBytes = bytes;
 
                     if (mode === 'email' && isMobile) {
                         const flt = el('j-flt')?.value || "FLT";
                         const date = el('j-date')?.value || "DATE";
                         const subject = `OFP: ${flt} ${date}`;
-                        await sharePdf(bytes, filename, subject, "Please find attached the OFP.");
+                        await sharePdf(bytes, filename, subject, "Please find attached the OFP for flight ${flt} on ${date}");
                     } else {
                         downloadBlob(bytes, filename);
                     }
@@ -4860,6 +5541,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                     if(typeof resetOFPAfterSend === 'function') await resetOFPAfterSend();
 
                 } catch (error) { 
+                    window.lastGeneratedOFPPdfBytes = null;
                     console.error("Download Error:", error); 
                     alert("Error generating PDF: " + error.message); 
                 }
@@ -4957,20 +5639,134 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     async function resetOFPAfterSend() {
         // 1. Popup Confirmation
         const userConfirmed = await confirmResetOFP();
-        if (!userConfirmed) return;
+        if (!userConfirmed) {
+            window.lastGeneratedOFPPdfBytes = null;
+            return;
+        }
 
+        // 2. Save logged PDF to the active OFP
         try {
-            // 2. Call Worker
-            await performDataReset(true);
+            const activeId = localStorage.getItem('activeOFPId');
+            if (activeId && window.lastGeneratedOFPPdfBytes) {
+                const loggedBlob = new Blob([window.lastGeneratedOFPPdfBytes], { type: 'application/pdf' });
+                await updateOFP(activeId, {
+                    finalized: true,
+                    isActive: false,
+                    loggedPdfData: loggedBlob,
+                    finalizedAt: new Date().toISOString()
+                });
+                showToast("OFP finalized", 'success');
+            }
         } catch (error) {
-            console.error("Error resetting OFP:", error);
+            console.error("Failed to save logged OFP:", error);
+            showToast("Failed to save finalized OFP", 'error');
+        } finally {
+            window.lastGeneratedOFPPdfBytes = null;
+        }
+
+        // 3. Reset UI but do NOT show upload overlay yet
+        await performDataReset(true, false);
+
+        // 4. Get settings
+        const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+        const autoActivate = settings.autoActivateNext !== false; // default true
+
+        // 5. Get all OFPs and check if there are any non‑finalized OFPs
+        const allOFPs = await getAllOFPsFromDB(); // sorted by order
+        const nonFinalizedOFPs = allOFPs.filter(ofp => !ofp.finalized);
+
+        if (nonFinalizedOFPs.length === 0) {
+            // --- NO NON‑FINALIZED OFPs LEFT → END OF DAY, GO TO JOURNEY LOG ---
+            showToast("All OFPs finalized – complete your Journey Log", 'info');
+            
+            // Switch to Journey Log tab
+            const journeyBtn = document.querySelector('.nav-btn[data-tab="journey"], .nav-btn[onclick*="journey"]');
+            if (journeyBtn) {
+                if (typeof window.showTab === 'function') {
+                    window.showTab('journey', journeyBtn);
+                } else {
+                    journeyBtn.click();
+                }
+            }
+            
+            // Ensure the upload overlay is hidden (we are in Journey Log tab)
+            setOFPLoadedState(false);
+            return;
+        }
+
+        // --- THERE ARE NON‑FINALIZED OFPs → PROCEED WITH AUTO‑ACTIVATION (if enabled) ---
+        const currentActiveId = localStorage.getItem('activeOFPId');
+        let nextOFP = null;
+
+        if (autoActivate && allOFPs.length > 0) {
+            if (currentActiveId) {
+                // Find the OFP that comes after the current one in order
+                const currentIndex = allOFPs.findIndex(o => o.id === Number(currentActiveId));
+                if (currentIndex !== -1 && currentIndex < allOFPs.length - 1) {
+                    nextOFP = allOFPs[currentIndex + 1];
+                }
+            }
+            // If no next found, activate the first non‑finalized one (top of list)
+            if (!nextOFP && nonFinalizedOFPs.length > 0) {
+                nextOFP = nonFinalizedOFPs[0];
+            }
+        }
+
+        if (nextOFP) {
+            await activateOFP(nextOFP.id);
+        } else {
+            // No OFP to activate – show upload overlay
+            setOFPLoadedState(false);
         }
     }
 
+    window.downloadLoggedOFP = async function(id) {
+        try {
+            const db = await openDB();
+            const tx = db.transaction("ofps", "readonly");
+            const store = tx.objectStore("ofps");
+            const request = store.get(Number(id));
+            
+            request.onsuccess = () => {
+                const ofp = request.result;
+                if (ofp && ofp.loggedPdfData) {
+                    const url = URL.createObjectURL(ofp.loggedPdfData);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = generateOFPDFilename(ofp.flight, ofp.date);
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    showToast("Logged OFP downloaded", 'success');
+                } else {
+                    showToast("No logged version found", 'error');
+                }
+            };
+        } catch (error) {
+            console.error("Error downloading logged OFP:", error);
+            showToast("Download failed", 'error');
+        }
+    };
+
 // ==========================================
-// 11. Download Managment
+// 11. Download/Upload Managment
 // ==========================================
     
+    function generateOFPDFilename(flight, date, suffix = '') {
+        // Clean flight: remove any non‑alphanumeric except hyphen
+        let cleanFlight = (flight || 'OFP').replace(/[^a-zA-Z0-9-]/g, '');
+        if (cleanFlight === '') cleanFlight = 'OFP';
+        
+        // Clean date: replace / with - and remove invalid chars
+        let cleanDate = (date || '').replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '');
+        if (cleanDate === '') cleanDate = 'nodate';
+        
+        let filename = `${cleanFlight}_${cleanDate}`;
+        if (suffix) filename += `_${suffix}`;
+        return filename + '.pdf';
+    }
+
     // Share PDF
     async function sharePdf(pdfBytes, filename, subject, body) {
         // 1. Create a "File" object from the PDF bytes
@@ -5012,7 +5808,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     }
 
     // Shared function to clean UI, Variables, and Database
-    async function performDataReset(preserveDailyLegs = true) {
+    async function performDataReset(preserveDailyLegs = true, setLoadedState = true) {
 
         // 1. Reset Internal Variables
         waypoints = [];
@@ -5029,6 +5825,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
         // 2. Clear PDF Database & Memory
         window.ofpPdfBytes = null;
+        window.lastGeneratedOFPPdfBytes = null;
         window.originalFileName = "Logged_OFP.pdf";
         if(typeof clearPdfDB === 'function') await clearPdfDB();
 
@@ -5115,7 +5912,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             if(e) e.value = '';
         });
 
-
         // 12. DATABASE & STATE MANAGEMENT
         if (preserveDailyLegs) {
             const savedState = localStorage.getItem('efb_log_state');
@@ -5159,8 +5955,12 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             localStorage.removeItem('efb_log_state');
         }
 
-        if(typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
-        if(typeof validateOFPInputs === 'function') validateOFPInputs();
+        if (setLoadedState && typeof setOFPLoadedState === 'function') {
+            setOFPLoadedState(false);
+        }
+        if (typeof validateOFPInputs === 'function') {
+            validateOFPInputs();
+        }
     }
 
 // ==========================================
@@ -5231,7 +6031,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
     // 2. LOAD FUNCTION 
     async function loadState() {
-        console.log("Starting Load Sequence...");
         
         // Try encrypted first, then fallback
         let raw = localStorage.getItem('efb_log_state');
@@ -5314,8 +6113,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
             if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
             if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
-            
-            console.log("Data loaded successfully.");
 
         } catch(e) { 
             console.error("Fatal Load Error:", e);
@@ -5351,22 +6148,366 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             updateAlternateETOs();
         }
     }
+
 // ==========================================
 // 13. PDF STORAGE (IndexedDB)
 // ==========================================
-    
-    // Open Database
+
+    // Open DB with new object store
     function openDB() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open("EFB_PDF_DB", 1);
+            const request = indexedDB.open("EFB_PDF_DB", 7); // Version 7
+
             request.onupgradeneeded = function(e) {
                 const db = e.target.result;
-                if (!db.objectStoreNames.contains("files")) {
-                    db.createObjectStore("files");
+                const oldVersion = e.oldVersion;
+                const tx = e.target.transaction;
+
+                // --- GUARANTEE ofps STORE EXISTS ---
+                if (!db.objectStoreNames.contains("ofps")) {
+                    console.warn(`openDB: creating ofps store (oldVersion=${oldVersion})`);
+                    const ofpStore = db.createObjectStore("ofps", { keyPath: "id", autoIncrement: true });
+                    ofpStore.createIndex("flight", "flight", { unique: false });
+                    ofpStore.createIndex("date", "date", { unique: false });
+                    ofpStore.createIndex("uploadTime", "uploadTime", { unique: false });
+                    ofpStore.createIndex("isActive", "isActive", { unique: false });
+                    ofpStore.createIndex("order", "order", { unique: false });
+                }
+
+                // --- Version-specific migrations ---
+                if (oldVersion < 2) {
+                    if (!db.objectStoreNames.contains("files")) {
+                        db.createObjectStore("files");
+                    }
+                }
+
+                if (oldVersion < 4 && oldVersion >= 3) {
+                    const store = tx.objectStore("ofps");
+                    const getAll = store.getAll();
+                    getAll.onsuccess = () => {
+                        getAll.result.forEach(ofp => {
+                            let needsUpdate = false;
+                            if (ofp.finalized === undefined) { ofp.finalized = false; needsUpdate = true; }
+                            if (ofp.loggedPdfData === undefined) { ofp.loggedPdfData = null; needsUpdate = true; }
+                            if (needsUpdate) store.put(ofp);
+                        });
+                    };
+                }
+
+                if (oldVersion < 5) {
+                    const store = tx.objectStore("ofps");
+                    if (!store.indexNames.contains("order")) {
+                        store.createIndex("order", "order", { unique: false });
+                    }
+                    const getAll = store.getAll();
+                    getAll.onsuccess = () => {
+                        const ofps = getAll.result;
+                        ofps.sort((a, b) => new Date(a.uploadTime) - new Date(b.uploadTime));
+                        ofps.forEach((ofp, index) => {
+                            if (ofp.order === undefined) {
+                                ofp.order = index + 1;
+                                store.put(ofp);
+                            }
+                        });
+                    };
+                }
+
+                if (oldVersion < 6) {
+                    const store = tx.objectStore("ofps");
+                    const getAll = store.getAll();
+                    getAll.onsuccess = () => {
+                        getAll.result.forEach(ofp => {
+                            let needsUpdate = false;
+                            if (ofp.tripTime === undefined) { ofp.tripTime = ''; needsUpdate = true; }
+                            if (ofp.maxSR === undefined) { ofp.maxSR = ''; needsUpdate = true; }
+                            if (needsUpdate) store.put(ofp);
+                        });
+                    };
+                }
+
+                if (oldVersion < 7) {
+                    const store = tx.objectStore("ofps");
+                    const getAll = store.getAll();
+                    getAll.onsuccess = () => {
+                        getAll.result.forEach(ofp => {
+                            if (ofp.requestNumber === undefined) {
+                                ofp.requestNumber = '';
+                                store.put(ofp);
+                            }
+                        });
+                    };
                 }
             };
+
             request.onsuccess = e => resolve(e.target.result);
             request.onerror = e => reject(e);
+        });
+    }
+    // Save OFP with metadata to the new store
+    async function saveOFPToDB(fileBlob, metadata, activate = true) {
+        console.log('saveOFPToDB: starting save, activate =', activate);
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readwrite");
+            const store = tx.objectStore("ofps");
+
+            // Determine next order number
+            const getAllRequest = store.getAll();
+            getAllRequest.onsuccess = () => {
+                const ofps = getAllRequest.result;
+                console.log(`saveOFPToDB: found ${ofps.length} existing OFPs for order calculation`);
+                const maxOrder = ofps.length > 0 ? Math.max(...ofps.map(o => o.order || 0)) : 0;
+                const nextOrder = maxOrder + 1;
+
+                // Only deactivate active OFP if the new one should be active
+                const deactivateAll = () => {
+                    return new Promise((res) => {
+                        if (activate) {
+                            let deactivatedCount = 0;
+                            ofps.forEach(rec => {
+                                if (rec.isActive) {
+                                    rec.isActive = false;
+                                    store.put(rec);
+                                    deactivatedCount++;
+                                }
+                            });
+                            console.log(`saveOFPToDB: deactivated ${deactivatedCount} OFPs`);
+                        }
+                        res();
+                    });
+                };
+
+                deactivateAll().then(() => {
+                    const ofpRecord = {
+                        ...metadata,
+                        data: fileBlob,
+                        loggedPdfData: null,
+                        finalized: false,
+                        isActive: activate,
+                        order: nextOrder,
+                        uploadTime: new Date().toISOString(),
+                        fileName: fileBlob.name || "Unknown",
+                        tripTime: metadata.tripTime || '',
+                        maxSR: metadata.maxSR || '',
+                        requestNumber: metadata.requestNumber || ''
+                    };
+
+                    console.log('saveOFPToDB: adding record', { flight: ofpRecord.flight, date: ofpRecord.date, order: nextOrder, isActive: activate });
+                    const addRequest = store.add(ofpRecord);
+                    addRequest.onsuccess = (e) => {
+                        const newId = e.target.result;
+                        console.log(`✅ saveOFPToDB: SUCCESS, new ID = ${newId}`);
+                        
+                        // Verify the record was actually written
+                        const verifyRequest = store.get(newId);
+                        verifyRequest.onsuccess = () => {
+                            if (verifyRequest.result) {
+                                console.log(`✅ saveOFPToDB: verification OK – record exists with ID ${newId}`);
+                            } else {
+                                console.error(`❌ saveOFPToDB: verification FAILED – record with ID ${newId} not found immediately after add!`);
+                            }
+                        };
+                        verifyRequest.onerror = (verr) => console.error('saveOFPToDB: verification error', verr);
+
+                        if (activate) {
+                            localStorage.setItem('activeOFPId', newId);
+                            console.log(`saveOFPToDB: set activeOFPId = ${newId}`);
+                        }
+                        resolve(newId);
+                    };
+                    addRequest.onerror = (e) => {
+                        console.error('❌ saveOFPToDB: store.add() error', e.target.error);
+                        reject(e.target.error);
+                    };
+                }).catch(reject);
+            };
+            getAllRequest.onerror = (e) => {
+                console.error('saveOFPToDB: getAll() error', e.target.error);
+                reject(e.target.error);
+            };
+
+            tx.oncomplete = () => {
+                console.log('saveOFPToDB: transaction complete');
+                db.close();
+            };
+            tx.onerror = (e) => {
+                console.error('saveOFPToDB: transaction error', e.target.error);
+                reject(e.target.error);
+            };
+        });
+    }
+
+    async function updateOFP(id, updates) {
+        console.log(`updateOFP: updating OFP ID ${id}`, updates);
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readwrite");
+            const store = tx.objectStore("ofps");
+
+            const getRequest = store.get(Number(id));
+            getRequest.onsuccess = () => {
+                const ofp = getRequest.result;
+                if (!ofp) {
+                    console.error(`updateOFP: OFP ID ${id} not found`);
+                    reject(new Error("OFP not found"));
+                    return;
+                }
+                Object.assign(ofp, updates);
+                const putRequest = store.put(ofp);
+                putRequest.onsuccess = () => {
+                    console.log(`✅ updateOFP: SUCCESS, ID ${id} updated`);
+                    
+                    // Verify
+                    const verifyRequest = store.get(id);
+                    verifyRequest.onsuccess = () => {
+                        if (verifyRequest.result) {
+                            console.log(`✅ updateOFP: verification OK – record exists`);
+                        } else {
+                            console.error(`❌ updateOFP: verification FAILED – record disappeared after put!`);
+                        }
+                    };
+                    resolve(ofp);
+                };
+                putRequest.onerror = (e) => {
+                    console.error(`❌ updateOFP: store.put() error`, e.target.error);
+                    reject(e.target.error);
+                };
+            };
+            getRequest.onerror = (e) => {
+                console.error(`updateOFP: store.get() error`, e.target.error);
+                reject(e.target.error);
+            };
+
+            tx.oncomplete = () => db.close();
+            tx.onerror = (e) => reject(e.target.error);
+        });
+    }
+
+    // Get all OFPs (sorted newest first)
+    async function getAllOFPsFromDB() {
+        try {
+            const db = await openDB();
+            
+            if (!db.objectStoreNames.contains('ofps')) {
+                return [];
+            }
+
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction("ofps", "readonly");
+                const store = tx.objectStore("ofps");
+                const request = store.getAll();
+
+                request.onsuccess = () => {
+                    const ofps = request.result;
+
+                    // Sort by order (defensive)
+                    try {
+                        ofps.sort((a, b) => (a.order || 0) - (b.order || 0));
+                    } catch (sortError) {
+                        console.error('Error sorting OFPs:', sortError);
+                    }
+
+                    resolve(ofps);
+                };
+
+                request.onerror = (e) => {
+                    console.error('store.getAll() error:', e.target.error);
+                    reject(e.target.error);
+                };
+
+                tx.oncomplete = () => db.close();
+                tx.onerror = (e) => {
+                    console.error('transaction error:', e.target.error);
+                    reject(e.target.error);
+                };
+            });
+        } catch (error) {
+            console.error('catastrophic failure:', error);
+            return [];
+        }
+    }
+
+    async function findOFPByFlightAndDate(flight, date) {
+        if (!flight || !date || flight === 'N/A' || date === 'N/A') return null;
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readonly");
+            const store = tx.objectStore("ofps");
+            const index = store.index("flight");
+            const request = index.getAll(flight);
+            request.onsuccess = () => {
+                const ofps = request.result;
+                const match = ofps.find(ofp => ofp.date === date);
+                resolve(match || null);
+            };
+            request.onerror = (e) => reject(e);
+        });
+    }
+
+    // Get active OFP
+    async function getActiveOFPFromDB() {
+        const activeId = localStorage.getItem('activeOFPId');
+        if (!activeId) return null;
+        
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readonly");
+            const store = tx.objectStore("ofps");
+            const request = store.get(Number(activeId));
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = (e) => reject(e);
+        });
+    }
+
+    async function setActiveOFP(id) {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readwrite");
+            const store = tx.objectStore("ofps");
+            
+            const getAllRequest = store.getAll();
+            getAllRequest.onsuccess = () => {
+                const ofps = getAllRequest.result;
+                ofps.forEach(ofp => {
+                    const shouldBeActive = (ofp.id === Number(id));
+                    if (ofp.isActive !== shouldBeActive) {
+                        ofp.isActive = shouldBeActive;
+                        store.put(ofp);
+                    }
+                });
+                localStorage.setItem('activeOFPId', id);
+                resolve();
+            };
+            getAllRequest.onerror = (e) => reject(e);
+            
+            tx.oncomplete = () => db.close();
+        });
+    }
+
+    // Delete OFP by ID
+    async function deleteOFPFromDB(id) {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readwrite");
+            const store = tx.objectStore("ofps");
+            const request = store.delete(Number(id));
+            request.onsuccess = () => resolve();
+            request.onerror = (e) => reject(e);
+        });
+    }
+
+    // Clear all OFPs
+    async function clearAllOFPsFromDB() {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readwrite");
+            const store = tx.objectStore("ofps");
+            const request = store.clear();
+            request.onsuccess = () => {
+                localStorage.removeItem('activeOFPId');
+                resolve();
+            };
+            request.onerror = (e) => reject(e);
         });
     }
 
@@ -5445,7 +6586,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                 element.addEventListener('change', saveSettings);
             }
         });
-        
         // Initialize settings display
         loadSettings();
         calculateStorageUsage();
@@ -5488,12 +6628,18 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
                 if (pdfQualitySelect) pdfQualitySelect.value = settings.pdfQuality;
             }
 
-            // Load Hide FC Duty Checkbox
+            // Hide FC Duty Checkbox
             const hideFCDutyBox = document.getElementById('hide-all-duty');
             if (hideFCDutyBox) {
                 hideFCDutyBox.checked = settings.hideFCDuty === true; 
             }
-            
+
+            // Auto-activate next OFP
+            const autoActivateCheckbox = document.getElementById('auto-activate-next');
+            if (autoActivateCheckbox) {
+                autoActivateCheckbox.checked = settings.autoActivateNext !== false; // default true
+            }
+                
             // Set app version
             const versionEl = document.getElementById('settings-version');
             if (versionEl) {
@@ -5517,6 +6663,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             autoLockTime: document.getElementById('auto-lock-time')?.value || '15',
             pdfQuality: document.getElementById('pdf-quality')?.value || '2.0',
             hideAllDuty: document.getElementById('hide-all-duty')?.checked || false,
+            autoActivateNext: document.getElementById('auto-activate-next')?.checked !== false,
             lastSaved: new Date().toISOString()
         };
         localStorage.setItem('efb_settings', JSON.stringify(settings));
@@ -5745,7 +6892,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
     // Try data recovery
     window.recoverLostData = async function() {
-        const confirmed = await showConfirmModal(
+        const confirmed = await showConfirmDialog(
             'Data Recovery Mode',
             '⚠️ WARNING: This will attempt to recover any lost data.<br>' +
             '<br>Continue?',
@@ -5791,7 +6938,7 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 
     // Factory reset
     async function confirmFactoryReset() {
-        const confirmed = await showConfirmModal(
+        const confirmed = await showConfirmDialog(
             'Factory Reset',
             '⚠️ WARNING: This will delete ALL data including:<br>' +
             '• All flight data<br>' +
@@ -5820,49 +6967,17 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
         }
     }
 
-    // Utility functions
-    function showConfirmModal(title, message, type = 'warning') {
-        return new Promise((resolve) => {
-            const dialog = document.createElement('div');
-            dialog.className = 'settings-modal';
-            
-            dialog.innerHTML = `
-                <div class="settings-modal-content">
-                    <h3 style="color: ${type === 'error' ? 'var(--error)' : 'var(--accent)'}">${title}</h3>
-                    <p style="color: var(--text); margin-bottom: 20px;">${message}</p>
-                    
-                    <div class="settings-modal-actions">
-                        <button class="btn-cancel" id="modal-cancel-btn">Cancel</button>
-                        <button class="btn-confirm" id="modal-confirm-btn" 
-                                style="background: ${type === 'error' ? 'var(--error)' : 'var(--success)'}">
-                            Continue
-                        </button>
-                    </div>
-                </div>
-            `;
-            
-            document.body.appendChild(dialog);
-            
-            // Add event listeners
-            document.getElementById('modal-cancel-btn').addEventListener('click', () => {
-                dialog.remove();
-                resolve(false);
-            });
-            
-            document.getElementById('modal-confirm-btn').addEventListener('click', () => {
-                dialog.remove();
-                resolve(true);
-            });
-        });
-    }
-
     function showToast(message, type = 'success') {
         const toast = document.createElement('div');
+        let bgColor = 'var(--success)';
+        if (type === 'error') bgColor = 'var(--error)';
+        if (type === 'info') bgColor = 'var(--accent)';
+        
         toast.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
-            background: ${type === 'error' ? 'var(--error)' : 'var(--success)'};
+            background: ${bgColor};
             color: white;
             padding: 15px 20px;
             border-radius: 10px;
@@ -5878,6 +6993,211 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             toast.style.animation = 'slideOut 0.3s ease';
             setTimeout(() => toast.remove(), 300);
         }, 3000);
+    }
+
+    function showConfirmDialog(title, message, confirmText = 'Continue', cancelText = 'Cancel', type = 'warning') {
+        return new Promise((resolve) => {
+            const dialog = document.createElement('div');
+            dialog.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.7);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 10000;
+                backdrop-filter: blur(3px);
+            `;
+
+            dialog.innerHTML = `
+                <div style="
+                    background: var(--panel);
+                    border-radius: 15px;
+                    padding: 30px;
+                    max-width: 400px;
+                    width: 90%;
+                    border: 1px solid var(--border);
+                    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+                    text-align: center;
+                ">
+                    <h3 style="color: ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; margin-top: 0; font-size: 1.2em;">
+                        ${title}
+                    </h3>
+                    <p style="color: var(--text); margin-bottom: 25px; line-height: 1.5;">
+                        ${message}
+                    </p>
+                    <div style="display: flex; gap: 15px; margin-top: 25px;">
+                        <button id="dialog-cancel" style="
+                            flex: 1;
+                            padding: 12px;
+                            background: var(--input);
+                            border: 1px solid var(--border);
+                            color: var(--text);
+                            border-radius: 10px;
+                            cursor: pointer;
+                            font-weight: 500;
+                        ">${cancelText}</button>
+                        <button id="dialog-confirm" style="
+                            flex: 1;
+                            padding: 12px;
+                            background: ${type === 'error' ? 'var(--error)' : 'var(--success)'};
+                            border: none;
+                            color: white;
+                            border-radius: 10px;
+                            font-weight: bold;
+                            cursor: pointer;
+                        ">${confirmText}</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(dialog);
+
+            dialog.querySelector('#dialog-cancel').onclick = () => {
+                document.body.removeChild(dialog);
+                resolve(false);
+            };
+
+            dialog.querySelector('#dialog-confirm').onclick = () => {
+                document.body.removeChild(dialog);
+                resolve(true);
+            };
+        });
+    }
+
+    function showUpdateModal(version, releaseData, onReload) {
+        const dialog = document.createElement('div');
+        dialog.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10001;
+            backdrop-filter: blur(5px);
+            animation: fadeIn 0.3s ease;
+        `;
+
+        const notesHTML = releaseData.notes.map(note => `<li style="margin-bottom: 8px; color: var(--text);">${note}</li>`).join('');
+
+        dialog.innerHTML = `
+            <div style="
+                background: var(--panel);
+                border-radius: 20px;
+                padding: 30px;
+                max-width: 500px;
+                width: 90%;
+                border: 2px solid var(--accent);
+                box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+                text-align: left;
+            ">
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
+                    <span style="font-size: 40px;">🚀</span>
+                    <div>
+                        <h2 style="color: var(--accent); margin: 0; font-size: 24px;">Update Available</h2>
+                        <p style="color: var(--dim); margin: 5px 0 0 0;">Version ${version} is ready</p>
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 25px;">
+                    <h3 style="color: var(--text); margin-bottom: 15px; font-size: 18px;">${releaseData.title}</h3>
+                    <ul style="list-style: none; padding: 0; margin: 0;">
+                        ${notesHTML}
+                    </ul>
+                </div>
+
+                <div style="display: flex; gap: 15px; margin-top: 25px;">
+                    <button id="update-later" style="
+                        flex: 1;
+                        padding: 14px;
+                        background: var(--input);
+                        border: 1px solid var(--border);
+                        color: var(--text);
+                        border-radius: 12px;
+                        font-weight: 600;
+                        cursor: pointer;
+                    ">Later</button>
+                    <button id="update-reload" style="
+                        flex: 1;
+                        padding: 14px;
+                        background: var(--accent);
+                        border: none;
+                        color: white;
+                        border-radius: 12px;
+                        font-weight: 800;
+                        cursor: pointer;
+                        box-shadow: 0 5px 15px rgba(var(--accent-rgb), 0.3);
+                    ">Reload Now</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialog);
+
+        dialog.querySelector('#update-later').onclick = () => {
+            document.body.removeChild(dialog);
+        };
+
+        dialog.querySelector('#update-reload').onclick = () => {
+            document.body.removeChild(dialog);
+            if (onReload) onReload();
+        };
+    }
+
+    // Check for updates by fetching version.json
+    async function checkForUpdates(showIfUpToDate = false) {
+        try {
+            const response = await fetch('version.json?t=' + Date.now()); // cache bust
+            if (!response.ok) throw new Error('Could not fetch version info');
+            
+            const data = await response.json();
+            const latestVersion = data.version;
+            const releaseNotes = data.releaseNotes;
+
+            if (isNewerVersion(latestVersion, APP_VERSION)) {
+                // New version available – show modal
+                showUpdateModal(latestVersion, releaseNotes, () => {
+                    // Reload after skipping waiting
+                    if ('serviceWorker' in navigator) {
+                        navigator.serviceWorker.getRegistration().then(reg => {
+                            if (reg && reg.waiting) {
+                                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                                setTimeout(() => window.location.reload(), 500);
+                            } else {
+                                window.location.reload();
+                            }
+                        });
+                    } else {
+                        window.location.reload();
+                    }
+                });
+            } else if (showIfUpToDate) {
+                showToast(`You're up to date (v${APP_VERSION})`, 'info');
+            }
+        } catch (error) {
+            console.error('Update check failed:', error);
+            if (showIfUpToDate) {
+                showToast('Could not check for updates', 'error');
+            }
+        }
+    }
+
+    function isNewerVersion(latest, current) {
+        const latestParts = latest.split('.').map(Number);
+        const currentParts = current.split('.').map(Number);
+        for (let i = 0; i < Math.max(latestParts.length, currentParts.length); i++) {
+            const l = latestParts[i] || 0;
+            const c = currentParts[i] || 0;
+            if (l !== c) return l > c;
+        }
+        return false;
     }
 
 })();
