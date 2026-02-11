@@ -5092,11 +5092,11 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             const standardRows = 4;
             const rowGap = JOURNEY_CONFIG.rowGap; // 17
 
-            // OFFSET 1.1: FOR FUEL & LOAD (Standard Calculation)
+            // --- FUEL & LOAD: move down for more rows, up for fewer rows ---
             const FUEL_OFFSET = (standardRows - templateRows) * rowGap;
 
-            // OFFSET 1.2: FOR CREW & SIGNATURE (Boosted Calculation)
-            let CREW_OFFSET = FUEL_OFFSET;
+            // --- CREW & SIGNATURE: move twice as much as fuel to stay aligned ---
+            const CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
             
             if (templateRows === 3) {
                 CREW_OFFSET += rowGap; 
@@ -6948,21 +6948,50 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             '<br>This action cannot be undone. Continue?',
             'error'
         );
-        
+
         if (confirmed) {
-            // Clear all data
+            // Clear Local Storage (settings, PIN, audit logs, state)
             localStorage.clear();
-            
-            // Clear IndexedDB
-            if (typeof clearPdfDB === 'function') {
-                await clearPdfDB();
-            }
-            
-            // Logout user
+
+            // Clear Session Storage
             sessionStorage.removeItem('efb_authenticated');
-            
-            // Reload app
-            showToast('All data reset. Reloading app...');
+
+            // Clear IndexedDB
+            try {
+                const db = await openDB();
+                // Delete the ofps store (all OFPs, metadata, logged PDFs)
+                if (db.objectStoreNames.contains('ofps')) {
+                    const tx = db.transaction('ofps', 'readwrite');
+                    tx.objectStore('ofps').clear();
+                    await new Promise((resolve, reject) => {
+                        tx.oncomplete = resolve;
+                        tx.onerror = reject;
+                    });
+                }
+                // Delete the old files store (legacy OFP blob)
+                if (db.objectStoreNames.contains('files')) {
+                    const tx = db.transaction('files', 'readwrite');
+                    tx.objectStore('files').clear();
+                    await new Promise((resolve, reject) => {
+                        tx.oncomplete = resolve;
+                        tx.onerror = reject;
+                    });
+                }
+                db.close();
+            } catch (e) {
+                console.error('Failed to clear IndexedDB:', e);
+            }
+
+            // Unregister service worker
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                for (let reg of registrations) {
+                    await reg.unregister();
+                }
+            }
+
+            // Reload app after short delay
+            showToast('All data reset. Reloading app...', 'info');
             setTimeout(() => location.reload(), 2000);
         }
     }
@@ -7149,44 +7178,6 @@ const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
             document.body.removeChild(dialog);
             if (onReload) onReload();
         };
-    }
-
-    // Check for updates by fetching version.json
-    async function checkForUpdates(showIfUpToDate = false) {
-        try {
-            const response = await fetch('version.json?t=' + Date.now()); // cache bust
-            if (!response.ok) throw new Error('Could not fetch version info');
-            
-            const data = await response.json();
-            const latestVersion = data.version;
-            const releaseNotes = data.releaseNotes;
-
-            if (isNewerVersion(latestVersion, APP_VERSION)) {
-                // New version available – show modal
-                showUpdateModal(latestVersion, releaseNotes, () => {
-                    // Reload after skipping waiting
-                    if ('serviceWorker' in navigator) {
-                        navigator.serviceWorker.getRegistration().then(reg => {
-                            if (reg && reg.waiting) {
-                                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-                                setTimeout(() => window.location.reload(), 500);
-                            } else {
-                                window.location.reload();
-                            }
-                        });
-                    } else {
-                        window.location.reload();
-                    }
-                });
-            } else if (showIfUpToDate) {
-                showToast(`You're up to date (v${APP_VERSION})`, 'info');
-            }
-        } catch (error) {
-            console.error('Update check failed:', error);
-            if (showIfUpToDate) {
-                showToast('Could not check for updates', 'error');
-            }
-        }
     }
 
     function isNewerVersion(latest, current) {
