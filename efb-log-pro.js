@@ -1,7 +1,7 @@
 (function() {
-const APP_VERSION = "2.0.1";
+const APP_VERSION = "2.0.2";
 const RELEASE_NOTES = {
-    "2.0.1": {
+    "2.0.2": {
         title: "Release Notes",
         notes: [
             "⚡ DOM caching for waypoint inputs – 10x faster flight log updates",
@@ -28,7 +28,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = 'a663d37cb8871228022e9a39ffbadfe740d07d4bc55c54e8ee4060931fec990c';
+const EXPECTED_SW_HASH = '6c31f8f3047b39bb17f7b268439df6d836dcbaf419ffb1a31168cd9cfb8fc9da';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -296,8 +296,9 @@ const PERSISTENT_INPUT_IDS = [
         // Check if persistent authentication is enabled (auto-lock = Never)
         const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
         const autoLockSetting = settings.autoLockTime;
-        
-        if (autoLockSetting === '0' && localStorage.getItem(PERSIST_AUTH_KEY) === 'true') {
+
+        // Use == to accept both string '0' and number 0
+        if (autoLockSetting == 0 && localStorage.getItem(PERSIST_AUTH_KEY) === 'true') {
             // Restore authenticated session silently
             sessionStorage.setItem('efb_authenticated', 'true');
             resetAutoLockTimer();
@@ -439,7 +440,7 @@ const PERSISTENT_INPUT_IDS = [
                     sessionStorage.setItem('efb_authenticated', 'true');
                     // If auto-lock is set to Never, persist authentication across reloads
                     const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-                    if (settings.autoLockTime === '0') {
+                    if (settings.autoLockTime == 0) { 
                         localStorage.setItem(PERSIST_AUTH_KEY, 'true');
                     }
                     resetAutoLockTimer();
@@ -3391,10 +3392,8 @@ const PERSISTENT_INPUT_IDS = [
         const activeTabId = activeSection ? activeSection.id.replace('section-', '') : '';
         
         // Show overlay only when:
-        // 1. No OFP is loaded
-        // 2. Not on Journey Log tab
-        // 3. Not on Confirm tab (where we send OFP)
-        if (!isOFPLoaded && activeTabId !== 'journey' && activeTabId !== 'confirm' && activeTabId !== 'settings') {
+        // 1. No OFP is loaded and not on Journey log, Sectors or Settings tab
+        if (!isOFPLoaded && activeTabId !== 'journey' && activeTabId !== 'sectors' && activeTabId !== 'settings') {
             if (overlay) overlay.classList.remove('hidden');
         } else {
             if (overlay) overlay.classList.add('hidden');
@@ -5171,7 +5170,7 @@ const PERSISTENT_INPUT_IDS = [
             'Flight Log entries<br>'+
             'Journey Log entries<br>'+
             'All input data<br>',
-            'Continue?',
+            'Continue',
             'Cancel',
         );
         if (userConfirmed) {
@@ -5372,11 +5371,11 @@ const PERSISTENT_INPUT_IDS = [
     async function resetOFPAfterSend() {
         // 1. Popup Confirmation
         const userConfirmed = await showConfirmDialog(
-            'OFP Generated Successfully. Are you happy with the downloaded file?',
+            'OFP Generated Successfully. <br> Are you happy with the downloaded file?',
             'Click Continue to wipe the form for the next flight.<br>'+
             'Click Cancel if you need to make changes and download again.<br>',
-            '<br>Continue?',
-            'Cancel',
+            'Finalize',
+            'Modify',
         );
 
         if (!userConfirmed) {
@@ -6438,8 +6437,8 @@ const PERSISTENT_INPUT_IDS = [
             autoActivateNext: document.getElementById('auto-activate-next')?.checked !== false,
             lastSaved: new Date().toISOString()
         };
-        // --- Persistent authentication logic ---
-        if (settings.autoLockTime === '0') {
+        // Persistent authentication logic
+        if (settings.autoLockTime == 0) {
             // If currently authenticated, set persistent flag
             if (sessionStorage.getItem('efb_authenticated') === 'true') {
                 localStorage.setItem(PERSIST_AUTH_KEY, 'true');
@@ -6670,7 +6669,7 @@ const PERSISTENT_INPUT_IDS = [
         const confirmed = await showConfirmDialog(
             'Data Recovery Mode',
             '⚠️ WARNING: This will attempt to recover any lost data.<br>' +
-            '<br>Continue?',
+            'Continue?',
             'error'
         );
         
