@@ -113,6 +113,11 @@
     touch-action: none; /* Prevents iPad from scrolling while signing */
 }
 
+/* Hide clear buttons when in typing mode */
+body[data-atis-mode="typing"] .clear-button {
+    display: none;
+}
+
 /* Drag & Drop Highlight */
 .nav-btn.drag-over {
     border: 2px dashed #fff !important;
@@ -354,6 +359,30 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
     margin: 0 2px;
 }
 
+.btn-icon.small {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+    background: var(--dim);
+    color: white;
+}
+
+.btn-clear-pill {
+    padding: 4px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    border-radius: 20px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-clear-pill:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
 .btn-action {
     padding: 6px 12px;
     border: none;
@@ -394,6 +423,19 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
 .btn-icon.edit:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Style for all disabled buttons */
+button:disabled,
+.btn-save:disabled,
+.btn-send:disabled,
+#btn-send-ofp:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+    background-color: #cccccc; /* optional: gray background */
+    border-color: #aaaaaa;
+    color: #666666;
 }
 
 /* Status badges */
@@ -743,9 +785,23 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
             </div>
 
             <div class="panel">
-                <div class="grid-row">
-                    <div class="field"><label>ATIS</label><input id="front-atis" class="input"></div>
-                    <div class="field"><label>ATC Clearance</label><input id="front-atc" class="input"></div>
+                <div class="grid-row" id="atis-atc-row">
+                    <div class="field" id="atis-field">
+                        <label>ATIS</label>
+                        <input id="front-atis" class="input">
+                        <canvas id="front-atis-canvas" class="signature-canvas" style="display:none; width:100%; height:80px; background:var(--input); border:1px solid var(--border); border-radius:8px;"></canvas>
+                        <div style="margin-top:5px; display:flex; justify-content:flex-end;">
+                            <button type="button" id="clear-atis-btn" class="btn-clear-pill clear-button">Clear</button>
+                        </div>
+                    </div>
+                    <div class="field" id="atc-field">
+                        <label>ATC Clearance</label>
+                        <input id="front-atc" class="input">
+                        <canvas id="front-atc-canvas" class="signature-canvas" style="display:none; width:100%; height:80px; background:var(--input); border:1px solid var(--border); border-radius:8px;"></canvas>
+                        <div style="margin-top:5px; display:flex; justify-content:flex-end;">
+                            <button type="button" id="clear-atc-btn" class="btn-clear-pill clear-button">Clear</button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1125,6 +1181,13 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
                 <div class="settings-group">
                     <h4>⚙️ App Configuration</h4>
                     <div class="settings-item">
+                        <span class="settings-label">ATIS/ATC Input Mode</span>
+                        <select id="atis-input-mode" class="settings-select">
+                            <option value="typing">Typing</option>
+                            <option value="writing">Writing (draw)</option>
+                        </select>
+                    </div>
+                    <div class="settings-item">
                         <span class="settings-label">PDF Preview Quality</span>
                         <select id="pdf-quality" class="settings-select">
                             <option value="0.8">Low (Fast)</option>
@@ -1182,6 +1245,6 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
 <script src="pdf-lib.min.js"></script>
 <script src="pdf.min.js"></script>
 <script src="signature_pad.umd.min.js"></script>
-<script src="efb-log-pro.js?v=2.0.2"></script>
+<script src="efb-log-pro.js?v=2.0.3"></script>
 </body>
 </html>

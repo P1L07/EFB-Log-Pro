@@ -1,9 +1,10 @@
 (function() {
-const APP_VERSION = "2.0.2";
+const APP_VERSION = "2.0.3";
 const RELEASE_NOTES = {
-    "2.0.2": {
+    "2.0.3": {
         title: "Release Notes",
         notes: [
+            "✍️ Write or Type ATIS/ATC",
             "⚡ DOM caching for waypoint inputs – 10x faster flight log updates",
             "📁 Upload multiple OFPs at once",
             "🆕 Shear Rate (SR) column added to Flight Log and Alternate tables",
@@ -28,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '6c31f8f3047b39bb17f7b268439df6d836dcbaf419ffb1a31168cd9cfb8fc9da';
+const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -55,137 +56,6 @@ const PERSISTENT_INPUT_IDS = [
             type: 'info'
         });
     }
-
-    window.addEventListener('DOMContentLoaded', function() {
-        // 1. Initialize pdfFallbackElement
-        pdfFallbackElement = document.getElementById('pdf-fallback');
-        
-        // 2. Check initial OFP state
-        if (window.ofpPdfBytes) {
-            setOFPLoadedState(true);
-        } else {
-            setOFPLoadedState(false);
-        }
-        
-        // 3. Add drag and drop functionality for the overlay
-        const overlay = document.getElementById('upload-overlay');
-        const ofpFileInput = document.getElementById('ofp-file-in');
-        
-        if (overlay && ofpFileInput) {
-            // Drag enter/over
-            ['dragenter', 'dragover'].forEach(eventName => {
-                overlay.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    overlay.style.background = 'rgba(0, 132, 255, 0.3)';
-                }, false);
-            });
-            
-            // Drag leave
-            ['dragleave', 'drop'].forEach(eventName => {
-                overlay.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    overlay.style.background = 'rgba(0, 0, 0, 0.9)';
-                }, false);
-            });
-            
-            // Drop
-            overlay.addEventListener('drop', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const files = e.dataTransfer.files;
-                if (files.length > 0) {
-                    ofpFileInput.files = files;
-                    ofpFileInput.dispatchEvent(new Event('change'));
-                }
-            }, false);
-        }
-        
-        // 4. Initialize theme on page load
-        const savedTheme = localStorage.getItem('data-theme');
-        const html = document.documentElement;
-        const themeButton = document.querySelector('.theme-toggle');
-        
-        if (savedTheme) {
-            // Apply saved theme
-            html.setAttribute('data-theme', savedTheme);
-            
-            // Update button text and active state
-            if (themeButton) {
-                themeButton.textContent = savedTheme === 'dark' ? 'Day Mode' : 'Night Mode';
-            }
-        } else {
-            // Default to light theme if no saved preference
-            html.setAttribute('data-theme', 'light');
-            if (themeButton) {
-                themeButton.textContent = 'Night Mode';
-            }
-        }
-        
-        // 5. Initialize tab navigation
-        initializeTabNavigation();
-        
-        // 6. Initial update for upload button visibility
-        updateUploadButtonVisibility();
-        
-        // 7. Add time input masks
-        addTimeInputMasks();
-        
-        // 8. Initialize signature pad once
-        setTimeout(() => {
-            const canvas = document.getElementById('sig-canvas');
-            if (canvas) {
-                initSignaturePad(canvas);
-                // Restore saved signature if exists
-                if (savedSignatureData) {
-                    signaturePad.fromDataURL(savedSignatureData, { ratio: lastPixelRatio });
-                }
-                updateSaveButtonState();
-            }
-        }, 100);
-        
-        setTimeout(() => {
-            initializeSettingsTab();
-        }, 1500);
-    
-        // Auto-save settings when changed
-        ['auto-lock-time', 'pdf-quality','auto-activate-next','hide-all-duty'].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.addEventListener('change', saveSettings);
-            }
-        });
-
-        // Activity tracking
-        if (sessionStorage.getItem('efb_authenticated') === 'true') {
-            setupActivityTracking();
-            resetAutoLockTimer();
-        }
-        loadState();
-    });
-
-    window.addEventListener('beforeunload', () => {
-        // Remove all event listeners
-    });
-
-    // Trigger Save on tab change
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-            saveState();
-        }
-    });
-
-    window.addEventListener('resize', function() {
-        if (signaturePad) {
-            resizeSignaturePad();
-            updateSaveButtonState();
-        }
-    });
-
-    window.addEventListener('pagehide', () => {
-        saveState();
-    });
 
     function verifyUpdateOrigin(registration) {
         // During initial installation, registration.active might be null
@@ -229,6 +99,11 @@ const PERSISTENT_INPUT_IDS = [
             if (encryptedLog) {
                 try {
                     log = await decryptData(encryptedLog);
+                    // Ensure log is an array (fallback might return non‑array)
+                    if (!Array.isArray(log)) {
+                        console.warn('Audit log is not an array, resetting');
+                        log = [];
+                    }
                 } catch {
                     // Start fresh if decryption fails
                     log = [];
@@ -702,27 +577,41 @@ const PERSISTENT_INPUT_IDS = [
         try {
             const key = await getEncryptionKey();
             const iv = crypto.getRandomValues(new Uint8Array(12)); // 12 bytes for GCM
-            
-            const encoded = new TextEncoder().encode(JSON.stringify(data));
+
+            // Safely stringify the data – catch circular references
+            let jsonString;
+            try {
+                jsonString = JSON.stringify(data);
+            } catch (stringifyError) {
+                console.error('encryptData: JSON.stringify failed:', stringifyError);
+                // Return a minimal fallback that will not cause another error
+                return btoa(JSON.stringify({
+                    encrypted: false,
+                    error: 'Data too complex to stringify',
+                    timestamp: new Date().toISOString()
+                }));
+            }
+
+            const encoded = new TextEncoder().encode(jsonString);
             const encrypted = await crypto.subtle.encrypt(
                 { name: 'AES-GCM', iv },
                 key,
                 encoded
             );
-            
+
             // Combine IV + encrypted data
             const result = new Uint8Array(iv.length + encrypted.byteLength);
             result.set(iv, 0);
             result.set(new Uint8Array(encrypted), iv.length);
-            
+
             return btoa(String.fromCharCode(...result));
         } catch (error) {
             console.error('Encryption failed:', error);
-            // Fallback: store without encryption (should inform user)
-            return btoa(JSON.stringify({ 
-                data: data,
+            // Ultimate fallback – store only a placeholder
+            return btoa(JSON.stringify({
                 encrypted: false,
-                error: 'Encryption failed'
+                error: 'Encryption failed',
+                timestamp: new Date().toISOString()
             }));
         }
     }
@@ -759,12 +648,6 @@ const PERSISTENT_INPUT_IDS = [
             console.error('Decryption failed:', error);
             throw new Error('Failed to decrypt data. It may be corrupted or from a different device.');
         }
-    }
-
-    function sanitizeHTML(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
     }
 
     // Service worker
@@ -983,33 +866,63 @@ const PERSISTENT_INPUT_IDS = [
         });
     }
 
-    // Set OFP loaded state
-    function setOFPLoadedState(loaded) {
-        isOFPLoaded = loaded;
-        updateUploadButtonVisibility();
-        
-        // Update the Paper Flight Plan tab display
-        if (loaded) {
-            const pdfContainer = document.getElementById('pdf-render-container');
-            if (pdfFallbackElement) {
-                // Reset to original fallback content
-                pdfFallbackElement.innerHTML = `
-                    <span style="font-size:30px; margin-bottom:10px;">📄</span>
-                    No OFP uploaded yet.
-                `;
-                pdfFallbackElement.style.display = 'flex';
-            }
-            if (pdfContainer) pdfContainer.style.display = 'block';
-        }
+    // ==========================================
+// UTILITY: Debounce
+// ==========================================
+
+    /**
+     * Creates a debounced function that delays invoking `func` until after `wait` milliseconds
+     * have elapsed since the last time the debounced function was invoked.
+     * @param {Function} func - The function to debounce.
+     * @param {number} wait - Milliseconds to wait.
+     * @param {boolean} [immediate=false] - If true, trigger `func` on the leading edge instead of trailing.
+     * @returns {Function} Debounced function with a `cancel` method.
+     */
+    function debounce(func, wait, immediate = false) {
+        let timeout;
+        const debounced = function(...args) {
+            const context = this;
+            const later = () => {
+                timeout = null;
+                if (!immediate) func.apply(context, args);
+            };
+            const callNow = immediate && !timeout;
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+            if (callNow) func.apply(context, args);
+        };
+        debounced.cancel = () => {
+            clearTimeout(timeout);
+            timeout = null;
+        };
+        return debounced;
     }
 
-    let saveTimeout = null;
-    function debouncedSave() {
-        if (saveTimeout) clearTimeout(saveTimeout);
-        saveTimeout = setTimeout(() => {
-            saveState().catch(console.error);
-            saveTimeout = null;
-        }, SAVE_STATE_DEBOUNCE);
+    // SET COLUMN VALUES
+    const el = (id) => document.getElementById(id);
+    function safeSet(id, val) { 
+        const e = el(id); 
+        if(!e) return;
+        
+        // 1. If it's an input field, set .value
+        if (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') {
+            e.value = val || '';
+        } 
+        // 2. If it's a div/span/label, set .innerText
+        else {
+            e.innerText = val || ''; 
+        }
+    }
+    
+    function safeText(id, val) { 
+        const e = el(id); 
+        if(e) e.innerText = val || ''; 
+    }
+
+    function sanitizeHTML(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 
 // ==========================================
@@ -1076,14 +989,16 @@ const PERSISTENT_INPUT_IDS = [
     const V_LIFT = 2;       
     const LINE_HEIGHT = 12;
     const SAVE_STATE_DEBOUNCE = 1000;
+    const pads = {
+        main: { canvasId: 'sig-canvas', pad: null, lastWidth: 0, lastHeight: 0, lastRatio: 1 },
+        atis: { canvasId: 'front-atis-canvas', pad: null, lastWidth: 0, lastHeight: 0, lastRatio: 1 },
+        atc:  { canvasId: 'front-atc-canvas', pad: null, lastWidth: 0, lastHeight: 0, lastRatio: 1 }
+    };
     let ofpCache = null; let cacheTime = 0; const CACHE_TTL = 5000;
     let waypointATOCache = [];   // array of input elements for o-a-*
     let alternateATOCache = [];  // array for a-a-*
     let signaturePad = null;
     let savedSignatureData = null;
-    let lastCanvasWidth = 0;
-    let lastCanvasHeight = 0;
-    let lastPixelRatio = 1;
     let takeoffFuelInput = null;
     let waypointFuelCache = [];
     let pdfFallbackElement = null;
@@ -1093,8 +1008,8 @@ const PERSISTENT_INPUT_IDS = [
     let fuelData = [];
     let blockFuelValue = 0;
     let dutyStartTime = null;
-    let recalcTimeout, syncTimeout, cruiseTimeout;
     let autoLockTimer = null;
+    let currentAtisInputMode = 'typing';
     let waypointTableCache = {
         waypoints: [],
         alternateWaypoints: [],
@@ -1105,80 +1020,9 @@ const PERSISTENT_INPUT_IDS = [
     };
     let dbPromise = null;
 
-    // SET COLUMN VALUES
-    const el = (id) => document.getElementById(id);
-    function safeSet(id, val) { 
-        const e = el(id); 
-        if(!e) return;
-        
-        // 1. If it's an input field, set .value
-        if (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') {
-            e.value = val || '';
-        } 
-        // 2. If it's a div/span/label, set .innerText
-        else {
-            e.innerText = val || ''; 
-        }
-    }
-    
-    function safeText(id, val) { 
-        const e = el(id); 
-        if(e) e.innerText = val || ''; 
-    }
-
 // ==========================================
 // 3. INITIALIZATION & LISTENERS
 // ==========================================
-    
-    window.onload = async function() {
-        // Show authentication first
-        const authenticated = await setupAuthentication();
-        
-        if (!authenticated) {
-            // Block access if not authenticated
-            document.body.innerHTML = `
-                <div style="
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    background: var(--background);
-                    color: var(--text);
-                    text-align: center;
-                    padding: 20px;
-                ">
-                    <div>
-                        <h1>🔒 Access Denied</h1>
-                        <p>Authentication required to use EFB Log Pro</p>
-                        <button onclick="location.reload()" style="
-                            margin-top: 20px;
-                            padding: 10px 20px;
-                            background: var(--accent);
-                            color: white;
-                            border: none;
-                            border-radius: 5px;
-                            cursor: pointer;
-                        ">
-                            Try Again
-                        </button>
-                    </div>
-                </div>
-            `;
-            return;
-        }
-        // Use requestIdleCallback for non-critical initialization
-        if ('requestIdleCallback' in window) {
-            requestIdleCallback(async () => {
-                await initializeApp();
-                setTimeout(initializeSettings, 2000);
-            });
-        } else {
-            setTimeout(async () => {
-                await initializeApp();
-                setTimeout(initializeSettings, 2000);
-            }, 1000);
-        }
-    };
 
     async function initializeApp() {
         // Debugging if IndexedDB is working
@@ -1230,17 +1074,9 @@ const PERSISTENT_INPUT_IDS = [
         }
         
         // REAL-TIME CALCULATION LISTENERS (debounced)
-        const debounce = (fn, delay) => {
-            let timeout;
-            return (...args) => {
-                clearTimeout(timeout);
-                timeout = setTimeout(() => fn(...args), delay);
-            };
-        };
-        
         ['j-out','j-off','j-on','j-in'].forEach(id => {
             const e = el(id);
-            if (e) e.addEventListener('input', debounce(calcTripTime, 300));
+            if (e) e.addEventListener('input', debounce(calcTripTime, 300)); // uses global debounce
         });
             
         ['j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 'j-burn', 'j-uplift-vol', 'j-disc', 'j-slip', 'j-slip-2'].forEach(id => {
@@ -1255,16 +1091,13 @@ const PERSISTENT_INPUT_IDS = [
 
         const ofpAtdInput = el('ofp-atd-in');
         if (ofpAtdInput) {
-            ofpAtdInput.addEventListener('input', debounce((e) => {
-                safeSet('j-off', e.target.value); 
-                runFlightLogCalculations(); 
-                calcTripTime();
-            }, 300));
+            // Use debouncedFullRecalc instead of a custom debounce
+            ofpAtdInput.addEventListener('input', debouncedFullRecalc);
         }
             
         const extraKgInput = el('front-extra-kg');
         if (extraKgInput) {
-            extraKgInput.addEventListener('input', debounce(function() {
+            extraKgInput.addEventListener('input', debounce(() => {
                 calculatePICBlock();
                 updateFlightLogTablesIncremental();
             }, 300));
@@ -1682,6 +1515,11 @@ const PERSISTENT_INPUT_IDS = [
             }
         }
 
+        // After manual upload, force a full redraw of flight log tables
+        if (!isAutoLoad) {
+            renderFlightLogTables(true); 
+        }
+
         // 6. Log success event
         try {
             await logSecurityEvent('PDF_UPLOAD', {
@@ -1932,6 +1770,121 @@ const PERSISTENT_INPUT_IDS = [
 // ==========================================
 // 4. OFP PARSING LOGIC
 // ==========================================
+
+    // Activate OFP
+    window.activateOFP = async function(id, switchTab = true) {
+        const ofpToActivate = await getOFPById(id);
+        if (ofpToActivate && ofpToActivate.finalized) {
+            showToast("Cannot activate a finalized OFP", 'error');
+            return;
+        }
+        try {
+            await setActiveOFP(id);
+            const ofp = await getActiveOFPFromDB();
+            if (ofp && ofp.data) {
+                // Clear all existing OFP data before loading new one
+                if (typeof clearOFPInputs === 'function') {
+                    clearOFPInputs();
+                }
+
+                setOFPLoadedState(true);
+                window.ofpPdfBytes = await ofp.data.arrayBuffer();
+                window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
+
+                // Parse the new OFP
+                await runAnalysis(ofp.data, true);
+
+                // Restore all saved OFP data (waypoints + persistent inputs)
+                await restoreOFPData(ofp);
+
+                // Refresh the OFP Manager table
+                await renderOFPMangerTable();
+
+                // Switch tab if requested
+                if (switchTab) {
+                    const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
+                    if (summaryBtn) {
+                        if (typeof window.showTab === 'function') {
+                            window.showTab('summary', summaryBtn);
+                        } else {
+                            summaryBtn.click();
+                        }
+                    }
+                }
+
+                showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
+            }
+        } catch (error) {
+            console.error("Error activating OFP:", error);
+            showToast("Failed to activate OFP", 'error');
+        }
+    };
+
+    // Delete OFP
+    window.deleteOFP = async function(id) {
+        const confirmed = await showConfirmDialog(
+            'Delete OFP',
+            'Are you sure you want to delete this OFP? This action cannot be undone.',
+            'Delete',
+            'Cancel',
+            'error'
+        );
+        if (!confirmed) return;
+        
+        try {
+            const activeId = localStorage.getItem('activeOFPId');
+            const wasActive = (activeId && Number(activeId) === id);
+            
+            await deleteOFPFromDB(id);
+            await getCachedOFPs(true);
+            
+            if (wasActive) {
+                // Remove active ID from storage
+                localStorage.removeItem('activeOFPId');
+                
+                // Try to find the most recent remaining OFP and activate it
+                const remainingOFPs = await getCachedOFPs();
+                if (remainingOFPs.length > 0) {
+                    const newest = remainingOFPs[0]; // already sorted by uploadTime desc
+                    await activateOFP(newest.id);
+                } else {
+                    // No OFPs left – clear app state
+                    setOFPLoadedState(false);
+                    clearOFPInputs();
+                    window.ofpPdfBytes = null;
+                }
+            }
+            await renumberOFPOrders();
+            await renderOFPMangerTable();
+            showToast("OFP deleted", 'success');
+        } catch (error) {
+            console.error("Error deleting OFP:", error);
+            showToast("Failed to delete OFP", 'error');
+        }
+    };
+
+    // Clear all OFPs
+    window.clearAllOFPs = async function() {
+        const confirmed = await showConfirmDialog(
+            'Clear All OFPs',
+            '⚠️ This will delete ALL stored OFPs. Continue?',
+            'Clear All',
+            'Cancel',
+            'error'
+        );
+        if (!confirmed) return;
+        try {
+            await clearAllOFPsFromDB();
+            await getCachedOFPs(true);
+            setOFPLoadedState(false);
+            clearOFPInputs();
+            await renderOFPMangerTable();
+            showToast("All OFPs cleared", 'success');
+        } catch (error) {
+            console.error("Error clearing OFPs:", error);
+            showToast("Failed to clear OFPs", 'error');
+        }
+    };
 
     function extractFrontCoords(items) {
         items.forEach(item => {
@@ -2274,17 +2227,35 @@ const PERSISTENT_INPUT_IDS = [
         return match ? match[1] : '';
     }
 
-    function buildRows(items) {
-        const rows = {};
-        items.forEach(item => {
-            const y = Math.round(item.transform[5]);
-            if (!rows[y]) rows[y] = [];
-            rows[y].push(item);
-        });
-        return Object.entries(rows).map(([y, items]) => ({
-            y: parseFloat(y),
-            items: items.sort((a, b) => a.transform[4] - b.transform[4])
-        }));
+    // Shared function to restore OFP‑specific user data (waypoints + persistent inputs)
+    async function restoreOFPData(ofp) {
+        if (!ofp) return;
+
+        // Restore saved waypoint inputs (userWaypoints)
+        if (ofp.userWaypoints && Array.isArray(ofp.userWaypoints)) {
+            ofp.userWaypoints.forEach((data, i) => {
+                if (i < waypoints.length) {
+                    if (data.ato) safeSet(`o-a-${i}`, data.ato);
+                    if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                    if (data.notes) safeSet(`o-n-${i}`, data.notes);
+                    if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+                }
+            });
+            runFlightLogCalculations();
+            syncLastWaypoint();
+        }
+
+        // Restore saved user inputs (persistent text fields)
+        if (ofp.userInputs && typeof ofp.userInputs === 'object') {
+            Object.keys(ofp.userInputs).forEach(id => {
+                const val = ofp.userInputs[id];
+                // Skip drawing keys – they will be restored by pad initialisation
+                if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') return;
+                if (val !== undefined && val !== null) {
+                    safeSet(id, val);
+                }
+            });
+        }
     }
 
 // ==========================================
@@ -2813,20 +2784,6 @@ const PERSISTENT_INPUT_IDS = [
         return { flight, date, dep, dest, tripTime, maxSR };
     }
 
-    function updateUIAfterParsing() {
-        // Set PIC Block Fuel display
-        const elPic = document.getElementById('view-pic-block');
-        if (elPic) {
-            const val = blockFuelValue || 0;
-            if (elPic.tagName === 'INPUT') elPic.value = val;
-            else elPic.innerText = val;
-        }
-
-        runFlightLogCalculations();
-        renderFuelTable();
-        renderFlightLogTables();
-    }
-
     async function parsePDFData(pdfBytes, isAutoLoad) {
         try {
             // 1. Reset all global parsing state
@@ -2895,20 +2852,42 @@ const PERSISTENT_INPUT_IDS = [
             throw error;
         }
     }
-
-    function debouncedFullRecalc() {
-        clearTimeout(recalcTimeout);
-        clearTimeout(syncTimeout);
-        
-        recalcTimeout = setTimeout(() => {
-            runFlightLogCalculations();
-            syncLastWaypoint();
-        }, 300);
-    }
-
 // ==========================================
 // 7. UI RENDERING
 // ==========================================
+
+    function buildRows(items) {
+        const rows = {};
+        items.forEach(item => {
+            const y = Math.round(item.transform[5]);
+            if (!rows[y]) rows[y] = [];
+            rows[y].push(item);
+        });
+        return Object.entries(rows).map(([y, items]) => ({
+            y: parseFloat(y),
+            items: items.sort((a, b) => a.transform[4] - b.transform[4])
+        }));
+    }
+
+    // Hides or makes OFP Upload button visible
+    function setOFPLoadedState(loaded) {
+        isOFPLoaded = loaded;
+        updateUploadButtonVisibility();
+        
+        // Update the Paper Flight Plan tab display
+        if (loaded) {
+            const pdfContainer = document.getElementById('pdf-render-container');
+            if (pdfFallbackElement) {
+                // Reset to original fallback content
+                pdfFallbackElement.innerHTML = `
+                    <span style="font-size:30px; margin-bottom:10px;">📄</span>
+                    No OFP uploaded yet.
+                `;
+                pdfFallbackElement.style.display = 'flex';
+            }
+            if (pdfContainer) pdfContainer.style.display = 'block';
+        }
+    }
 
     // Day/Night Mode
     window.toggleTheme = function() {
@@ -2934,7 +2913,7 @@ const PERSISTENT_INPUT_IDS = [
         }
     };
 
-    // Render the table in the Sectors tab
+    // SECTORS TAB - Render the OFP table in the Sectors tab
     window.renderOFPMangerTable = async function() {
         try {
             const tbody = document.getElementById('ofp-manager-tbody');
@@ -2951,10 +2930,6 @@ const PERSISTENT_INPUT_IDS = [
                     <tr>
                         <td colspan="9" style="text-align: center; padding: 30px; color: var(--dim);">
                             No OFPs uploaded yet.<br>
-                            <button onclick="document.getElementById('ofp-file-in').click()" 
-                                    class="btn btn-save" style="margin-top:15px;">
-                                📁 Upload First OFP
-                            </button>
                         </td>
                     </tr>
                 `;
@@ -3061,7 +3036,7 @@ const PERSISTENT_INPUT_IDS = [
         }
     };
 
-    // After deleting, renumber orders to be consecutive (1,2,3...)
+    // SECTORS TAB - After deleting, renumber orders to be consecutive (1,2,3...)
     async function renumberOFPOrders() {
         const db = await getDB();
         const tx = db.transaction("ofps", "readwrite");
@@ -3078,11 +3053,12 @@ const PERSISTENT_INPUT_IDS = [
         await getCachedOFPs(true);
     }
 
+    // SECTORS TAB - Search function filtering
     window.filterOFPs = function() {
         renderOFPMangerTable();
     };
 
-    // Move OFP up (decrease order) or down (increase order)
+    // SECTORS TAB - Move OFP up  or down
     window.moveOFP = async function(id, direction) {
         const db = await getDB();
         const tx = db.transaction("ofps", "readwrite");
@@ -3130,151 +3106,6 @@ const PERSISTENT_INPUT_IDS = [
         });
     }
 
-    // Shared function to restore OFP‑specific user data (waypoints + persistent inputs)
-    async function restoreOFPData(ofp) {
-        if (!ofp) return;
-
-        // Restore saved waypoint inputs (userWaypoints)
-        if (ofp.userWaypoints && Array.isArray(ofp.userWaypoints)) {
-            ofp.userWaypoints.forEach((data, i) => {
-                if (i < waypoints.length) {
-                    if (data.ato) safeSet(`o-a-${i}`, data.ato);
-                    if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                    if (data.notes) safeSet(`o-n-${i}`, data.notes);
-                    if (data.agl) safeSet(`o-agl-${i}`, data.agl);
-                }
-            });
-            // Recalculate fuel and times based on restored values
-            runFlightLogCalculations();
-            syncLastWaypoint();
-        }
-
-        // Restore saved user inputs (persistent fields: ATIS, altimeters, extra fuel, etc.)
-        if (ofp.userInputs && typeof ofp.userInputs === 'object') {
-            Object.keys(ofp.userInputs).forEach(id => {
-                const val = ofp.userInputs[id];
-                if (val !== undefined && val !== null) {
-                    safeSet(id, val);
-                }
-            });
-        }
-    }
-
-    // Activate OFP
-    window.activateOFP = async function(id, switchTab = true) {
-        const ofpToActivate = await getOFPById(id);
-        if (ofpToActivate && ofpToActivate.finalized) {
-            showToast("Cannot activate a finalized OFP", 'error');
-            return;
-        }
-        try {
-            await setActiveOFP(id);
-            const ofp = await getActiveOFPFromDB();
-            if (ofp && ofp.data) {
-                // Clear all existing OFP data before loading new one
-                if (typeof clearOFPInputs === 'function') {
-                    clearOFPInputs();
-                }
-
-                setOFPLoadedState(true);
-                window.ofpPdfBytes = await ofp.data.arrayBuffer();
-                window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
-
-                // Parse the new OFP
-                await runAnalysis(ofp.data, true);
-
-                // Restore all saved OFP data (waypoints + persistent inputs)
-                await restoreOFPData(ofp);
-
-                // Refresh the OFP Manager table
-                await renderOFPMangerTable();
-
-                // Switch tab if requested
-                if (switchTab) {
-                    const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
-                    if (summaryBtn) {
-                        if (typeof window.showTab === 'function') {
-                            window.showTab('summary', summaryBtn);
-                        } else {
-                            summaryBtn.click();
-                        }
-                    }
-                }
-
-                showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
-            }
-        } catch (error) {
-            console.error("Error activating OFP:", error);
-            showToast("Failed to activate OFP", 'error');
-        }
-    };
-
-    // Delete OFP
-    window.deleteOFP = async function(id) {
-        const confirmed = await showConfirmDialog(
-            'Delete OFP',
-            'Are you sure you want to delete this OFP? This action cannot be undone.',
-            'Delete',
-            'Cancel',
-            'error'
-        );
-        if (!confirmed) return;
-        
-        try {
-            const activeId = localStorage.getItem('activeOFPId');
-            const wasActive = (activeId && Number(activeId) === id);
-            
-            await deleteOFPFromDB(id);
-            await getCachedOFPs(true);
-            
-            if (wasActive) {
-                // Remove active ID from storage
-                localStorage.removeItem('activeOFPId');
-                
-                // Try to find the most recent remaining OFP and activate it
-                const remainingOFPs = await getCachedOFPs();
-                if (remainingOFPs.length > 0) {
-                    const newest = remainingOFPs[0]; // already sorted by uploadTime desc
-                    await activateOFP(newest.id);
-                } else {
-                    // No OFPs left – clear app state
-                    setOFPLoadedState(false);
-                    clearOFPInputs();
-                    window.ofpPdfBytes = null;
-                }
-            }
-            await renumberOFPOrders();
-            await renderOFPMangerTable();
-            showToast("OFP deleted", 'success');
-        } catch (error) {
-            console.error("Error deleting OFP:", error);
-            showToast("Failed to delete OFP", 'error');
-        }
-    };
-
-    // Clear all OFPs
-    window.clearAllOFPs = async function() {
-        const confirmed = await showConfirmDialog(
-            'Clear All OFPs',
-            '⚠️ This will delete ALL stored OFPs. Continue?',
-            'Clear All',
-            'Cancel',
-            'error'
-        );
-        if (!confirmed) return;
-        try {
-            await clearAllOFPsFromDB();
-            await getCachedOFPs(true);
-            setOFPLoadedState(false);
-            clearOFPInputs();
-            await renderOFPMangerTable();
-            showToast("All OFPs cleared", 'success');
-        } catch (error) {
-            console.error("Error clearing OFPs:", error);
-            showToast("Failed to clear OFPs", 'error');
-        }
-    };
-
     // Handle changing tabs
     window.showTab = window.showTab || function(id, btn) {
         // Save signature before leaving
@@ -3300,23 +3131,37 @@ const PERSISTENT_INPUT_IDS = [
             }, 100);
         }
 
-        // Restore Signature if going to confirm tab
+        // Refresh ATIS/ATC mode
+        if (id === 'summary') {
+            const savedMode = document.body.getAttribute('data-atis-mode') || currentAtisInputMode || 'typing';
+            applyInputMode(savedMode);
+            setTimeout(() => {
+                if (currentAtisInputMode === 'writing') {
+                    if (!pads.atis.pad) initPad('atis');
+                    if (!pads.atc.pad) initPad('atc');
+                    // Ensure onEnd listeners
+                    if (pads.atis.pad) pads.atis.pad.onEnd = () => debouncedSave();
+                    if (pads.atc.pad) pads.atc.pad.onEnd = () => debouncedSave();
+
+                } else {
+                    // destroy pads if needed
+                    if (pads.atis.pad) { pads.atis.pad.off(); pads.atis.pad = null; }
+                    if (pads.atc.pad) { pads.atc.pad.off(); pads.atc.pad = null; }
+                }
+            }, 100);
+        }
+
+        // Save Signature
         if (id === 'confirm') {
             validateOFPInputs();
             setTimeout(() => {
-                const canvas = document.getElementById('sig-canvas');
-                if (canvas) {
-                    // Ensure canvas is properly sized (it might have been hidden)
-                    resizeSignaturePad();
-                    // Restore saved signature if exists
-                    if (savedSignatureData && signaturePad) {
-                        signaturePad.fromDataURL(savedSignatureData, { ratio: lastPixelRatio });
-                    }
-                    updateSaveButtonState();
+                resizePad('main');
+                if (savedSignatureData && pads.main.pad) {
+                    pads.main.pad.fromDataURL(savedSignatureData, { ratio: pads.main.lastRatio });
                 }
             }, 50);
         }
-        
+
         // Update upload button visibility
         updateUploadButtonVisibility();
     };
@@ -3734,94 +3579,303 @@ const PERSISTENT_INPUT_IDS = [
         if(typeof updateCruiseLevel === 'function') updateCruiseLevel();
     }
 
-    // SIGNATURE FUNCTIONS
-    function initSignaturePad(canvas) {
-        if (!canvas) return;
-        
-        const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        const containerWidth = canvas.offsetWidth;
-        const containerHeight = canvas.offsetHeight;
+    function updateUIAfterParsing() {
+        // Set PIC Block Fuel display
+        const elPic = document.getElementById('view-pic-block');
+        if (elPic) {
+            const val = blockFuelValue || 0;
+            if (elPic.tagName === 'INPUT') elPic.value = val;
+            else elPic.innerText = val;
+        }
 
-        canvas.width = containerWidth * ratio;
-        canvas.height = containerHeight * ratio;
-
-        const ctx = canvas.getContext("2d");
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.scale(ratio, ratio);
-
-        signaturePad = new SignaturePad(canvas, {
-            backgroundColor: 'rgba(0,0,0,0)',
-            penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
-        });
-
-        lastCanvasWidth = containerWidth;
-        lastCanvasHeight = containerHeight;
-        lastPixelRatio = ratio;
-
-        return signaturePad;
+        runFlightLogCalculations();
+        renderFuelTable();
+        renderFlightLogTables();
     }
 
-    function resizeSignaturePad() {
-        if (!signaturePad) return;
-        const canvas = signaturePad.canvas;
-        if (!canvas) return;
 
-        const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        const containerWidth = canvas.offsetWidth;
-        const containerHeight = canvas.offsetHeight;
-
-        // Only resize if dimensions actually changed
-        if (containerWidth === lastCanvasWidth && 
-            containerHeight === lastCanvasHeight && 
-            ratio === lastPixelRatio) {
+    // DRAWING FUNCTIONS
+    function attachPadOnEnd(pad, name) {
+        if (!pad) return;
+        const canvas = pad.canvas; // <-- get canvas from pad
+        if (!canvas) {
+            console.warn(`attachPadOnEnd: canvas not found for pad ${name}`);
             return;
         }
 
-        // Save current signature before resizing
-        const currentData = signaturePad.isEmpty() ? null : signaturePad.toDataURL();
+        // Remove any existing pointer listener to avoid duplicates
+        if (pad._pointerUpListener) {
+            canvas.removeEventListener('pointerup', pad._pointerUpListener);
+        }
 
-        canvas.width = containerWidth * ratio;
-        canvas.height = containerHeight * ratio;
+        // Save function
+        const saveFunc = () => {
+            saveState();
+        };
 
-        const ctx = canvas.getContext("2d");
+        // Primary: library's onEnd
+        pad.onEnd = saveFunc;
+
+        // Fallback: direct pointerup event
+        const onPointerUp = (e) => {
+            // Small delay to allow library to process if needed
+            setTimeout(() => {
+                if (pad && !pad.isEmpty()) {
+                    saveFunc();
+                }
+            }, 10);
+        };
+        canvas.addEventListener('pointerup', onPointerUp);
+        pad._pointerUpListener = onPointerUp;
+    }
+
+    function initPad(name) {
+        const p = pads[name];
+        if (!p) return;
+        const canvas = document.getElementById(p.canvasId);
+        if (!canvas) return;
+
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        const containerWidth = canvas.offsetWidth;
+        const containerHeight = canvas.offsetHeight;
+
+        // Fallback if hidden
+        let width, height;
+        if (containerWidth === 0 || containerHeight === 0) {
+            const computed = getComputedStyle(canvas);
+            width = parseInt(computed.width) || 200;
+            height = parseInt(computed.height) || 80;
+        } else {
+            width = containerWidth;
+            height = containerHeight;
+        }
+
+        canvas.width = width * ratio;
+        canvas.height = height * ratio;
+
+        const ctx = canvas.getContext('2d');
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(ratio, ratio);
 
-        // Recreate signature pad with the same canvas
-        signaturePad = new SignaturePad(canvas, {
+        p.pad = new SignaturePad(canvas, {
             backgroundColor: 'rgba(0,0,0,0)',
             penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
         });
 
-        // Restore signature if there was one
-        if (currentData) {
-            signaturePad.fromDataURL(currentData, { ratio });
+        // Attach onEnd and direct pointerup listener
+        attachPadOnEnd(p.pad, name);
+
+        // Restore saved drawing if any
+        if (name === 'main') {
+            restorePadDrawing('main', 'signature');
+        } else if (name === 'atis') {
+            restorePadDrawing('atis', 'front-atis-drawing');
+        } else if (name === 'atc') {
+            restorePadDrawing('atc', 'front-atc-drawing');
         }
 
-        lastCanvasWidth = containerWidth;
-        lastCanvasHeight = containerHeight;
-        lastPixelRatio = ratio;
+        p.lastWidth = width;
+        p.lastHeight = height;
+        p.lastRatio = ratio;
+
+        return p.pad;
     }
 
-    function clearSignature() {
-        if (signaturePad) {
-            signaturePad.clear();
-            // Canvas may have been resized; ensure it's still correct
-            resizeSignaturePad();
-            updateSaveButtonState();
+function resizePad(name) {
+    const p = pads[name];
+    if (!p || !p.pad) return;
+    const canvas = p.pad.canvas;
+    if (!canvas) return;
+
+    const ratio = Math.max(window.devicePixelRatio || 1, 1);
+    const containerWidth = canvas.offsetWidth;
+    const containerHeight = canvas.offsetHeight;
+
+    if (containerWidth === p.lastWidth && containerHeight === p.lastHeight && ratio === p.lastRatio) {
+        return;
+    }
+
+    const currentData = p.pad.isEmpty() ? null : p.pad.toDataURL();
+
+    canvas.width = containerWidth * ratio;
+    canvas.height = containerHeight * ratio;
+
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(ratio, ratio);
+
+    p.pad = new SignaturePad(canvas, {
+        backgroundColor: 'rgba(0,0,0,0)',
+        penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+    });
+
+    // Re‑attach onEnd
+    attachPadOnEnd(p.pad, name);
+
+    if (currentData) {
+        p.pad.fromDataURL(currentData, { ratio });
+    }
+
+    p.lastWidth = containerWidth;
+    p.lastHeight = containerHeight;
+    p.lastRatio = ratio;
+}
+
+    async function restorePadDrawing(padName, drawingKey) {
+        const activeId = localStorage.getItem('activeOFPId');
+        if (!activeId) {
+            console.log('No active OFP, skipping restore');
+            return;
+        }
+        try {
+            const ofp = await getActiveOFPFromDB();
+            if (!ofp) {
+                console.log('Active OFP not found in DB');
+                return;
+            }
+            if (!ofp.userInputs) {
+                console.log('ofp.userInputs is empty');
+                return;
+            }
+            let data = ofp.userInputs[drawingKey];
+            
+            // If not found in IndexedDB, try localStorage backup
+            if (!data) {
+                const backupKey = `drawing_backup_${activeId}_${drawingKey === 'front-atis-drawing' ? 'atis' : drawingKey === 'front-atc-drawing' ? 'atc' : 'signature'}`;
+                const backup = localStorage.getItem(backupKey);
+                if (backup) {
+                    console.log('Found backup in localStorage, using it');
+                    data = backup;
+                    // Optionally restore it back to IndexedDB for future
+                    try {
+                        await updateOFP(activeId, { 
+                            userInputs: { ...ofp.userInputs, [drawingKey]: backup } 
+                        });
+                    } catch (e) {
+                        console.warn('Failed to restore backup to IndexedDB', e);
+                    }
+                }
+            }
+
+            if (!data) {
+                return;
+            }
+
+            console.log(`Restoring ${drawingKey}, data length:`, data.length);
+            if (!data.startsWith('data:image/png;base64,') || data.length < 100) {
+                console.warn(`Invalid data URL for ${drawingKey}, skipping`);
+                return;
+            }
+
+            const pad = pads[padName]?.pad;
+            if (!pad) {
+                console.warn(`Pad ${padName} not initialized yet – retrying in 100ms`);
+                setTimeout(() => restorePadDrawing(padName, drawingKey), 100);
+                return;
+            }
+
+            try {
+                await pad.fromDataURL(data);
+                resizePad(padName);
+                console.log(`✅ Restored ${drawingKey} to ${padName} pad`);
+            } catch (e) {
+                console.error(`Failed to load drawing into pad ${padName}:`, e);
+            }
+        } catch (e) {
+            console.error(`Failed to restore ${drawingKey}:`, e);
         }
     }
 
-    // Update save button state based on whether signature exists
-    function updateSaveButtonState() {
-        const saveButton = document.getElementById('btn-send-ofp');
-        if (!signaturePad || saveButton === null) return;
-        
-        saveButton.disabled = signaturePad.isEmpty();
+    function clearPad(padName) {
+        const pad = pads[padName]?.pad;
+        if (pad) {
+            pad.clear();
+            if (padName === 'main') {
+                validateOFPInputs();
+            }
+            debouncedSave(); // save cleared state
+        }
     }
 
-    // Make functions available globally
-    window.clearSignature = clearSignature;
+    // Toggle UI and (re)create canvases
+function applyInputMode(mode) {
+    // If already in this mode, skip
+    if (mode === currentAtisInputMode) {
+        return;
+    }
+    currentAtisInputMode = mode;
+    const atisInput = document.getElementById('front-atis');
+    const atcInput = document.getElementById('front-atc');
+    const atisCanvas = document.getElementById('front-atis-canvas');
+    const atcCanvas = document.getElementById('front-atc-canvas');
+
+    if (mode === 'typing') {
+        // Cancel any pending debounced save
+        debouncedSave.cancel();
+        // Save any pending drawing immediately
+        saveState();
+
+        // Show inputs, hide canvases
+        if (atisInput) {
+            atisInput.style.display = '';
+            atisInput.style.visibility = 'visible';
+        }
+        if (atcInput) {
+            atcInput.style.display = '';
+            atcInput.style.visibility = 'visible';
+        }
+        if (atisCanvas) {
+            atisCanvas.style.display = 'none';
+            atisCanvas.style.visibility = 'hidden';
+        }
+        if (atcCanvas) {
+            atcCanvas.style.display = 'none';
+            atcCanvas.style.visibility = 'hidden';
+        }
+        // Destroy pads
+        if (pads.atis.pad) { pads.atis.pad.off(); pads.atis.pad = null; }
+        if (pads.atc.pad) { pads.atc.pad.off(); pads.atc.pad = null; }
+    } else { // writing mode
+        // Hide inputs, show canvases
+        if (atisInput) {
+            atisInput.style.display = 'none';
+            atisInput.style.visibility = 'hidden';
+        }
+        if (atcInput) {
+            atcInput.style.display = 'none';
+            atcInput.style.visibility = 'hidden';
+        }
+        if (atisCanvas) {
+            atisCanvas.style.display = 'block';
+            atisCanvas.style.visibility = 'visible';
+        }
+        if (atcCanvas) {
+            atcCanvas.style.display = 'block';
+            atcCanvas.style.visibility = 'visible';
+        }
+
+        const activeSection = document.querySelector('.tool-section.active');
+        if (activeSection && activeSection.id === 'section-summary') {
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    if (!pads.atis.pad) {
+                        initPad('atis');
+                    } else {
+                        // Re‑attach onEnd (already attached, but double‑check)
+                        attachPadOnEnd(pads.atis.pad, 'atis');
+                    }
+                    if (!pads.atc.pad) {
+                        initPad('atc');
+                    } else {
+                        attachPadOnEnd(pads.atc.pad, 'atc');
+                        console.log('✍️ ATC pad onEnd re‑attached');
+                    }
+                }, 50);
+            });
+        }
+    }
+    document.body.setAttribute('data-atis-mode', mode);
+}
 
     // Incremental update functions
     function updateFlightLogTablesIncremental() {
@@ -3964,11 +4018,14 @@ const PERSISTENT_INPUT_IDS = [
             journeyOK = dailyLegs.some(leg => leg['j-flt'] === currentFlight);
         }
 
+        const signatureOK = pads.main.pad && !pads.main.pad.isEmpty();
+
         const checks = [
             { label: "Flight Summary", valid: summaryOK },
             { label: "Fuel", valid: fuelOK },
             { label: "Flight Log", valid: flightLogOK },
-            { label: "Journey Log (current flight)", valid: journeyOK }
+            { label: "Journey Log (current flight)", valid: journeyOK },
+            { label: "Signature", valid: signatureOK }
         ];
 
         const list = el('validation-list');
@@ -3978,7 +4035,7 @@ const PERSISTENT_INPUT_IDS = [
             ).join('');
             
             const valid = checks.every(c => c.valid);
-            if (el('btn-send-ofp')) el('btn-send-ofp').disabled = !valid;
+            const sendBtn = el('btn-send-ofp');
         }
     };
 
@@ -4005,12 +4062,24 @@ const PERSISTENT_INPUT_IDS = [
         // 5. Reset 'Flight Summary' & 'Weights & Fuel' Tab Text placeholders
         ['view-min-block', 'view-pic-block', 'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 'view-dow', 'view-tow', 'view-lw', 'view-zfw'].forEach(id => safeText(id, '-'));
         ['view-flt', 'view-reg', 'view-date','view-std-text', 'view-sta-text', 'view-dep', 'view-dest', 'view-altn', 'view-altn2', 'view-dest-route', 'view-altn-route', 'view-ci','view-etd-text', 'view-eta-text', 'view-era','view-crz-wind-temp', 'view-seats-stn-jmp'].forEach(id => safeText(id, '-'));
-    
+        
+
+        if (pads.atis.pad) {
+            pads.atis.pad.clear();
+            // optionally re‑init (resize handled later)
+        }
+        if (pads.atc.pad) {
+            pads.atc.pad.clear();
+        }
+        
         // Reset DOM caches to prevent stale references
         waypointATOCache = [];
         alternateATOCache = [];
         waypointFuelCache = [];
         takeoffFuelInput = null;
+
+        // Reset the incremental update cache to force a full redraw next time
+        waypointTableCache = { waypoints: [], alternateWaypoints: [], lastUpdate: 0 };
     }
 
     function updateFloatingButtonVisibility() {
@@ -4455,13 +4524,6 @@ const PERSISTENT_INPUT_IDS = [
         safeSet('j-flt-alt', finalLevel);
     };
 
-    function debouncedUpdateCruiseLevel() {
-        clearTimeout(cruiseTimeout);
-        cruiseTimeout = setTimeout(() => {
-            updateCruiseLevel();
-        }, 300);
-    }
-
     // Transfer Last Waypoint for current Leg
     window.syncLastWaypoint = function() {
         if(waypoints.length === 0) return;
@@ -4488,13 +4550,6 @@ const PERSISTENT_INPUT_IDS = [
         calcTripTime(); 
         calcFuel();
     };
-
-    function debouncedSyncLastWaypoint() {
-        clearTimeout(syncTimeout);
-        syncTimeout = setTimeout(() => {
-            syncLastWaypoint();
-        }, 300);
-    }
 
     // Calculate Fuel values for current Leg
     window.calcFuel = function() {
@@ -5264,19 +5319,56 @@ const PERSISTENT_INPUT_IDS = [
 
                         // 5.5 Front Page Overlays
                         if (i === 1) {
-                            // ATIS/ATC
-                            const frontItems = [ 
-                                {id:'front-atis', offset:40, coord:frontCoords.atis}, 
-                                {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
-                            ];
-                            frontItems.forEach(f => {
-                                const v = el(f.id)?.value;
-                                if(f.coord && v) newPage.drawText(v.toUpperCase(), { 
-                                    x: f.coord.transform[4] + f.offset, 
-                                    y: f.coord.transform[5] + V_LIFT, 
-                                    size: 12, font: fontB, color: PDFLib.rgb(0,0,0) // Black text
+                            // ATIS/ATC – only if in typing mode
+                            if (currentAtisInputMode === 'typing') {
+                                const frontItems = [ 
+                                    {id:'front-atis', offset:40, coord:frontCoords.atis}, 
+                                    {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
+                                ];
+                                frontItems.forEach(f => {
+                                    const v = el(f.id)?.value;
+                                    if(f.coord && v) newPage.drawText(v.toUpperCase(), { 
+                                        x: f.coord.transform[4] + f.offset, 
+                                        y: f.coord.transform[5] + V_LIFT, 
+                                        size: 12, font: fontB, color: PDFLib.rgb(0,0,0)
+                                    });
                                 });
-                            });
+                            }
+                            // ATIS/ATC – only if in drawing mode
+                            if (currentAtisInputMode === 'writing') {
+                                // ATIS canvas
+                                if (pads.atis.pad && !pads.atis.pad.isEmpty()) {
+                                    try {
+                                        const atisData = pads.atis.pad.toDataURL();
+                                        const atisImg = await newPdf.embedPng(atisData);
+                                        const atisCoord = frontCoords.atis;
+                                        if (atisCoord) {
+                                            newPage.drawImage(atisImg, {
+                                                x: atisCoord.transform[4] + 40,
+                                                y: atisCoord.transform[5] - 15, 
+                                                width: 150,
+                                                height: 40
+                                            });
+                                        }
+                                    } catch(e) { console.error('ATIS drawing error', e); }
+                                }
+                                // ATC canvas 
+                                if (pads.atc.pad && !pads.atc.pad.isEmpty()) {
+                                    try {
+                                        const atcData = pads.atc.pad.toDataURL();
+                                        const atcImg = await newPdf.embedPng(atcData);
+                                        const atcCoord = frontCoords.atcLabel;
+                                        if (atcCoord) {
+                                            newPage.drawImage(atcImg, {
+                                                x: atcCoord.transform[4] + 50,
+                                                y: atcCoord.transform[5] - 15, 
+                                                width: 150,
+                                                height: 40
+                                            });
+                                        }
+                                    } catch(e) { console.error('ATC drawing error', e); }
+                                }
+                            }
 
                             // PIC Block
                             const picBlockText = el('view-pic-block')?.innerText || "";
@@ -5298,12 +5390,19 @@ const PERSISTENT_INPUT_IDS = [
                             });
 
                             // Signature
-                            if (signaturePad && !signaturePad.isEmpty() && frontCoords.reasonLabel) {
+                            if (pads.main.pad && !pads.main.pad.isEmpty() && frontCoords.reasonLabel) {
                                 try {
-                                    const sigData = signaturePad.toDataURL();
+                                    const sigData = pads.main.pad.toDataURL();
                                     const sigImg = await newPdf.embedPng(sigData);
-                                    newPage.drawImage(sigImg, { x: frontCoords.reasonLabel.transform[4], y: frontCoords.reasonLabel.transform[5] + 40, width: 100, height: 35 });
-                                } catch(e){}
+                                    newPage.drawImage(sigImg, {
+                                        x: frontCoords.reasonLabel.transform[4],
+                                        y: frontCoords.reasonLabel.transform[5] + 40,
+                                        width: 100,
+                                        height: 35
+                                    });
+                                } catch(e) {
+                                    console.error('Failed to embed signature', e);
+                                }
                             }
                         }
                         const pageIndex = i - 1;
@@ -5371,9 +5470,9 @@ const PERSISTENT_INPUT_IDS = [
     async function resetOFPAfterSend() {
         // 1. Popup Confirmation
         const userConfirmed = await showConfirmDialog(
-            'OFP Generated Successfully. <br> Are you happy with the downloaded file?',
-            'Click Continue to wipe the form for the next flight.<br>'+
-            'Click Cancel if you need to make changes and download again.<br>',
+            'OFP Generated Successfully.',
+            'Click Finalize to wipe the form for the next flight.<br>'+
+            'Click Modify if you need to make changes and download again.<br>',
             'Finalize',
             'Modify',
         );
@@ -5708,6 +5807,11 @@ const PERSISTENT_INPUT_IDS = [
 // 12. LOCAL STORAGE (AUTO-SAVE)
 // ==========================================
 
+    window.manualSaveTest = function() {
+        console.log('Manual save triggered');
+        saveState();
+    };
+
     const SAVE_IDS = [
         'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-alt2', 'j-std','front-extra-kg',
         'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
@@ -5719,10 +5823,19 @@ const PERSISTENT_INPUT_IDS = [
     ];
 
     // 1. SAVE FUNCTION 
+    // 1. SAVE FUNCTION 
     async function saveState() {
         if (!isAppLoaded) return;
+        console.log('🔄 saveState started');
 
-        // Capture waypoint user inputs for the active OFP
+        // MUST be declared before any usage
+        const activeId = localStorage.getItem('activeOFPId');
+        if (!activeId) {
+            console.log('⚠️ No active OFP, skipping save');
+            return;
+        }
+
+        // Capture waypoint user inputs
         const userInputs = waypoints.map((wp, i) => ({
             ato: el(`o-a-${i}`)?.value || "",
             fuel: el(`o-f-${i}`)?.value || "",
@@ -5730,35 +5843,92 @@ const PERSISTENT_INPUT_IDS = [
             agl: el(`o-agl-${i}`)?.value || ""
         }));
 
+        // Save waypoint inputs to IndexedDB
         try {
-            const activeId = localStorage.getItem('activeOFPId');
-            if (activeId) {
-                updateOFP(activeId, { userWaypoints: userInputs }).catch(err =>
-                    console.warn('Failed to update OFP with waypoint inputs:', err)
-                );
-            }
+            await updateOFP(activeId, { userWaypoints: userInputs });
+            console.log('✅ Waypoint inputs saved');
         } catch (e) {
-            console.warn('Failed to save waypoint inputs to OFP record', e);
+            console.warn('❌ Failed to save waypoint inputs', e);
         }
 
-        // Save persistent user inputs to the active OFP
-        try {
-            const activeId = localStorage.getItem('activeOFPId');
-            if (activeId) {
-                const persistentInputs = {};
-                PERSISTENT_INPUT_IDS.forEach(id => {
-                    const el = document.getElementById(id);
-                    if (el) persistentInputs[id] = el.value;
-                });
-                updateOFP(activeId, { userInputs: persistentInputs }).catch(err =>
-                    console.warn('Failed to update OFP with user inputs:', err)
-                );
-            }
-        } catch (e) {
-            console.warn('Failed to save user inputs to OFP record', e);
+        // Prepare combined user inputs (persistent fields + drawings + signature)
+        const combinedInputs = {};
+
+        // Persistent text inputs
+        PERSISTENT_INPUT_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) combinedInputs[id] = el.value;
+        });
+
+        // Helper to validate data URL
+        function isValidDataURL(data) {
+            return data && typeof data === 'string' && data.startsWith('data:image/png;base64,') && data.length > 100;
         }
 
-        // Save ONLY non‑OFP‑specific state to localStorage
+        // ATIS/ATC drawings
+        if (currentAtisInputMode === 'writing') {
+            console.log('saveState: currentAtisInputMode = writing');
+            console.log('saveState: pads.atis.pad exists?', !!pads.atis.pad);
+            console.log('saveState: pads.atis.pad.isEmpty()?', pads.atis.pad ? pads.atis.pad.isEmpty() : 'N/A');
+
+            if (pads.atis.pad && !pads.atis.pad.isEmpty()) {
+                const data = pads.atis.pad.toDataURL();
+                if (isValidDataURL(data)) {
+                    combinedInputs['front-atis-drawing'] = data;
+                    console.log('📸 ATIS drawing captured, length:', data.length);
+                    // Backup to localStorage
+                    localStorage.setItem(`drawing_backup_${activeId}_atis`, data);
+                } else {
+                    console.log('⚠️ Invalid ATIS drawing data, not saving');
+                    combinedInputs['front-atis-drawing'] = null;
+                }
+            } else {
+                combinedInputs['front-atis-drawing'] = null;
+            }
+
+            if (pads.atc.pad && !pads.atc.pad.isEmpty()) {
+                const data = pads.atc.pad.toDataURL();
+                if (isValidDataURL(data)) {
+                    combinedInputs['front-atc-drawing'] = data;
+                    console.log('📸 ATC drawing captured, length:', data.length);
+                    localStorage.setItem(`drawing_backup_${activeId}_atc`, data);
+                } else {
+                    console.log('⚠️ Invalid ATC drawing data, not saving');
+                    combinedInputs['front-atc-drawing'] = null;
+                }
+            } else {
+                combinedInputs['front-atc-drawing'] = null;
+            }
+        } else {
+            combinedInputs['front-atis-drawing'] = null;
+            combinedInputs['front-atc-drawing'] = null;
+            console.log('not writing mode');
+        }
+
+        // Main signature
+        if (pads.main.pad && !pads.main.pad.isEmpty()) {
+            const data = pads.main.pad.toDataURL();
+            if (isValidDataURL(data)) {
+                combinedInputs.signature = data;
+                console.log('📸 Signature captured, length:', data.length);
+                localStorage.setItem(`drawing_backup_${activeId}_signature`, data);
+            } else {
+                console.warn('⚠️ Invalid signature data, not saving');
+                combinedInputs.signature = null;
+            }
+        } else {
+            combinedInputs.signature = null;
+        }
+
+        // Save combined inputs to IndexedDB
+        try {
+            await updateOFP(activeId, { userInputs: combinedInputs });
+            console.log('✅ User inputs (incl. drawings) saved');
+        } catch (e) {
+            console.warn('❌ Failed to save user inputs', e);
+        }
+
+        // Save non‑OFP state to localStorage (encrypted + fallback)
         const state = {
             inputs: {},
             dailyLegs: dailyLegs,
@@ -5773,11 +5943,12 @@ const PERSISTENT_INPUT_IDS = [
             if (e) state.inputs[id] = e.value;
         });
 
-        // Synchronous fallback
+        // Fallback sync save (unencrypted)
         try {
             localStorage.setItem('efb_log_state_fallback', JSON.stringify(state));
+            console.log('✅ Fallback state saved');
         } catch (e) {
-            console.error("Storage full or error:", e);
+            console.error('Storage full or error:', e);
         }
 
         // Encrypted async save
@@ -5785,10 +5956,13 @@ const PERSISTENT_INPUT_IDS = [
             if (typeof encryptData === 'function') {
                 const encryptedState = await encryptData(state);
                 localStorage.setItem('efb_log_state', encryptedState);
+                console.log('✅ Encrypted state saved');
             }
         } catch (error) {
-            console.warn("Encryption save failed, relying on fallback.");
+            console.warn('Encryption save failed, relying on fallback.', error);
         }
+
+        console.log('🏁 saveState completed');
     }
 
     // 2. LOAD FUNCTION 
@@ -6151,26 +6325,19 @@ const PERSISTENT_INPUT_IDS = [
             getRequest.onsuccess = () => {
                 const ofp = getRequest.result;
                 if (!ofp) {
-                    console.error(`updateOFP: OFP ID ${id} not found`);
                     reject(new Error("OFP not found"));
                     return;
                 }
                 Object.assign(ofp, updates);
                 const putRequest = store.put(ofp);
                 putRequest.onsuccess = () => {
-                    resolve(ofp);   // ✅ No verification – just resolve
+                    // Wait for transaction to complete before resolving
+                    tx.oncomplete = () => resolve(ofp);
+                    tx.onerror = (e) => reject(e.target.error);
                 };
-                putRequest.onerror = (e) => {
-                    console.error(`❌ updateOFP: store.put() error`, e.target.error);
-                    reject(e.target.error);
-                };
+                putRequest.onerror = (e) => reject(e.target.error);
             };
-            getRequest.onerror = (e) => {
-                console.error(`updateOFP: store.get() error`, e.target.error);
-                reject(e.target.error);
-            };
-
-            tx.onerror = (e) => reject(e.target.error);
+            getRequest.onerror = (e) => reject(e.target.error);
         });
     }
 
@@ -6334,6 +6501,7 @@ const PERSISTENT_INPUT_IDS = [
 // ==========================================
 
     function initializeSettingsTab() {
+        // Bind buttons to their handlers
         const settingsButtons = {
             'btn-change-pin': changePIN,
             'btn-view-audit': viewAuditLog,
@@ -6350,24 +6518,34 @@ const PERSISTENT_INPUT_IDS = [
             }
         });
         
-        // Auto-save settings when changed
+        // Auto-save settings when changed (for all except atis-input-mode)
         ['auto-lock-time', 'pdf-quality', 'hide-all-duty', 'auto-activate-next'].forEach(id => {
             const element = document.getElementById(id);
             if (element) {
                 element.addEventListener('change', saveSettings);
             }
         });
-        // Initialize settings display
-        loadSettings();
-        calculateStorageUsage();
+
+        // Special handler for ATIS input mode – apply UI change immediately
+        const modeSelect = document.getElementById('atis-input-mode');
+        if (modeSelect) {
+            modeSelect.addEventListener('change', function(e) {
+                const newMode = e.target.value;
+                applyInputMode(newMode);
+                saveSettings();
+            });
+        }
     }
 
     // Initialize settings when app loads
     async function initializeSettings() {
-        // Load saved settings
+        // Bind buttons and listeners (only once)
+        initializeSettingsTab();
+        
+        // Load and apply saved settings
         loadSettings();
         
-        // Calculate storage usage
+        // Calculate storage usage after a short delay (UI is ready)
         setTimeout(calculateStorageUsage, 1000);
         
         // Set app version
@@ -6410,6 +6588,13 @@ const PERSISTENT_INPUT_IDS = [
             if (autoActivateCheckbox) {
                 autoActivateCheckbox.checked = settings.autoActivateNext !== false; // default true
             }
+
+            // Writing or Typing ATIS/ATC
+            const modeSelect = document.getElementById('atis-input-mode');
+            if (modeSelect) {
+                modeSelect.value = settings.atisInputMode || 'typing';
+                applyInputMode(settings.atisInputMode || 'typing');
+            }
                 
             // Set app version
             const versionEl = document.getElementById('settings-version');
@@ -6435,6 +6620,7 @@ const PERSISTENT_INPUT_IDS = [
             pdfQuality: document.getElementById('pdf-quality')?.value || '2.0',
             hideAllDuty: document.getElementById('hide-all-duty')?.checked || false,
             autoActivateNext: document.getElementById('auto-activate-next')?.checked !== false,
+            atisInputMode: document.getElementById('atis-input-mode')?.value || 'typing',
             lastSaved: new Date().toISOString()
         };
         // Persistent authentication logic
@@ -6957,5 +7143,219 @@ const PERSISTENT_INPUT_IDS = [
         }
         return false;
     }
+
+
+    window.onload = async function() {
+        // Show authentication first
+        const authenticated = await setupAuthentication();
+        
+        if (!authenticated) {
+            // Block access if not authenticated
+            document.body.innerHTML = `
+                <div style="
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    background: var(--background);
+                    color: var(--text);
+                    text-align: center;
+                    padding: 20px;
+                ">
+                    <div>
+                        <h1>🔒 Access Denied</h1>
+                        <p>Authentication required to use EFB Log Pro</p>
+                        <button onclick="location.reload()" style="
+                            margin-top: 20px;
+                            padding: 10px 20px;
+                            background: var(--accent);
+                            color: white;
+                            border: none;
+                            border-radius: 5px;
+                            cursor: pointer;
+                        ">
+                            Try Again
+                        </button>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+        // Use requestIdleCallback for non-critical initialization
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(async () => {
+                await initializeApp();
+                setTimeout(initializeSettings, 2000);
+            });
+        } else {
+            setTimeout(async () => {
+                await initializeApp();
+                setTimeout(initializeSettings, 2000);
+            }, 1000);
+        }
+    };
+
+    window.clearAtisCanvas = () => clearPad('atis');
+    window.clearAtcCanvas = () => clearPad('atc');
+    window.clearSignature = () => clearPad('main');
+
+
+// ==========================================
+// DEBOUNCED FUNCTION INSTANCES
+// ==========================================
+
+const debouncedSave = debounce(saveState, SAVE_STATE_DEBOUNCE);
+const debouncedFullRecalc = debounce(() => {
+    runFlightLogCalculations();
+    syncLastWaypoint();
+}, 300);
+const debouncedSyncLastWaypoint = debounce(syncLastWaypoint, 300);
+const debouncedUpdateCruiseLevel = debounce(updateCruiseLevel, 300);
+
+// ==========================================
+// EVENT LISTENERS
+// ==========================================
+
+    window.addEventListener('DOMContentLoaded', function() {
+        // 1. Initialize pdfFallbackElement
+        pdfFallbackElement = document.getElementById('pdf-fallback');
+        
+        // 2. Check initial OFP state
+        if (window.ofpPdfBytes) {
+            setOFPLoadedState(true);
+        } else {
+            setOFPLoadedState(false);
+        }
+        
+        // 3. Add drag and drop functionality for the overlay
+        const overlay = document.getElementById('upload-overlay');
+        const ofpFileInput = document.getElementById('ofp-file-in');
+        
+        if (overlay && ofpFileInput) {
+            // Drag enter/over
+            ['dragenter', 'dragover'].forEach(eventName => {
+                overlay.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    overlay.style.background = 'rgba(0, 132, 255, 0.3)';
+                }, false);
+            });
+            
+            // Drag leave
+            ['dragleave', 'drop'].forEach(eventName => {
+                overlay.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    overlay.style.background = 'rgba(0, 0, 0, 0.9)';
+                }, false);
+            });
+            
+            // Drop
+            overlay.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    ofpFileInput.files = files;
+                    ofpFileInput.dispatchEvent(new Event('change'));
+                }
+            }, false);
+        }
+        
+        // 4. Initialize theme on page load
+        const savedTheme = localStorage.getItem('data-theme');
+        const html = document.documentElement;
+        const themeButton = document.querySelector('.theme-toggle');
+        
+        if (savedTheme) {
+            // Apply saved theme
+            html.setAttribute('data-theme', savedTheme);
+            
+            // Update button text and active state
+            if (themeButton) {
+                themeButton.textContent = savedTheme === 'dark' ? 'Day Mode' : 'Night Mode';
+            }
+        } else {
+            // Default to light theme if no saved preference
+            html.setAttribute('data-theme', 'light');
+            if (themeButton) {
+                themeButton.textContent = 'Night Mode';
+            }
+        }
+        
+        // 5. Initialize tab navigation
+        initializeTabNavigation();
+        
+        // 6. Initial update for upload button visibility
+        updateUploadButtonVisibility();
+        
+        // 7. Add time input masks
+        addTimeInputMasks();
+        
+        // 8. Initialize Main Drawing Pad
+        setTimeout(() => {
+            initPad('main');
+            if (pads.main.pad) {
+                pads.main.pad.onEnd = () => {
+                    debouncedSave();
+                };
+                // Restore saved signature if exists (from savedSignatureData)
+                if (savedSignatureData) {
+                    pads.main.pad.fromDataURL(savedSignatureData, { ratio: pads.main.lastRatio });
+                }
+            }
+
+        }, 100);
+
+        // Clear buttons for ATIS/ATC
+        const clearAtis = document.getElementById('clear-atis-btn');
+        const clearAtc = document.getElementById('clear-atc-btn');
+
+        if (clearAtis) {
+            clearAtis.addEventListener('click', () => clearPad('atis'));
+        }
+        if (clearAtc) {
+            clearAtc.addEventListener('click', () => clearPad('atc'));
+        }
+    
+        // Auto-save settings when changed
+        ['auto-lock-time', 'pdf-quality','auto-activate-next','hide-all-duty'].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.addEventListener('change', saveSettings);
+            }
+        });
+
+        // Activity tracking
+        if (sessionStorage.getItem('efb_authenticated') === 'true') {
+            setupActivityTracking();
+            resetAutoLockTimer();
+        }
+        loadState();
+    });
+
+    window.addEventListener('beforeunload', () => {
+        debouncedSave.cancel(); // cancel any pending debounced save
+        saveState(); // final immediate save
+    });
+
+    // Trigger Save on tab change
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            saveState();
+        }
+    });
+
+    window.addEventListener('resize', function() {
+        resizePad('main');
+        if (currentAtisInputMode === 'writing') {
+            resizePad('atis');
+            resizePad('atc');
+        }
+    });
+
+    window.addEventListener('pagehide', () => {
+        saveState();
+    });
 
 })();
