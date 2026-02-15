@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -1812,82 +1812,110 @@ const PERSISTENT_INPUT_IDS = [
 // ==========================================
 
     // Activate OFP
-    window.activateOFP = async function(id, switchTab = true) {
-        if (isActivating) {
-            console.warn('Already activating an OFP, please wait');
-            showToast('Please wait, activation in progress', 'info');
+window.activateOFP = async function(id, switchTab = true, retryCount = 0) {
+    // Prevent overlapping activations
+    if (isActivating) {
+        console.warn('Already activating an OFP, please wait');
+        showToast('Please wait, activation in progress', 'info');
+        return;
+    }
+    // Wait if reordering is in progress
+    if (isReordering) {
+        console.warn('Reordering in progress, activation delayed');
+        showToast('Reordering in progress, please wait...', 'info');
+        setTimeout(() => activateOFP(id, switchTab, retryCount), 500);
+        return;
+    }
+    isActivating = true;
+
+    try {
+        const numericId = Number(id);
+        if (isNaN(numericId)) throw new Error('Invalid OFP ID');
+
+        // ---- Step 1: Retrieve the OFP with retries ----
+        let ofpToActivate = null;
+        let attempts = 0;
+        const maxAttempts = 5;
+        const baseDelay = 200; // ms
+
+        while (attempts < maxAttempts) {
+            try {
+                ofpToActivate = await getOFPById(numericId);
+                break; // success
+            } catch (err) {
+                attempts++;
+                if (attempts >= maxAttempts) throw new Error(`OFP with id ${numericId} not found after ${maxAttempts} attempts`);
+                const delay = baseDelay * Math.pow(2, attempts - 1); // exponential backoff
+                console.warn(`Activation attempt ${attempts} failed, retrying in ${delay}ms`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+
+        if (ofpToActivate.finalized) {
+            showToast("Cannot activate a finalized OFP", 'error');
             return;
         }
-        isActivating = true;
 
-        try {
-            const numericId = Number(id);
-            if (isNaN(numericId)) throw new Error('Invalid OFP ID');
+        // ---- Step 2: Set as active ----
+        await setActiveOFP(numericId);
 
-            // First, try to get the OFP with retry (in case of temporary unavailability)
-            let ofpToActivate = null;
-            let retries = 3;
-            while (retries > 0) {
-                try {
-                    ofpToActivate = await getOFPById(numericId);
-                    break; // success
-                } catch (err) {
-                    retries--;
-                    if (retries === 0) throw err;
-                    console.warn(`Retrying getOFPById for ${numericId}, attempts left: ${retries}`);
-                    await new Promise(resolve => setTimeout(resolve, 100)); // wait 100ms
+        // ---- Step 3: Retrieve the full active OFP with retries ----
+        let ofp = null;
+        attempts = 0;
+        while (attempts < maxAttempts) {
+            ofp = await getActiveOFPFromDB();
+            if (ofp && ofp.data) break;
+            attempts++;
+            if (attempts >= maxAttempts) throw new Error('Failed to load OFP data after multiple attempts');
+            const delay = baseDelay * Math.pow(2, attempts - 1);
+            console.warn(`Active OFP not found, retry ${attempts} in ${delay}ms`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        // ---- Step 4: Clear existing UI data ----
+        if (typeof clearOFPInputs === 'function') clearOFPInputs();
+
+        setOFPLoadedState(true);
+        window.ofpPdfBytes = await ofp.data.arrayBuffer();
+        window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
+
+        // ---- Step 5: Parse and restore ----
+        await runAnalysis(ofp.data, true);
+        await restoreOFPData(ofp);
+        await renderOFPMangerTable();
+
+        // ---- Step 6: Switch tab if requested ----
+        if (switchTab) {
+            const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
+            if (summaryBtn) {
+                if (typeof window.showTab === 'function') {
+                    window.showTab('summary', summaryBtn);
+                } else {
+                    summaryBtn.click();
                 }
             }
+        }
 
-            if (ofpToActivate.finalized) {
-                showToast("Cannot activate a finalized OFP", 'error');
-                return;
-            }
+        showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
 
-            await setActiveOFP(numericId);
-
-            // After setting active, get the full OFP again (it should now be active)
-            const ofp = await getActiveOFPFromDB();
-            if (!ofp || !ofp.data) {
-                // Try to get it by ID directly
-                const direct = await getOFPById(numericId);
-                if (!direct || !direct.data) throw new Error('Failed to load OFP data');
-                // Use direct
-                ofp = direct;
-            }
-
-            // Clear existing data
-            if (typeof clearOFPInputs === 'function') clearOFPInputs();
-
-            setOFPLoadedState(true);
-            window.ofpPdfBytes = await ofp.data.arrayBuffer();
-            window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
-
-            await runAnalysis(ofp.data, true);
-            await restoreOFPData(ofp);
-            await renderOFPMangerTable();
-
-            if (switchTab) {
-                const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
-                if (summaryBtn) {
-                    if (typeof window.showTab === 'function') {
-                        window.showTab('summary', summaryBtn);
-                    } else {
-                        summaryBtn.click();
-                    }
-                }
-            }
-
-            showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
-
-        } catch (error) {
-            console.error("Error activating OFP:", error);
+    } catch (error) {
+        console.error("Error activating OFP:", error);
+        // If we haven't retried too many times, try the whole function again
+        if (retryCount < 2) {
+            console.log(`Retrying activation (attempt ${retryCount + 1}) in 1s`);
+            setTimeout(() => {
+                isActivating = false; // release flag for retry
+                activateOFP(id, switchTab, retryCount + 1);
+            }, 1000);
+        } else {
             showToast(`Failed to activate OFP: ${error.message}`, 'error');
-        } finally {
             isActivating = false;
         }
-    };
-
+    } finally {
+        // Only reset flag if no further retry is scheduled
+        if (retryCount >= 2) isActivating = false;
+    }
+};
     // Delete OFP
     window.deleteOFP = async function(id) {
         const confirmed = await showConfirmDialog(
@@ -3278,24 +3306,23 @@ const PERSISTENT_INPUT_IDS = [
         });
     }
 
-    async function getOFPById(id) {
-        const db = await getDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofps", "readonly");
-            const store = tx.objectStore("ofps");
-            const request = store.get(Number(id));
-            request.onsuccess = () => {
-                const ofp = request.result;
-                if (!ofp) {
-                    reject(new Error(`OFP with id ${id} not found`));
-                } else {
-                    resolve(ofp);
-                }
-            };
-            request.onerror = (e) => reject(e.target.error);
-        });
-    }
-
+async function getOFPById(id) {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("ofps", "readonly");
+        const store = tx.objectStore("ofps");
+        const request = store.get(Number(id));
+        request.onsuccess = () => {
+            const ofp = request.result;
+            if (!ofp) {
+                reject(new Error(`OFP with id ${id} not found`));
+            } else {
+                resolve(ofp);
+            }
+        };
+        request.onerror = (e) => reject(e.target.error);
+    });
+}
     async function getAllOFPOrders() {
         const db = await getDB();
         if (!db.objectStoreNames.contains('ofp_orders')) return [];
@@ -6576,48 +6603,48 @@ function applyInputMode(mode) {
     }
 
     // Get active OFP
-    async function getActiveOFPFromDB() {
-        const activeId = localStorage.getItem('activeOFPId');
-        if (!activeId) return null;
+async function getActiveOFPFromDB() {
+    const activeId = localStorage.getItem('activeOFPId');
+    if (!activeId) return null;
 
-        const db = await getDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofps", "readonly");
-            const store = tx.objectStore("ofps");
-            const request = store.get(Number(activeId));
-            request.onsuccess = () => {
-                const ofp = request.result;
-                if (!ofp) {
-                    console.warn(`Active OFP with id ${activeId} not found in DB`);
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("ofps", "readonly");
+        const store = tx.objectStore("ofps");
+        const request = store.get(Number(activeId));
+        request.onsuccess = () => {
+            const ofp = request.result;
+            if (!ofp) {
+                console.warn(`Active OFP with id ${activeId} not found in DB`);
+            }
+            resolve(ofp || null);
+        };
+        request.onerror = (e) => reject(e);
+    });
+}
+
+async function setActiveOFP(id) {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("ofps", "readwrite");
+        const store = tx.objectStore("ofps");
+
+        const getAllRequest = store.getAll();
+        getAllRequest.onsuccess = () => {
+            const ofps = getAllRequest.result;
+            ofps.forEach(ofp => {
+                const shouldBeActive = (ofp.id === Number(id));
+                if (ofp.isActive !== shouldBeActive) {
+                    ofp.isActive = shouldBeActive;
+                    store.put(ofp);
                 }
-                resolve(ofp || null);
-            };
-            request.onerror = (e) => reject(e);
-        });
-    }
-
-    async function setActiveOFP(id) {
-        const db = await getDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofps", "readwrite");
-            const store = tx.objectStore("ofps");
-            
-            const getAllRequest = store.getAll();
-            getAllRequest.onsuccess = () => {
-                const ofps = getAllRequest.result;
-                ofps.forEach(ofp => {
-                    const shouldBeActive = (ofp.id === Number(id));
-                    if (ofp.isActive !== shouldBeActive) {
-                        ofp.isActive = shouldBeActive;
-                        store.put(ofp);
-                    }
-                });
-                localStorage.setItem('activeOFPId', id);
-                resolve();
-            };
-            getAllRequest.onerror = (e) => reject(e);
-        });
-    }
+            });
+            localStorage.setItem('activeOFPId', id);
+            resolve();
+        };
+        getAllRequest.onerror = (e) => reject(e);
+    });
+}
 
     // Delete OFP by ID
     async function deleteOFPFromDB(id) {
