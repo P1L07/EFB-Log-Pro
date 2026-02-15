@@ -1,7 +1,7 @@
 (function() {
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const RELEASE_NOTES = {
-    "2.0.3": {
+    "2.0.4": {
         title: "Release Notes",
         notes: [
             "✍️ Write or Type ATIS/ATC",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
+const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1786,17 +1786,16 @@ const PERSISTENT_INPUT_IDS = [
             const numericId = Number(id);
             if (isNaN(numericId)) throw new Error('Invalid OFP ID');
 
+            // This will throw if not found
             const ofpToActivate = await getOFPById(numericId);
-            if (!ofpToActivate) throw new Error('OFP not found');
-
             if (ofpToActivate.finalized) {
                 showToast("Cannot activate a finalized OFP", 'error');
                 return;
             }
 
             await setActiveOFP(numericId);
-            const ofp = await getActiveOFPFromDB();
-            if (!ofp || !ofp.data) throw new Error('Failed to load OFP data');
+            const ofp = await getActiveOFPFromDB(); // This gets the active OFP after setting
+            if (!ofp) throw new Error('Failed to load OFP data');
 
             // Clear existing data
             if (typeof clearOFPInputs === 'function') clearOFPInputs();
@@ -3051,16 +3050,23 @@ const PERSISTENT_INPUT_IDS = [
         const db = await getDB();
         const tx = db.transaction("ofps", "readwrite");
         const store = tx.objectStore("ofps");
-        const ofps = await new Promise((res) => {
+        
+        const ofps = await new Promise((resolve, reject) => {
             const req = store.getAll();
-            req.onsuccess = () => res(req.result);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = (e) => reject(e);
         });
+        
         ofps.sort((a, b) => (a.order || 0) - (b.order || 0));
         ofps.forEach((ofp, idx) => {
             ofp.order = idx + 1;
             store.put(ofp);
         });
-        await getCachedOFPs(true);
+        
+        await new Promise((resolve, reject) => {
+            tx.oncomplete = resolve;
+            tx.onerror = (e) => reject(e.target.error);
+        });
     }
 
     // SECTORS TAB - Search function filtering
@@ -3072,55 +3078,64 @@ const PERSISTENT_INPUT_IDS = [
     window.moveOFP = async function(id, direction) {
         if (isReordering) {
             console.warn('Reordering already in progress');
+            showToast('Please wait, reordering in progress', 'info');
             return;
         }
         isReordering = true;
 
         try {
+            const numericId = Number(id);
+            if (isNaN(numericId)) throw new Error('Invalid ID');
+
             const db = await getDB();
             const tx = db.transaction("ofps", "readwrite");
             const store = tx.objectStore("ofps");
 
-            const ofps = await new Promise((resolve, reject) => {
+            // Get all OFPs
+            const allOfps = await new Promise((resolve, reject) => {
                 const req = store.getAll();
                 req.onsuccess = () => resolve(req.result);
                 req.onerror = (e) => reject(e);
             });
 
             // Sort by current order
-            ofps.sort((a, b) => (a.order || 0) - (b.order || 0));
+            allOfps.sort((a, b) => (a.order || 0) - (b.order || 0));
 
-            const index = ofps.findIndex(o => o.id === Number(id));
+            const index = allOfps.findIndex(o => o.id === numericId);
             if (index === -1) {
-                showToast("OFP not found", 'error');
-                return;
+                throw new Error(`OFP with id ${numericId} not found`);
             }
 
             const swapIndex = index + direction;
-            if (swapIndex < 0 || swapIndex >= ofps.length) return;
+            if (swapIndex < 0 || swapIndex >= allOfps.length) return; // no change
 
             // Swap order values
-            const tempOrder = ofps[index].order;
-            ofps[index].order = ofps[swapIndex].order;
-            ofps[swapIndex].order = tempOrder;
+            const tempOrder = allOfps[index].order;
+            allOfps[index].order = allOfps[swapIndex].order;
+            allOfps[swapIndex].order = tempOrder;
 
-            // Save both records and wait for transaction completion
-            store.put(ofps[index]);
-            store.put(ofps[swapIndex]);
+            // Put updated records
+            store.put(allOfps[index]);
+            store.put(allOfps[swapIndex]);
 
+            // Wait for transaction to complete
             await new Promise((resolve, reject) => {
                 tx.oncomplete = resolve;
                 tx.onerror = (e) => reject(e.target.error);
             });
 
-            await renumberOFPOrders(); // renumber after swap
+            // Renumber all orders to ensure consistency
+            await renumberOFPOrders();
+
+            // Refresh cache and table
             await getCachedOFPs(true);
             await renderOFPMangerTable();
+
             showToast("OFP order updated", 'success');
 
         } catch (error) {
             console.error("Error moving OFP:", error);
-            showToast("Failed to update order", 'error');
+            showToast("Failed to update order: " + error.message, 'error');
         } finally {
             isReordering = false;
         }
@@ -3140,7 +3155,7 @@ const PERSISTENT_INPUT_IDS = [
                     resolve(ofp);
                 }
             };
-            request.onerror = (e) => reject(e);
+            request.onerror = (e) => reject(e.target.error);
         });
     }
 
