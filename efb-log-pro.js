@@ -1,7 +1,7 @@
 (function() {
-const APP_VERSION = "2.0.5";
+const APP_VERSION = "2.0.6";
 const RELEASE_NOTES = {
-    "2.0.5": {
+    "2.0.6": {
         title: "Release Notes",
         notes: [
             "✍️ Write or Type ATIS/ATC",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = 'dcfde75f4dbae2d5f2dcf4f14e2525eb7c1197919d7331baebacff08823968e5';
+const EXPECTED_SW_HASH = 'efb2b31ba212f3b46343253801f6e882412ab777e1e70b55062fc5866541a817';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -5621,13 +5621,12 @@ function applyInputMode(mode) {
     // Full reset after sending Journey Log (end of day)
     async function resetAfterJourneyLog() {
         const userConfirmed = await showConfirmDialog(
-        'End of the Day',
-            '<divThis will remove :<br>'+
-            'Flight Log entries<br>'+
-            'Journey Log entries<br>'+
-            'All input data<br></div>',
-            'Continue',
+            'End of the Day',
+            '<div style="text-align:center;">Click Finalize to wipe the Journey log data.<br>' +
+            'Click Modify if you need to make changes.</div>',
+            'Finalize',
             'Modify',
+            'info',
             true
         );
         if (userConfirmed) {
@@ -5881,9 +5880,9 @@ function applyInputMode(mode) {
     async function resetOFPAfterSend() {
         // 1. Popup Confirmation
         const userConfirmed = await showConfirmDialog(
-            'OFP Generated Successfully.',
+            'OFP Generated Successfully',
             '<div style="text-align:center;">Click Finalize to wipe the form for the next flight.<br>' +
-            'Click Modify if you need to make changes and download again.</div>',
+            'Click Modify if you need to make changes.</div>',
             'Finalize',
             'Modify',
             true
@@ -5926,8 +5925,8 @@ function applyInputMode(mode) {
         const nonFinalizedOFPs = allOFPs.filter(ofp => !ofp.finalized);
 
         if (nonFinalizedOFPs.length === 0) {
-            // --- NO NON‑FINALIZED OFPs LEFT → END OF DAY, GO TO JOURNEY LOG ---
-            showToast("Do not forget to  omplete your Journey Log", 'info');
+            // NO NON‑FINALIZED OFPs LEFT → END OF DAY, GO TO JOURNEY LOG
+            showToast("Do not forget to send your Journey Log", 'info');
             
             // Switch to Journey Log tab
             const journeyBtn = document.querySelector('.nav-btn[data-tab="journey"], .nav-btn[onclick*="journey"]');
@@ -5938,13 +5937,10 @@ function applyInputMode(mode) {
                     journeyBtn.click();
                 }
             }
-            
-            // Ensure the upload overlay is hidden (we are in Journey Log tab)
-            setOFPLoadedState(false);
             return;
         }
 
-        // --- THERE ARE NON‑FINALIZED OFPs → PROCEED WITH AUTO‑ACTIVATION (if enabled) ---
+        // THERE ARE NON‑FINALIZED OFPs → PROCEED WITH AUTO‑ACTIVATION (if enabled)
         const currentActiveId = localStorage.getItem('activeOFPId');
         let nextOFP = null;
 
@@ -5967,7 +5963,9 @@ function applyInputMode(mode) {
         } else {
             // No OFP to activate – show upload overlay
             setOFPLoadedState(false);
+            localStorage.removeItem('activeOFPId'); 
         }
+        updateEmptyStates()
     }
 
     window.downloadLoggedOFP = async function(id) {
@@ -7574,7 +7572,7 @@ async function loadOFPUserData(ofpId) {
         // Message – apply centering if requested
         if (message) {
             const msgStyle = centered ? 'text-align: center;' : '';
-            contentHTML += `<p style="color: var(--text); margin-bottom: 25px; line-height: 1.5; ${msgStyle}">${message}</p>`;
+            contentHTML += `<div style="color: var(--text); margin-bottom: 25px; line-height: 1.5; ${msgStyle}">${message}</div>`;
         }
 
         // List items – apply centering if requested
@@ -7833,18 +7831,5 @@ const debouncedUpdateCruiseLevel = debounce(updateCruiseLevel, 300);
     window.addEventListener('pagehide', () => {
         saveState();
     });
-
-    const container = document.getElementById('download-progress-container');
-if (container) {
-    const observer = new MutationObserver(mutations => {
-        mutations.forEach(m => {
-            if (m.attributeName === 'style') {
-                console.log('Container style changed:', container.style.display);
-                console.trace('Stack trace:');
-            }
-        });
-    });
-    observer.observe(container, { attributes: true });
-}
 
 })();
