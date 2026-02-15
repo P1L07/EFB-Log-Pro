@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
+const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -3112,70 +3112,39 @@ const PERSISTENT_INPUT_IDS = [
             if (isNaN(numericId)) throw new Error('Invalid ID');
 
             const db = await getDB();
+            const tx = db.transaction("ofp_orders", "readwrite");
+            const store = tx.objectStore("ofp_orders");
 
-            // ---- Step 1: read only id and order (no blob) ----
-            const tx1 = db.transaction("ofps", "readonly");
-            const store1 = tx1.objectStore("ofps");
-            const ofpsLight = [];
-            await new Promise((resolve, reject) => {
-                const cursorReq = store1.openCursor();
-                cursorReq.onsuccess = (e) => {
-                    const cursor = e.target.result;
-                    if (cursor) {
-                        ofpsLight.push({
-                            id: cursor.value.id,
-                            order: cursor.value.order || 0
-                        });
-                        cursor.continue();
-                    } else {
-                        resolve();
-                    }
-                };
-                cursorReq.onerror = (e) => reject(e);
+            // Get all orders
+            const allOrders = await new Promise((resolve, reject) => {
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = (e) => reject(e);
             });
 
-            ofpsLight.sort((a, b) => a.order - b.order);
+            allOrders.sort((a, b) => a.order - b.order);
 
-            const index = ofpsLight.findIndex(o => o.id === numericId);
-            if (index === -1) throw new Error(`OFP with id ${numericId} not found`);
+            const index = allOrders.findIndex(o => o.id === numericId);
+            if (index === -1) throw new Error(`Order for OFP ${numericId} not found`);
 
             const swapIndex = index + direction;
-            if (swapIndex < 0 || swapIndex >= ofpsLight.length) {
-                showToast("Cannot move further", 'info');
-                return;
-            }
-
-            const id1 = ofpsLight[index].id;
-            const id2 = ofpsLight[swapIndex].id;
-
-            // ---- Step 2: fetch only the two full records ----
-            const tx2 = db.transaction("ofps", "readwrite");
-            const store2 = tx2.objectStore("ofps");
-
-            const ofp1 = await new Promise((res, rej) => {
-                const req = store2.get(id1);
-                req.onsuccess = () => res(req.result);
-                req.onerror = (e) => rej(e);
-            });
-            const ofp2 = await new Promise((res, rej) => {
-                const req = store2.get(id2);
-                req.onsuccess = () => res(req.result);
-                req.onerror = (e) => rej(e);
-            });
+            if (swapIndex < 0 || swapIndex >= allOrders.length) return; // no move
 
             // Swap orders
-            [ofp1.order, ofp2.order] = [ofp2.order, ofp1.order];
+            const temp = allOrders[index].order;
+            allOrders[index].order = allOrders[swapIndex].order;
+            allOrders[swapIndex].order = temp;
 
-            // Save back
-            store2.put(ofp1);
-            store2.put(ofp2);
+            // Save both updated orders
+            store.put(allOrders[index]);
+            store.put(allOrders[swapIndex]);
 
             await new Promise((resolve, reject) => {
-                tx2.oncomplete = resolve;
-                tx2.onerror = (e) => reject(e.target.error);
+                tx.oncomplete = resolve;
+                tx.onerror = (e) => reject(e.target.error);
             });
 
-            // ---- Step 3: refresh cache and UI ----
+            // Update cache (now metadata cache includes order from orders store)
             await getCachedOFPs(true);
             await renderOFPMangerTable();
 
@@ -3188,6 +3157,29 @@ const PERSISTENT_INPUT_IDS = [
             isReordering = false;
         }
     };
+
+    async function renumberOFPOrders() {
+        const db = await getDB();
+        const tx = db.transaction("ofp_orders", "readwrite");
+        const store = tx.objectStore("ofp_orders");
+        
+        const allOrders = await new Promise((res, rej) => {
+            const req = store.getAll();
+            req.onsuccess = () => res(req.result);
+            req.onerror = (e) => rej(e);
+        });
+        
+        allOrders.sort((a, b) => a.order - b.order);
+        allOrders.forEach((ord, idx) => {
+            ord.order = idx + 1;
+            store.put(ord);
+        });
+        
+        await new Promise((res, rej) => {
+            tx.oncomplete = res;
+            tx.onerror = (e) => rej(e);
+        });
+    }
 
     async function getOFPById(id) {
         const db = await getDB();
@@ -3204,6 +3196,18 @@ const PERSISTENT_INPUT_IDS = [
                 }
             };
             request.onerror = (e) => reject(e.target.error);
+        });
+    }
+
+    async function getAllOFPOrders() {
+        const db = await getDB();
+        if (!db.objectStoreNames.contains('ofp_orders')) return [];
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofp_orders", "readonly");
+            const store = tx.objectStore("ofp_orders");
+            const request = store.getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = (e) => reject(e);
         });
     }
 
@@ -6225,6 +6229,23 @@ function applyInputMode(mode) {
                             });
                         };
                     }
+                    if (oldVersion < 8) {
+                        // Create orders store
+                        if (!db.objectStoreNames.contains("ofp_orders")) {
+                            const orderStore = db.createObjectStore("ofp_orders", { keyPath: "id" });
+                            // Copy existing orders from ofps store
+                            const tx = e.target.transaction;
+                            const ofpsStore = tx.objectStore("ofps");
+                            const ordersStore = tx.objectStore("ofp_orders");
+                            const getAllReq = ofpsStore.getAll();
+                            getAllReq.onsuccess = () => {
+                                const ofps = getAllReq.result;
+                                ofps.forEach(ofp => {
+                                    ordersStore.put({ id: ofp.id, order: ofp.order || 0 });
+                                });
+                            };
+                        }
+                    }
                 };
 
                 request.onsuccess = e => resolve(e.target.result);
@@ -6595,19 +6616,34 @@ function applyInputMode(mode) {
     async function getAllOFPMetadata() {
         const db = await getDB();
         if (!db.objectStoreNames.contains('ofps')) return [];
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofps", "readonly");
-            const store = tx.objectStore("ofps");
-            const request = store.getAll();
-            request.onsuccess = () => {
-                const ofps = request.result;
-                // Remove the data blob from each record to save memory
-                const metadata = ofps.map(({ data, ...rest }) => rest);
-                metadata.sort((a, b) => (a.order || 0) - (b.order || 0));
-                resolve(metadata);
-            };
-            request.onerror = (e) => reject(e);
-        });
+        const tx = db.transaction(["ofps", "ofp_orders"], "readonly");
+        const ofpsStore = tx.objectStore("ofps");
+        const ordersStore = tx.objectStore("ofp_orders");
+        
+        const [ofps, orders] = await Promise.all([
+            new Promise((res, rej) => {
+                const req = ofpsStore.getAll();
+                req.onsuccess = () => res(req.result);
+                req.onerror = (e) => rej(e);
+            }),
+            new Promise((res, rej) => {
+                const req = ordersStore.getAll();
+                req.onsuccess = () => res(req.result);
+                req.onerror = (e) => rej(e);
+            })
+        ]);
+        
+        // Build order map
+        const orderMap = {};
+        orders.forEach(o => { orderMap[o.id] = o.order; });
+        
+        // Merge order into each OFP (remove data blob)
+        const metadata = ofps.map(({ data, ...rest }) => ({
+            ...rest,
+            order: orderMap[rest.id] || 0
+        }));
+        metadata.sort((a, b) => (a.order || 0) - (b.order || 0));
+        return metadata;
     }
 
 // ==========================================
