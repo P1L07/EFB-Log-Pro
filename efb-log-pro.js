@@ -1,7 +1,7 @@
 (function() {
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.5";
 const RELEASE_NOTES = {
-    "2.0.4": {
+    "2.0.5": {
         title: "Release Notes",
         notes: [
             "✍️ Write or Type ATIS/ATC",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
+const EXPECTED_SW_HASH = 'dcfde75f4dbae2d5f2dcf4f14e2525eb7c1197919d7331baebacff08823968e5';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1122,14 +1122,43 @@ const PERSISTENT_INPUT_IDS = [
                 window.ofpPdfBytes = await activeOFP.data.arrayBuffer();
                 window.originalFileName = activeOFP.fileName || "Logged_OFP.pdf";
 
-                // Parse the OFP
+                // Parse the OFP (populates waypoints, alternateWaypoints, etc.)
                 await runAnalysis(activeOFP.data, true);
 
-                // Restore all saved OFP data (waypoints + persistent inputs)
-                await restoreOFPData(activeOFP);
+                // Load user data from separate store
+                const userData = await loadOFPUserData(activeOFP.id);
+                if (userData) {
+                    // Restore waypoint inputs
+                    if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
+                        userData.userWaypoints.forEach((data, i) => {
+                            if (i < waypoints.length) {
+                                if (data.ato) safeSet(`o-a-${i}`, data.ato);
+                                if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                                if (data.notes) safeSet(`o-n-${i}`, data.notes);
+                                if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+                            }
+                        });
+                        runFlightLogCalculations();
+                        syncLastWaypoint();
+                    }
 
-                // Restore other non‑OFP state (dailyLegs, dutyStartTime, inputs) from localStorage
-                await loadState(); 
+                    // Restore persistent text inputs (excluding drawings)
+                    if (userData.userInputs && typeof userData.userInputs === 'object') {
+                        Object.keys(userData.userInputs).forEach(id => {
+                            const val = userData.userInputs[id];
+                            // Skip drawings – they will be handled by restorePadDrawing
+                            if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') return;
+                            if (val !== undefined && val !== null) {
+                                safeSet(id, val);
+                            }
+                        });
+                    }
+
+                }
+
+                // Restore other non‑OFP state (dailyLegs, dutyStartTime, etc.) from localStorage
+                await loadState();
+
             } else {
                 // Fallback to old single‑OFP store and migrate
                 const savedPdfBlob = await loadPdfFromDB();
@@ -1186,10 +1215,16 @@ const PERSISTENT_INPUT_IDS = [
             console.warn('Order cleanup failed', e);
         }
 
+        // Check for Active OFP
         const allOFPs = await getCachedOFPs();
         if (allOFPs.length > 0 && !localStorage.getItem('activeOFPId')) {
-            console.log("No active OFP set – activating the newest OFP.");
-            await activateOFP(allOFPs[0].id);
+            console.log("No active OFP set – switching to OFP Manager tab.");
+            setOFPLoadedState(false);  // Ensure no OFP is loaded
+            // Switch to Sectors tab
+            const sectorsBtn = document.querySelector('.nav-btn[data-tab="sectors"], .nav-btn[onclick*="sectors"]');
+            if (sectorsBtn) {
+                sectorsBtn.click();  // This will call the existing tab switching logic
+            }
         }
 
         // Add event listener for file input change
@@ -1353,7 +1388,7 @@ const PERSISTENT_INPUT_IDS = [
 
             try {
                 // Call the existing runAnalysis with the file
-                await runAnalysis(file, false); 
+                await runAnalysis(file, false, { isBatch: true });
                 
                 // Update log on success
                 logEntry.innerHTML = `✅ ${fileInfo} – success`;
@@ -1382,6 +1417,21 @@ const PERSISTENT_INPUT_IDS = [
         closeBtn.onclick = () => {
             modal.style.display = 'none';
         };
+
+        // After the loop
+        await getCachedOFPs(true);
+        const sectorsBtn = document.querySelector('.nav-btn[data-tab="sectors"], .nav-btn[onclick*="sectors"]');
+        if (sectorsBtn) {
+            if (typeof window.showTab === 'function') {
+                window.showTab('sectors', sectorsBtn);
+            } else {
+                sectorsBtn.click();
+            }
+        }
+
+        updateUploadButtonVisibility();
+        await updateEmptyStates();
+
     }
 
     // Shared manual upload preparation
@@ -1399,8 +1449,8 @@ const PERSISTENT_INPUT_IDS = [
     }
 
     // Handle replacement of an existing OFP
-    async function handleReplacement(existingOFP, blob, metadata, previouslyActiveId) {
-        const wasActive = existingOFP.isActive;
+    async function handleReplacement(existingOFP, blob, metadata, previouslyActiveId, isBatch) {
+        const wasActive = existingOFP.isActive; // This field is no longer used but may exist in old records
         const originalOrder = existingOFP.order;
         const replacedId = existingOFP.id;
 
@@ -1417,35 +1467,44 @@ const PERSISTENT_INPUT_IDS = [
             requestNumber: metadata.requestNumber,
             finalized: false,
             loggedPdfData: null,
-            isActive: wasActive,
             order: originalOrder
         };
 
-        await updateOFP(replacedId, updatedData);
-        await getCachedOFPs(true);
-
-        if (!wasActive) {
-            if (typeof clearOFPInputs === 'function') clearOFPInputs();
-
-            if (previouslyActiveId && previouslyActiveId !== String(replacedId)) {
-                await activateOFP(previouslyActiveId, false);
-                showToast(`OFP updated: ${metadata.flight} (inactive)`, 'success');
+        if (isBatch) {
+            // Batch mode: never activate the replacement, and if it was active, clear active ID.
+            updatedData.isActive = false;
+            await updateOFP(replacedId, updatedData);
+            if (wasActive) {
+                localStorage.removeItem('activeOFPId');
+            }
+            showToast(`OFP updated: ${metadata.flight} (inactive)`, 'success');
+            setOFPLoadedState(false);
+        } else {
+            // Normal (single) upload: preserve active state
+            updatedData.isActive = wasActive;
+            await updateOFP(replacedId, updatedData);
+            if (wasActive) {
+                setOFPLoadedState(true);
+                showToast(`OFP updated: ${metadata.flight} (active)`, 'success');
             } else {
                 setOFPLoadedState(false);
-                showToast(`OFP updated: ${metadata.flight} (no active OFP)`, 'success');
+                showToast(`OFP updated: ${metadata.flight} (inactive)`, 'success');
             }
-        } else {
-            setOFPLoadedState(true);
-            showToast(`OFP updated: ${metadata.flight} (active)`, 'success');
         }
 
-        await afterManualUpload();
+        await getCachedOFPs(true);
+
+        // After a single replacement, if the replaced OFP was not active, restore the previously active one.
+        if (!wasActive && !isBatch && previouslyActiveId && previouslyActiveId !== String(replacedId)) {
+            await activateOFP(previouslyActiveId, false);
+        }
     }
 
     // Handle brand‑new OFP
-    async function handleNewOFP(blob, metadata) {
+    async function handleNewOFP(blob, metadata, isBatch) {
         const currentActiveId = localStorage.getItem('activeOFPId');
-        const shouldActivate = !currentActiveId;
+        // In batch mode, never auto‑activate, even if no active OFP exists.
+        const shouldActivate = !currentActiveId && !isBatch;
 
         const ofpId = await saveOFPToDB(blob, metadata, shouldActivate);
         await getCachedOFPs(true);
@@ -1462,14 +1521,13 @@ const PERSISTENT_INPUT_IDS = [
                 showToast(`OFP saved: ${metadata.flight}`, 'success');
             }
         }
-
-        await afterManualUpload();
     }
 
     // Analyze OFP
     async function runAnalysis(fileOrEvent, isAutoLoad = false) {
+        // Determine if this is a batch upload (multiple files) by checking if the progress modal is visible.
         const isBatchUpload = !isAutoLoad && 
-                            document.getElementById('upload-progress-modal')?.style.display === 'block';
+            document.getElementById('upload-progress-modal')?.style.display === 'block';
         let blob = null;
 
         // 1. Determine source
@@ -1502,7 +1560,7 @@ const PERSISTENT_INPUT_IDS = [
         window.originalFileName = blob.name || "Logged_OFP.pdf";
         renderPDFPreview(window.ofpPdfBytes).catch(console.error);
 
-        // 3. Manual upload: clear UI, show leg form
+        // 3. Manual upload: clear UI, show leg form (only for single manual uploads, not batch)
         if (!isAutoLoad && !isBatchUpload) {
             await prepareForManualUpload();
         }
@@ -1537,17 +1595,19 @@ const PERSISTENT_INPUT_IDS = [
 
             try {
                 if (existingOFP) {
-                    await handleReplacement(existingOFP, blob, metadata, previouslyActiveId);
+                    // Pass isBatchUpload to the handler
+                    await handleReplacement(existingOFP, blob, metadata, previouslyActiveId, isBatchUpload);
                 } else {
-                    await handleNewOFP(blob, metadata);
+                    // Pass isBatchUpload to the handler
+                    await handleNewOFP(blob, metadata, isBatchUpload);
                 }
             } catch (error) {
                 // Emergency fallback – something went wrong in the handlers
                 console.error("Unexpected error during save:", error);
                 const emergencyResult = await emergencySaveOFP(blob, metadata, existingOFP || null);
                 let toastMessage = existingOFP
-                    ? "OFP replaced (emergency mode)"
-                    : "OFP saved (emergency mode)";
+                    ? "OFP replaced (emergency mode"
+                    : "OFP saved (emergency mode";
                 if (!emergencyResult.pdfSaved) toastMessage += " – PDF not saved";
                 if (!emergencyResult.ofpsRecordCreated) toastMessage += " – record not created";
                 toastMessage += ")";
@@ -1556,9 +1616,9 @@ const PERSISTENT_INPUT_IDS = [
             }
         }
 
-        // After manual upload, force a full redraw of flight log tables
-        if (!isAutoLoad) {
-            renderFlightLogTables(true); 
+        // After manual upload, force a full redraw of flight log tables (only for non‑batch)
+        if (!isAutoLoad && !isBatchUpload) {
+            renderFlightLogTables(true);
         }
 
         // 6. Log success event
@@ -1573,9 +1633,8 @@ const PERSISTENT_INPUT_IDS = [
             console.error('Failed to log upload:', logError);
         }
 
-        // 7. Handle state
-        if (isAutoLoad) {
-        } else {
+        // 7. Handle state (auto‑save)
+        if (!isAutoLoad) {
             saveState();
         }
     }
@@ -1813,156 +1872,149 @@ const PERSISTENT_INPUT_IDS = [
 // ==========================================
 
     // Activate OFP
-window.activateOFP = async function(id, switchTab = true) {
-    if (isActivating) {
-        console.warn('Activation already in progress, please wait');
-        showToast('Activation in progress, please wait...', 'info');
-        return;
-    }
-    isActivating = true;
-
-    try {
-        const numericId = Number(id);
-        if (isNaN(numericId)) throw new Error('Invalid OFP ID');
-        alert(`[activateOFP] Starting activation for ID: ${numericId}`);
-
-        // Refresh cache
-        await getCachedOFPs(true);
-
-        // Retrieve the OFP with retries
-        let ofpToActivate = null;
-        const maxRetries = 3;
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            alert(`[activateOFP] Attempt ${attempt} to fetch OFP by ID ${numericId}`);
-            try {
-                ofpToActivate = await getOFPById(numericId);
-                alert(`[activateOFP] OFP found on attempt ${attempt}`);
-                break;
-            } catch (err) {
-                console.warn(`[activateOFP] Attempt ${attempt} failed: ${err.message}`);
-                if (attempt === maxRetries) {
-                    const allOFPs = await getCachedOFPs();
-                    const found = allOFPs.find(o => o.id === numericId);
-                    if (found) {
-                        alert('[activateOFP] OFP found in cache, proceeding with metadata');
-                        ofpToActivate = found;
-                        break;
-                    } else {
-                        throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
-                    }
-                }
-                await new Promise(resolve => setTimeout(resolve, 200));
-            }
-        }
-
-        if (ofpToActivate.finalized) {
-            showToast("Cannot activate a finalized OFP", 'error');
+    window.activateOFP = async function(id, switchTab = true) {
+        if (isActivating) {
+            showToast('Activation in progress, please wait...', 'info');
             return;
         }
+        isActivating = true;
 
-        // Set active ID in localStorage only
-        localStorage.setItem('activeOFPId', numericId);
-        alert(`[activateOFP] Active ID set to ${numericId}`);
+        try {
+            const numericId = Number(id);
+            if (isNaN(numericId)) throw new Error('Invalid OFP ID');
 
-        // Retrieve the full active OFP with retries
-        let ofp = null;
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            alert(`[activateOFP] Attempt ${attempt} to get active OFP from DB`);
-            ofp = await getOFPById(numericId);
-            if (ofp && ofp.data) {
-                alert(`[activateOFP] Active OFP retrieved on attempt ${attempt}`);
-                break;
-            }
-            if (attempt === maxRetries) {
-                throw new Error('Failed to load OFP data after multiple attempts');
-            }
-            alert(`[activateOFP] Active OFP not ready, retry ${attempt} in 200ms...`);
-            await new Promise(resolve => setTimeout(resolve, 200));
-        }
+            // Refresh cache
+            await getCachedOFPs(true);
 
-        // Clear UI
-        if (typeof clearOFPInputs === 'function') clearOFPInputs();
-
-        setOFPLoadedState(true);
-        window.ofpPdfBytes = await ofp.data.arrayBuffer();
-        window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
-
-        // Run analysis (parses PDF and populates waypoints etc.)
-        await runAnalysis(ofp.data, true);
-
-        // Load user data from new store
-        const userData = await loadOFPUserData(numericId);
-        if (userData) {
-            // Restore waypoints
-            if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
-                userData.userWaypoints.forEach((data, i) => {
-                    if (i < waypoints.length) {
-                        if (data.ato) safeSet(`o-a-${i}`, data.ato);
-                        if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                        if (data.notes) safeSet(`o-n-${i}`, data.notes);
-                        if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+            // Retrieve the OFP with retries
+            let ofpToActivate = null;
+            const maxRetries = 3;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    ofpToActivate = await getOFPById(numericId);
+                    break;
+                } catch (err) {
+                    console.warn(`[activateOFP] Attempt ${attempt} failed: ${err.message}`);
+                    if (attempt === maxRetries) {
+                        const allOFPs = await getCachedOFPs();
+                        const found = allOFPs.find(o => o.id === numericId);
+                        if (found) {
+                            ofpToActivate = found;
+                            break;
+                        } else {
+                            throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
+                        }
                     }
-                });
-                runFlightLogCalculations();
-                syncLastWaypoint();
-            }
-            // Restore inputs and drawings
-            if (userData.userInputs && typeof userData.userInputs === 'object') {
-                Object.keys(userData.userInputs).forEach(id => {
-                    const val = userData.userInputs[id];
-                    if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') {
-                        // Handle later after pads are ready
-                    } else {
-                        safeSet(id, val);
-                    }
-                });
-                // Restore drawings after a short delay (pads may not be ready)
-                setTimeout(() => {
-                    if (userData.userInputs.signature && pads.main.pad) {
-                        pads.main.pad.fromDataURL(userData.userInputs.signature);
-                    }
-                    if (userData.userInputs['front-atis-drawing'] && pads.atis.pad) {
-                        pads.atis.pad.fromDataURL(userData.userInputs['front-atis-drawing']);
-                    }
-                    if (userData.userInputs['front-atc-drawing'] && pads.atc.pad) {
-                        pads.atc.pad.fromDataURL(userData.userInputs['front-atc-drawing']);
-                    }
-                }, 200);
-            }
-        }
-
-        // --- MIGRATION: If the OFP still has old userWaypoints/userInputs in the main record, move them to new store and remove from main ---
-        if (ofp.userWaypoints || ofp.userInputs) {
-            alert('[activateOFP] Migrating old user data to new store');
-            const oldWaypoints = ofp.userWaypoints || [];
-            const oldInputs = ofp.userInputs || {};
-            await saveOFPUserData(numericId, oldWaypoints, oldInputs);
-            // Remove from main record
-            await updateOFP(numericId, { userWaypoints: undefined, userInputs: undefined });
-        }
-
-        await renderOFPMangerTable();
-
-        if (switchTab) {
-            const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
-            if (summaryBtn) {
-                if (typeof window.showTab === 'function') {
-                    window.showTab('summary', summaryBtn);
-                } else {
-                    summaryBtn.click();
+                    await new Promise(resolve => setTimeout(resolve, 200));
                 }
             }
+
+            if (ofpToActivate.finalized) {
+                showToast("Cannot activate a finalized OFP", 'error');
+                return;
+            }
+
+            // Set active ID in localStorage only
+            localStorage.setItem('activeOFPId', numericId);
+
+            // Retrieve the full active OFP with retries
+            let ofp = null;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                ofp = await getOFPById(numericId);
+                if (ofp && ofp.data) {
+                    break;
+                }
+                if (attempt === maxRetries) {
+                    throw new Error('Failed to load OFP data after multiple attempts');
+                }
+                alert(`Active OFP not ready, retry ${attempt} in 200ms...`);
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+
+            // Clear UI
+            if (typeof clearOFPInputs === 'function') clearOFPInputs();
+
+            setOFPLoadedState(true);
+            window.ofpPdfBytes = await ofp.data.arrayBuffer();
+            window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
+
+            // Run analysis (parses PDF and populates waypoints etc.)
+            await runAnalysis(ofp.data, true);
+
+            // Load user data from new store
+            const userData = await loadOFPUserData(numericId);
+            if (userData) {
+                // Restore waypoints
+                if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
+                    userData.userWaypoints.forEach((data, i) => {
+                        if (i < waypoints.length) {
+                            if (data.ato) safeSet(`o-a-${i}`, data.ato);
+                            if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                            if (data.notes) safeSet(`o-n-${i}`, data.notes);
+                            if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+                        }
+                    });
+                    runFlightLogCalculations();
+                    syncLastWaypoint();
+                }
+                // Restore inputs and drawings
+                if (userData.userInputs && typeof userData.userInputs === 'object') {
+                    Object.keys(userData.userInputs).forEach(id => {
+                        const val = userData.userInputs[id];
+                        if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') {
+                            // Handle later after pads are ready
+                        } else {
+                            safeSet(id, val);
+                        }
+                    });
+                    // Restore drawings after a short delay (pads may not be ready)
+                    setTimeout(() => {
+                        if (userData.userInputs.signature && pads.main.pad) {
+                            pads.main.pad.fromDataURL(userData.userInputs.signature);
+                        }
+                        if (userData.userInputs['front-atis-drawing'] && pads.atis.pad) {
+                            pads.atis.pad.fromDataURL(userData.userInputs['front-atis-drawing']);
+                        }
+                        if (userData.userInputs['front-atc-drawing'] && pads.atc.pad) {
+                            pads.atc.pad.fromDataURL(userData.userInputs['front-atc-drawing']);
+                        }
+                    }, 200);
+                }
+            }
+
+            // --- MIGRATION: If the OFP still has old userWaypoints/userInputs in the main record, move them to new store and remove from main ---
+            if (ofp.userWaypoints || ofp.userInputs) {
+                const oldWaypoints = ofp.userWaypoints || [];
+                const oldInputs = ofp.userInputs || {};
+                await saveOFPUserData(numericId, oldWaypoints, oldInputs);
+                // Remove from main record
+                await updateOFP(numericId, { userWaypoints: undefined, userInputs: undefined });
+            }
+
+            await renderOFPMangerTable();
+
+            if (switchTab) {
+                const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
+                if (summaryBtn) {
+                    if (typeof window.showTab === 'function') {
+                        window.showTab('summary', summaryBtn);
+                    } else {
+                        summaryBtn.click();
+                    }
+                }
+            }
+
+            showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
+            updateUploadButtonVisibility();
+            await updateEmptyStates();
+
+        } catch (error) {
+            showToast(`Failed to activate OFP: ${error.message}`, 'error');
+        } finally {
+            isActivating = false;
         }
+    };
 
-        showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
-
-    } catch (error) {
-        alert("[activateOFP] Error activating OFP:"+ error);
-        showToast(`Failed to activate OFP: ${error.message}`, 'error');
-    } finally {
-        isActivating = false;
-    }
-};
     // Delete OFP
     window.deleteOFP = async function(id) {
         const confirmed = await showConfirmDialog(
@@ -2000,6 +2052,7 @@ window.activateOFP = async function(id, switchTab = true) {
             await renumberOFPOrders();
             await renderOFPMangerTable();
             showToast("OFP deleted", 'success');
+            updateUploadButtonVisibility();
         } catch (error) {
             console.error("Error deleting OFP:", error);
             showToast("Failed to delete OFP", 'error');
@@ -2400,6 +2453,17 @@ window.activateOFP = async function(id, switchTab = true) {
             });
         }
     }
+
+    window.goToSectorsAndActivate = function() {
+        const sectorsBtn = document.querySelector('.nav-btn[data-tab="sectors"], .nav-btn[onclick*="sectors"]');
+        if (sectorsBtn) {
+            if (typeof window.showTab === 'function') {
+                window.showTab('sectors', sectorsBtn);
+            } else {
+                sectorsBtn.click();
+            }
+        }
+    };
 
 // ==========================================
 // 5. FLIGHT LOG CALCULATION LOGIC
@@ -3158,7 +3222,6 @@ window.activateOFP = async function(id, switchTab = true) {
                 `;
             }).join('');
         } catch (error) {
-            alert('Error rendering OFP Manager table:', error);
             const tbody = document.getElementById('ofp-manager-tbody');
             if (tbody) {
                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 30px; color: var(--error);">
@@ -3342,23 +3405,35 @@ window.activateOFP = async function(id, switchTab = true) {
         });
     }
 
-async function getOFPById(id) {
-    const db = await getDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction("ofps", "readonly");
-        const store = tx.objectStore("ofps");
-        const request = store.get(Number(id));
-        request.onsuccess = () => {
-            const ofp = request.result;
-            if (!ofp) {
-                reject(new Error(`OFP with id ${id} not found`));
-            } else {
-                resolve(ofp);
-            }
-        };
-        request.onerror = (e) => reject(e.target.error);
-    });
-}
+    async function getOFPCount() {
+        const db = await getDB();
+        if (!db.objectStoreNames.contains('ofps')) return 0;
+        const tx = db.transaction('ofps', 'readonly');
+        const store = tx.objectStore('ofps');
+        return new Promise((resolve, reject) => {
+            const req = store.count();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+    }
+
+    async function getOFPById(id) {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction("ofps", "readonly");
+            const store = tx.objectStore("ofps");
+            const request = store.get(Number(id));
+            request.onsuccess = () => {
+                const ofp = request.result;
+                if (!ofp) {
+                    reject(new Error(`OFP with id ${id} not found`));
+                } else {
+                    resolve(ofp);
+                }
+            };
+            request.onerror = (e) => reject(e.target.error);
+        });
+    }
     async function getAllOFPOrders() {
         const db = await getDB();
         if (!db.objectStoreNames.contains('ofp_orders')) return [];
@@ -3411,11 +3486,10 @@ async function getOFPById(id) {
         // Confirm tab – restore signature from persistent storage
         if (id === 'confirm') {
             validateOFPInputs();
-            // Ensure canvas is visible and then restore
             setTimeout(() => {
                 resizePad('main');
-                // Restore from IndexedDB/backup, not from savedSignatureData
                 restorePadDrawing('main', 'signature');
+                updateEmptyStates(); 
             }, 50);
         }
 
@@ -3458,50 +3532,131 @@ async function getOFPById(id) {
     }
 
     // Update empty states in specific tabs
-    function updateEmptyStates() {
+    async function updateEmptyStates() {
         const activeSection = document.querySelector('.tool-section.active');
-        const activeTabId = activeSection ? activeSection.id.replace('section-', '') : '';
+        if (!activeSection) return;
+
+        const activeTabId = activeSection.id.replace('section-', '');
+        const hasActiveOFP = !!localStorage.getItem('activeOFPId');
         
-        // Show empty state in Paper Flight Plan tab when no OFP
-        if (activeTabId === 'paper' && !isOFPLoaded) {
-            const pdfContainer = document.getElementById('pdf-render-container');
-            const pdfFallback = document.getElementById('pdf-fallback');
-            if (pdfContainer) pdfContainer.style.display = 'none';
-            if (pdfFallback) {
-                // Update the fallback to show upload button
-                pdfFallback.innerHTML = `
-                    <div id="empty-state-upload" class="empty-state-upload">
-                        <div style="font-size: 48px; color: #ccc;">📄</div>
-                        <h3 style="color: #ccc;">No OFP Uploaded</h3>
-                        <p style="color: #ccc; text-align: center; max-width: 300px; margin-bottom: 20px;">
-                            Upload your Operational Flight Plan to view it here
-                        </p>
-                        <button class="upload-center-btn" onclick="document.getElementById('ofp-file-in').click()">
-                            📁
-                            <span>Upload</span>
-                        </button>
-                    </div>
-                `;
-                pdfFallback.style.display = 'flex';
-            }
+        let hasAnyOFP = false;
+        try {
+            const count = await getOFPCount();
+            hasAnyOFP = count > 0;
+        } catch (e) {
+            console.warn('Failed to get OFP count', e);
+        }
+
+        const showEmpty = hasAnyOFP && !hasActiveOFP && !['sectors', 'journey', 'settings'].includes(activeTabId);
+
+        // Ensure the activeSection has relative positioning and takes full height
+        if (window.getComputedStyle(activeSection).position === 'static') {
+            activeSection.style.position = 'relative';
+        }
+        // Make sure the section has a defined height (if not, use min-height)
+        if (activeSection.style.height === '' && activeSection.style.minHeight === '') {
+            activeSection.style.minHeight = 'calc(100vh - 60px)'; // adjust based on your layout
+        }
+
+        // Find or create the empty state container
+        let emptyContainer = activeSection.querySelector('.tab-empty-state-container');
+        if (!emptyContainer) {
+            emptyContainer = document.createElement('div');
+            emptyContainer.className = 'tab-empty-state-container';
+            emptyContainer.style.cssText = `
+                display: none;
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: var(--background);
+                z-index: 10;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-direction: column;
+                text-align: center;
+                padding: 20px;
+                box-sizing: border-box;
+            `;
+            emptyContainer.innerHTML = `
+                <div style="
+                    max-width: 500px;
+                    width: 100%;
+                    background: var(--panel);
+                    border-radius: 20px;
+                    padding: 40px 30px;
+                    box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+                    border: 1px solid var(--border);
+                ">
+                    <span style="font-size: 80px; display: block; margin-bottom: 20px; line-height: 1;">📋</span>
+                    <h2 style="color: var(--text); margin: 0 0 10px; font-size: 28px;">No Active OFP</h2>
+                    <p style="color: var(--dim); margin: 0 0 30px; font-size: 16px; line-height: 1.6;">
+                        You have stored OFPs but none are currently active.<br>
+                        Please activate one from the OFP Manager.
+                    </p>
+                    <button onclick="goToSectorsAndActivate()" style="
+                        background: var(--accent);
+                        color: white;
+                        border: none;
+                        padding: 15px 40px;
+                        border-radius: 50px;
+                        font-weight: 600;
+                        font-size: 18px;
+                        cursor: pointer;
+                        box-shadow: 0 8px 20px rgba(0,132,255,0.4);
+                        transition: transform 0.2s, box-shadow 0.2s;
+                    " onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 12px 28px rgba(0,132,255,0.6)';" 
+                    onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 8px 20px rgba(0,132,255,0.4)';">
+                        Go to OFP Manager
+                    </button>
+                </div>
+            `;
+            activeSection.appendChild(emptyContainer);
+        }
+
+        // Hide/show normal content and overlay
+        const normalChildren = Array.from(activeSection.children).filter(
+            child => !child.classList.contains('tab-empty-state-container')
+        );
+
+        if (showEmpty) {
+            normalChildren.forEach(child => child.style.display = 'none');
+            emptyContainer.style.display = 'flex';
+        } else {
+            normalChildren.forEach(child => child.style.display = '');
+            emptyContainer.style.display = 'none';
         }
     }
 
     // Update upload button visibility
-    function updateUploadButtonVisibility() {
+    async function updateUploadButtonVisibility() {
         const overlay = document.getElementById('upload-overlay');
         const activeSection = document.querySelector('.tool-section.active');
         const activeTabId = activeSection ? activeSection.id.replace('section-', '') : '';
         
+        // Check if there are any OFPs in storage
+        let hasAnyOFP = false;
+        try {
+            const count = await getOFPCount();
+            hasAnyOFP = count > 0;
+        } catch (e) {
+            console.warn('Failed to get OFP count', e);
+        }
+
         // Show overlay only when:
-        // 1. No OFP is loaded and not on Journey log, Sectors or Settings tab
-        if (!isOFPLoaded && activeTabId !== 'journey' && activeTabId !== 'sectors' && activeTabId !== 'settings') {
-            if (overlay) overlay.classList.remove('hidden');
+        // 1. No OFP is loaded (i.e., isOFPLoaded === false)
+        // 2. There are no OFPs at all (hasAnyOFP === false)
+        // 3. Not on Journey, Sectors, or Settings tab
+        if (!isOFPLoaded && !hasAnyOFP && 
+            activeTabId !== 'journey' && activeTabId !== 'sectors' && activeTabId !== 'settings') {
+            overlay.classList.remove('hidden');
         } else {
-            if (overlay) overlay.classList.add('hidden');
+            overlay.classList.add('hidden');
         }
         
-        // Also handle empty states in specific tabs
+        // Also handle empty states in specific tabs (optional)
         updateEmptyStates();
     }
 
@@ -3982,60 +4137,39 @@ function resizePad(name) {
 
     async function restorePadDrawing(padName, drawingKey) {
         const activeId = localStorage.getItem('activeOFPId');
-        if (!activeId) {
-            return;
-        }
+        if (!activeId) return;
+
         try {
-            const ofp = await getActiveOFPFromDB();
-            if (!ofp) {
-                console.log('Active OFP not found in DB');
-                return;
-            }
-            if (!ofp.userInputs) {
-                console.log('ofp.userInputs is empty');
-                return;
-            }
-            let data = ofp.userInputs[drawingKey];
-            // Only try backup if the key does NOT exist (undefined), not if it's null
-            if (data === undefined) {
+            const userData = await loadOFPUserData(Number(activeId));
+            if (!userData || !userData.userInputs) return;
+
+            let data = userData.userInputs[drawingKey];
+            if (!data) {
                 const backupKey = `drawing_backup_${activeId}_${drawingKey === 'front-atis-drawing' ? 'atis' : drawingKey === 'front-atc-drawing' ? 'atc' : 'signature'}`;
-                const backup = localStorage.getItem(backupKey);
-                if (backup) {
-                    console.log('Found backup in localStorage, using it');
-                    data = backup;
-                    // Optionally restore it back to IndexedDB for future
-                    try {
-                        await updateOFP(activeId, { 
-                            userInputs: { ...ofp.userInputs, [drawingKey]: backup } 
-                        });
-                    } catch (e) {
-                        console.warn('Failed to restore backup to IndexedDB', e);
-                    }
-                }
+                data = localStorage.getItem(backupKey);
             }
 
-            if (!data) { // still no data? (null or undefined)
-                return;
-            }
-            console.log(`Restoring ${drawingKey}, data length:`, data.length);
-            if (!data.startsWith('data:image/png;base64,') || data.length < 100) {
-                console.warn(`Invalid data URL for ${drawingKey}, skipping`);
-                return;
-            }
+            if (!data || !data.startsWith('data:image/png;base64,') || data.length < 100) return;
 
             const pad = pads[padName]?.pad;
             if (!pad) {
-                console.warn(`Pad ${padName} not initialized yet – retrying in 100ms`);
                 setTimeout(() => restorePadDrawing(padName, drawingKey), 100);
+                return;
+            }
+
+            // Check if canvas is visible and has dimensions
+            const canvas = pad.canvas;
+            if (canvas.offsetWidth === 0 || canvas.offsetHeight === 0) {
+                // Canvas not ready – retry later
+                setTimeout(() => restorePadDrawing(padName, drawingKey), 200);
                 return;
             }
 
             try {
                 await pad.fromDataURL(data);
                 resizePad(padName);
-                console.log(`✅ Restored ${drawingKey} to ${padName} pad`);
             } catch (e) {
-                console.error(`Failed to load drawing into pad ${padName}:`, e);
+                console.warn(`Signature restore failed for ${padName}:`, e);
             }
         } catch (e) {
             console.error(`Failed to restore ${drawingKey}:`, e);
@@ -5326,8 +5460,8 @@ function applyInputMode(mode) {
             const templateRows = parseInt(document.getElementById('j-template-rows')?.value || "4");
             const standardRows = 4;
             const rowGap = JOURNEY_CONFIG.rowGap; // 17
-            const FUEL_OFFSET = (standardRows - templateRows) * rowGap;
-            const CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
+            let FUEL_OFFSET = (standardRows - templateRows) * rowGap;
+            let CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
             
             if (templateRows === 3) {
                 CREW_OFFSET += rowGap; 
@@ -5488,13 +5622,13 @@ function applyInputMode(mode) {
     async function resetAfterJourneyLog() {
         const userConfirmed = await showConfirmDialog(
         'End of the Day',
-            'This will remove ALL data including:<br>'+
-            'OFPs<br>'+
+            '<divThis will remove :<br>'+
             'Flight Log entries<br>'+
             'Journey Log entries<br>'+
-            'All input data<br>',
+            'All input data<br></div>',
             'Continue',
-            'Cancel',
+            'Modify',
+            true
         );
         if (userConfirmed) {
             try {
@@ -5521,14 +5655,19 @@ function applyInputMode(mode) {
 
     window.DownloadOFP = async function(mode = 'download') {
         // 1. SAFETY CHECK
+
+            const container = document.getElementById('download-progress-container');
+            if (container) container.style.display = 'block';
+
             try {
-                await logSecurityEvent('OFP_DOWNLOAD', {
-                    mode: mode,
-                    fileName: window.originalFileName,
-                    timestamp: new Date().toISOString()
-                });
-                if(!window.ofpPdfBytes) return alert("Please Upload the OFP PDF first.");
-                
+                await logSecurityEvent('OFP_DOWNLOAD', { mode, fileName: window.originalFileName, timestamp: new Date().toISOString() });
+
+                // Early return – hide container first
+                if (!window.ofpPdfBytes) {
+                    if (container) container.style.display = 'none';
+                    return alert("Please Upload the OFP PDF first.");
+                }
+
                 try {
                     // 2. Load the SOURCE using PDF.js
                     const loadingTask = pdfjsLib.getDocument(window.ofpPdfBytes);
@@ -5720,13 +5859,17 @@ function applyInputMode(mode) {
                     
                     if(typeof resetOFPAfterSend === 'function') await resetOFPAfterSend();
 
-                } catch (error) { 
+                } catch (error) {
                     window.lastGeneratedOFPPdfBytes = null;
-                    console.error("Download Error:", error); 
-                    alert("Error generating PDF: " + error.message); 
+                    console.error("Download Error:", error);
+                    alert("Error generating PDF: " + error.message);
+                } finally {
+                    // Hide container after processing (success or inner error)
+                    if (container) container.style.display = 'none';
                 }
-            } catch (error) { 
-            // ... error handling ...
+            } catch (error) {
+                // Outer catch – also hide container
+                if (container) container.style.display = 'none';
             await logSecurityEvent('OFP_DOWNLOAD_ERROR', {
                 error: error.message,
                 mode: mode
@@ -5739,10 +5882,11 @@ function applyInputMode(mode) {
         // 1. Popup Confirmation
         const userConfirmed = await showConfirmDialog(
             'OFP Generated Successfully.',
-            'Click Finalize to wipe the form for the next flight.<br>'+
-            'Click Modify if you need to make changes and download again.<br>',
+            '<div style="text-align:center;">Click Finalize to wipe the form for the next flight.<br>' +
+            'Click Modify if you need to make changes and download again.</div>',
             'Finalize',
             'Modify',
+            true
         );
 
         if (!userConfirmed) {
@@ -5783,7 +5927,7 @@ function applyInputMode(mode) {
 
         if (nonFinalizedOFPs.length === 0) {
             // --- NO NON‑FINALIZED OFPs LEFT → END OF DAY, GO TO JOURNEY LOG ---
-            showToast("All OFPs finalized – complete your Journey Log", 'info');
+            showToast("Do not forget to  omplete your Journey Log", 'info');
             
             // Switch to Journey Log tab
             const journeyBtn = document.querySelector('.nav-btn[data-tab="journey"], .nav-btn[onclick*="journey"]');
@@ -6581,15 +6725,15 @@ async function updateOFP(id, updates) {
             
             // Log blob presence
             if (ofp.data) {
-                alert('[updateOFP] OFP has blob, size:'+ ofp.data.size);
+                //Not required anymore
             }
 
             const putRequest = store.put(ofp);
             putRequest.onsuccess = () => {
-                alert('[updateOFP] Put successful');
+                //Not required anymore
             };
             putRequest.onerror = (e) => {
-                alert('[updateOFP] Put error:'+ e.target.error);
+                alert('Put error:'+ e.target.error);
                 reject(e.target.error);
             };
 
@@ -6682,6 +6826,8 @@ async function deleteOFPFromDB(id) {
         };
         tx.onerror = (e) => reject(e.target.error);
     });
+    updateUploadButtonVisibility();
+    await updateEmptyStates();
 }
 
     // Clear all OFPs
@@ -6693,7 +6839,6 @@ async function clearAllOFPsFromDB() {
     if (db.objectStoreNames.contains('ofp_user_data')) storesToClear.push('ofp_user_data');
 
     if (storesToClear.length === 0) {
-        alert('[clearAllOFPsFromDB] No stores to clear');
         localStorage.removeItem('activeOFPId');
         return;
     }
@@ -6706,14 +6851,16 @@ async function clearAllOFPsFromDB() {
     await new Promise((resolve, reject) => {
         tx.oncomplete = () => {
             localStorage.removeItem('activeOFPId');
-            alert('[clearAllOFPsFromDB] All existing stores cleared');
+            updateUploadButtonVisibility();
             resolve();
         };
         tx.onerror = (e) => {
-            alert('[clearAllOFPsFromDB] Transaction error:'+ e.target.error);
+            alert('Transaction error:'+ e.target.error);
             reject(e.target.error);
         };
     });
+
+    await updateEmptyStates();
 }
 
     // Check if PDF exists
@@ -6806,7 +6953,7 @@ async function getAllOFPMetadata() {
 async function saveOFPUserData(ofpId, userWaypoints, userInputs) {
     const db = await getDB();
     if (!db.objectStoreNames.contains('ofp_user_data')) {
-        alertn('[saveOFPUserData] ofp_user_data store missing – cannot save');
+        alert('ofp_user_data store missing – cannot save');
         return;
     }
     const tx = db.transaction("ofp_user_data", "readwrite");
@@ -6822,7 +6969,7 @@ async function saveOFPUserData(ofpId, userWaypoints, userInputs) {
 async function loadOFPUserData(ofpId) {
     const db = await getDB();
     if (!db.objectStoreNames.contains('ofp_user_data')) {
-        alertn('[loadOFPUserData] ofp_user_data store missing – returning empty');
+        alert('ofp_user_data store missing – returning empty');
         return { userWaypoints: [], userInputs: {} };
     }
     const tx = db.transaction("ofp_user_data", "readonly");
@@ -7369,16 +7516,18 @@ async function loadOFPUserData(ofpId) {
         }, 3000);
     }
 
-    function showConfirmDialog(title, message, confirmText = 'Continue', cancelText = 'Cancel', type = 'warning') {
+    function showConfirmDialog(title, message, confirmText = 'Continue', cancelText = 'Cancel', type = 'warning', centered = false) {
         return createModal({
             title,
             message,
             confirmText,
             cancelText,
             type: type === 'error' ? 'error' : 'info',
-            icon: type === 'error' ? '⚠️' : '❓'
+            icon: type === 'error' ? '⚠️' : '❓',
+            centered
         });
     }
+
 
     function showUpdateModal(version, releaseData, onReload) {
         createModal({
@@ -7405,47 +7554,33 @@ async function loadOFPUserData(ofpId) {
         type = 'info', 
         icon = '📋',
         showVersion = null,
-        listItems = null
+        listItems = null,
+        centered = true
     }) {
         const dialog = document.createElement('div');
-        dialog.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.8);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 10001;
-            backdrop-filter: blur(5px);
-            animation: fadeIn 0.3s ease;
-        `;
+        dialog.style.cssText = `position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); display:flex; justify-content:center; align-items:center; z-index:10001; backdrop-filter:blur(5px); animation:fadeIn 0.3s ease;`;
 
-        let contentHTML = '';
-
-        // Title + icon area
-        contentHTML += `
-            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
-                <span style="font-size: 40px;">${icon}</span>
-                <div>
-                    <h2 style="color: ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; margin: 0; font-size: 24px;">
-                        ${title}
-                    </h2>
-                    ${showVersion ? `<p style="color: var(--dim); margin: 5px 0 0 0;">Version ${showVersion}</p>` : ''}
+        let contentHTML = `
+            <div style="background: var(--panel); border-radius: 20px; padding: 30px; max-width: 500px; width: 90%; border: 2px solid ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: left;">
+                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
+                    <span style="font-size: 40px;">${icon}</span>
+                    <div>
+                        <h2 style="color: ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; margin: 0; font-size: 24px;">${title}</h2>
+                        ${showVersion ? `<p style="color: var(--dim); margin: 5px 0 0 0;">Version ${showVersion}</p>` : ''}
+                    </div>
                 </div>
-            </div>
         `;
 
-        // Message (supports HTML)
+        // Message – apply centering if requested
         if (message) {
-            contentHTML += `<p style="color: var(--text); margin-bottom: 25px; line-height: 1.5;">${message}</p>`;
+            const msgStyle = centered ? 'text-align: center;' : '';
+            contentHTML += `<p style="color: var(--text); margin-bottom: 25px; line-height: 1.5; ${msgStyle}">${message}</p>`;
         }
 
-        // List items (e.g., release notes)
+        // List items – apply centering if requested
         if (listItems && listItems.length) {
-            contentHTML += `<div style="margin-bottom: 25px; max-height: 400px; overflow-y: auto; padding-right: 10px;">
+            const listStyle = centered ? 'text-align: center;' : '';
+            contentHTML += `<div style="margin-bottom: 25px; max-height: 400px; overflow-y: auto; padding-right: 10px; ${listStyle}">
                 <ul style="list-style: none; padding: 0; margin: 0;">
                     ${listItems.map(item => `<li style="margin-bottom: 8px; color: var(--text);">${item}</li>`).join('')}
                 </ul>
@@ -7455,66 +7590,21 @@ async function loadOFPUserData(ofpId) {
         // Buttons
         contentHTML += `<div style="display: flex; gap: 15px; margin-top: 25px;">`;
         if (cancelText) {
-            contentHTML += `
-                <button id="modal-cancel" style="
-                    flex: 1;
-                    padding: 14px;
-                    background: var(--input);
-                    border: 1px solid var(--border);
-                    color: var(--text);
-                    border-radius: 12px;
-                    font-weight: 600;
-                    cursor: pointer;
-                ">${cancelText}</button>
-            `;
+            contentHTML += `<button id="modal-cancel" style="flex:1; padding:14px; background:var(--input); border:1px solid var(--border); color:var(--text); border-radius:12px; font-weight:600; cursor:pointer;">${cancelText}</button>`;
         }
-        contentHTML += `
-            <button id="modal-confirm" style="
-                flex: 1;
-                padding: 14px;
-                background: ${type === 'error' ? 'var(--error)' : 'var(--accent)'};
-                border: none;
-                color: white;
-                border-radius: 12px;
-                font-weight: 800;
-                cursor: pointer;
-                box-shadow: ${type !== 'error' ? '0 5px 15px rgba(var(--accent-rgb), 0.3)' : 'none'};
-            ">${confirmText}</button>
-        </div>`;
+        contentHTML += `<button id="modal-confirm" style="flex:1; padding:14px; background:${type === 'error' ? 'var(--error)' : 'var(--accent)'}; border:none; color:white; border-radius:12px; font-weight:800; cursor:pointer; box-shadow:${type !== 'error' ? '0 5px 15px rgba(var(--accent-rgb), 0.3)' : 'none'};">${confirmText}</button></div>`;
 
-        dialog.innerHTML = `
-            <div style="
-                background: var(--panel);
-                border-radius: 20px;
-                padding: 30px;
-                max-width: 500px;
-                width: 90%;
-                border: 2px solid ${type === 'error' ? 'var(--error)' : 'var(--accent)'};
-                box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-                text-align: left;
-            ">
-                ${contentHTML}
-            </div>
-        `;
-
+        contentHTML += `</div>`; // close outer div
+        dialog.innerHTML = contentHTML;
         document.body.appendChild(dialog);
 
         return new Promise((resolve) => {
             const confirmBtn = dialog.querySelector('#modal-confirm');
             const cancelBtn = dialog.querySelector('#modal-cancel');
 
-            confirmBtn.onclick = () => {
-                dialog.remove();
-                if (onConfirm) onConfirm();
-                resolve(true);
-            };
-
+            confirmBtn.onclick = () => { dialog.remove(); if (onConfirm) onConfirm(); resolve(true); };
             if (cancelBtn) {
-                cancelBtn.onclick = () => {
-                    dialog.remove();
-                    if (onCancel) onCancel();
-                    resolve(false);
-                };
+                cancelBtn.onclick = () => { dialog.remove(); if (onCancel) onCancel(); resolve(false); };
             }
         });
     }
@@ -7743,5 +7833,18 @@ const debouncedUpdateCruiseLevel = debounce(updateCruiseLevel, 300);
     window.addEventListener('pagehide', () => {
         saveState();
     });
+
+    const container = document.getElementById('download-progress-container');
+if (container) {
+    const observer = new MutationObserver(mutations => {
+        mutations.forEach(m => {
+            if (m.attributeName === 'style') {
+                console.log('Container style changed:', container.style.display);
+                console.trace('Stack trace:');
+            }
+        });
+    });
+    observer.observe(container, { attributes: true });
+}
 
 })();
