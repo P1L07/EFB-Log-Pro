@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.3";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
+const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -6528,31 +6528,41 @@ function applyInputMode(mode) {
         return ofpCache;
     }
 
-    async function updateOFP(id, updates) {
-        const db = await getDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofps", "readwrite");
-            const store = tx.objectStore("ofps");
+async function updateOFP(id, updates) {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("ofps", "readwrite");
+        const store = tx.objectStore("ofps");
 
-            const getRequest = store.get(Number(id));
-            getRequest.onsuccess = () => {
-                const ofp = getRequest.result;
-                if (!ofp) {
-                    reject(new Error("OFP not found"));
-                    return;
-                }
-                Object.assign(ofp, updates);
-                const putRequest = store.put(ofp);
-                putRequest.onsuccess = () => {
-                    // Wait for transaction to complete before resolving
-                    tx.oncomplete = () => resolve(ofp);
-                    tx.onerror = (e) => reject(e.target.error);
-                };
-                putRequest.onerror = (e) => reject(e.target.error);
+        const getRequest = store.get(Number(id));
+        getRequest.onsuccess = () => {
+            const ofp = getRequest.result;
+            if (!ofp) {
+                reject(new Error("OFP not found"));
+                return;
+            }
+            Object.assign(ofp, updates);
+            
+            // Log blob presence
+            if (ofp.data) {
+                alert('[updateOFP] OFP has blob, size:'+ ofp.data.size);
+            }
+
+            const putRequest = store.put(ofp);
+            putRequest.onsuccess = () => {
+                alert('[updateOFP] Put successful');
             };
-            getRequest.onerror = (e) => reject(e.target.error);
-        });
-    }
+            putRequest.onerror = (e) => {
+                alert('[updateOFP] Put error:'+ e.target.error);
+                reject(e.target.error);
+            };
+
+            tx.oncomplete = () => resolve(ofp);
+            tx.onerror = (e) => reject(e.target.error);
+        };
+        getRequest.onerror = (e) => reject(e.target.error);
+    });
+}
 
     // Get all OFPs (sorted newest first)
     async function getAllOFPsFromDB() {
@@ -6618,37 +6628,52 @@ async function getActiveOFPFromDB() {
     });
 }
 
-async function setActiveOFP(id) {
-    const db = await getDB();
-    const tx = db.transaction("ofps", "readwrite");
-    const store = tx.objectStore("ofps");
-    const numericId = Number(id);
+    async function setActiveOFP(id) {
+        const db = await getDB();
+        const tx = db.transaction("ofps", "readwrite");
+        const store = tx.objectStore("ofps");
+        const numericId = Number(id);
 
-    return new Promise((resolve, reject) => {
-        const request = store.openCursor();
-        request.onsuccess = (e) => {
-            const cursor = e.target.result;
-            if (cursor) {
-                const ofp = cursor.value;
-                const shouldBeActive = (ofp.id === numericId);
-                if (ofp.isActive !== shouldBeActive) {
-                    ofp.isActive = shouldBeActive;
-                    cursor.update(ofp);
+        return new Promise((resolve, reject) => {
+            const request = store.openCursor();
+            request.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                    const ofp = cursor.value;
+                    const shouldBeActive = (ofp.id === numericId);
+                    if (ofp.isActive !== shouldBeActive) {
+                        ofp.isActive = shouldBeActive;
+                        
+                        // Log blob info if present
+                        if (ofp.data) {
+                            alert('[setActiveOFP] OFP data type:'+ ofp.data.constructor.name+ 'size:'+ ofp.data.size);
+                        } else {
+                            alert('[setActiveOFP] OFP has no data blob');
+                        }
+
+                        try {
+                            cursor.update(ofp);
+                            alert('[setActiveOFP] Updated OFP', ofp.id);
+                        } catch (updateError) {
+                            alert('[setActiveOFP] cursor.update failed:'+ updateError.message);
+                            reject(updateError);
+                            return;
+                        }
+                    }
+                    cursor.continue();
                 }
-                cursor.continue();
-            }
-        };
-        tx.oncomplete = () => {
-            localStorage.setItem('activeOFPId', numericId);
-            console.warn(`[setActiveOFP] Transaction complete, active ID set to ${numericId}`);
-            resolve();
-        };
-        tx.onerror = (e) => {
-            console.warn('[setActiveOFP] Transaction error:', e.target.error);
-            reject(e.target.error);
-        };
-    });
-}
+            };
+            tx.oncomplete = () => {
+                localStorage.setItem('activeOFPId', numericId);
+                alert('[setActiveOFP] Transaction complete, active ID set to'+ numericId);
+                resolve();
+            };
+            tx.onerror = (e) => {
+                alert('[setActiveOFP] Transaction error:'+ e.target.error);
+                reject(e.target.error);
+            };
+        });
+    }
 
     // Delete OFP by ID
     async function deleteOFPFromDB(id) {
