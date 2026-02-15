@@ -1,7 +1,7 @@
 (function() {
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const RELEASE_NOTES = {
-    "2.0.3": {
+    "2.0.4": {
         title: "Release Notes",
         notes: [
             "✍️ Write or Type ATIS/ATC",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
+const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1850,8 +1850,8 @@ window.activateOFP = async function(id, switchTab = true) {
                         throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
                     }
                 }
-                console.warn(`Attempt ${attempt} failed, retrying in 200ms...`);
-                await new Promise(resolve => setTimeout(resolve, 200));
+                console.warn(`Attempt ${attempt} failed, retrying in 500ms...`);
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
 
@@ -6620,24 +6620,33 @@ async function getActiveOFPFromDB() {
 
 async function setActiveOFP(id) {
     const db = await getDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction("ofps", "readwrite");
-        const store = tx.objectStore("ofps");
+    const tx = db.transaction("ofps", "readwrite");
+    const store = tx.objectStore("ofps");
+    const numericId = Number(id);
 
-        const getAllRequest = store.getAll();
-        getAllRequest.onsuccess = () => {
-            const ofps = getAllRequest.result;
-            ofps.forEach(ofp => {
-                const shouldBeActive = (ofp.id === Number(id));
+    return new Promise((resolve, reject) => {
+        const request = store.openCursor();
+        request.onsuccess = (e) => {
+            const cursor = e.target.result;
+            if (cursor) {
+                const ofp = cursor.value;
+                const shouldBeActive = (ofp.id === numericId);
                 if (ofp.isActive !== shouldBeActive) {
                     ofp.isActive = shouldBeActive;
-                    store.put(ofp);
+                    cursor.update(ofp);
                 }
-            });
-            localStorage.setItem('activeOFPId', id);
+                cursor.continue();
+            }
+        };
+        tx.oncomplete = () => {
+            localStorage.setItem('activeOFPId', numericId);
+            console.warn(`[setActiveOFP] Transaction complete, active ID set to ${numericId}`);
             resolve();
         };
-        getAllRequest.onerror = (e) => reject(e);
+        tx.onerror = (e) => {
+            console.warn('[setActiveOFP] Transaction error:', e.target.error);
+            reject(e.target.error);
+        };
     });
 }
 
