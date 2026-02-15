@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
+const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1812,18 +1812,11 @@ const PERSISTENT_INPUT_IDS = [
 // ==========================================
 
     // Activate OFP
-window.activateOFP = async function(id, switchTab = true, retryCount = 0) {
-    // Prevent overlapping activations
+window.activateOFP = async function(id, switchTab = true) {
+    // Prevent concurrent activations
     if (isActivating) {
-        console.warn('Already activating an OFP, please wait');
-        showToast('Please wait, activation in progress', 'info');
-        return;
-    }
-    // Wait if reordering is in progress
-    if (isReordering) {
-        console.warn('Reordering in progress, activation delayed');
-        showToast('Reordering in progress, please wait...', 'info');
-        setTimeout(() => activateOFP(id, switchTab, retryCount), 500);
+        console.warn('Activation already in progress, please wait');
+        showToast('Activation in progress, please wait...', 'info');
         return;
     }
     isActivating = true;
@@ -1832,22 +1825,17 @@ window.activateOFP = async function(id, switchTab = true, retryCount = 0) {
         const numericId = Number(id);
         if (isNaN(numericId)) throw new Error('Invalid OFP ID');
 
-        // ---- Step 1: Retrieve the OFP with retries ----
+        // ---- Step 1: Retrieve the OFP with retries (handle temporary unavailability) ----
         let ofpToActivate = null;
-        let attempts = 0;
-        const maxAttempts = 5;
-        const baseDelay = 200; // ms
-
-        while (attempts < maxAttempts) {
+        const maxRetries = 3;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 ofpToActivate = await getOFPById(numericId);
                 break; // success
             } catch (err) {
-                attempts++;
-                if (attempts >= maxAttempts) throw new Error(`OFP with id ${numericId} not found after ${maxAttempts} attempts`);
-                const delay = baseDelay * Math.pow(2, attempts - 1); // exponential backoff
-                console.warn(`Activation attempt ${attempts} failed, retrying in ${delay}ms`);
-                await new Promise(resolve => setTimeout(resolve, delay));
+                if (attempt === maxRetries) throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
+                console.warn(`Attempt ${attempt} failed, retrying in 200ms...`);
+                await new Promise(resolve => setTimeout(resolve, 200));
             }
         }
 
@@ -1856,35 +1844,31 @@ window.activateOFP = async function(id, switchTab = true, retryCount = 0) {
             return;
         }
 
-        // ---- Step 2: Set as active ----
+        // ---- Step 2: Set as active in database ----
         await setActiveOFP(numericId);
 
-        // ---- Step 3: Retrieve the full active OFP with retries ----
+        // ---- Step 3: Retrieve the full active OFP (again with retry) ----
         let ofp = null;
-        attempts = 0;
-        while (attempts < maxAttempts) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
             ofp = await getActiveOFPFromDB();
             if (ofp && ofp.data) break;
-            attempts++;
-            if (attempts >= maxAttempts) throw new Error('Failed to load OFP data after multiple attempts');
-            const delay = baseDelay * Math.pow(2, attempts - 1);
-            console.warn(`Active OFP not found, retry ${attempts} in ${delay}ms`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            if (attempt === maxRetries) throw new Error('Failed to load OFP data after multiple attempts');
+            console.warn(`Active OFP not ready, retry ${attempt} in 200ms...`);
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
 
-        // ---- Step 4: Clear existing UI data ----
+        // ---- Step 4: Clear existing UI and load new OFP ----
         if (typeof clearOFPInputs === 'function') clearOFPInputs();
 
         setOFPLoadedState(true);
         window.ofpPdfBytes = await ofp.data.arrayBuffer();
         window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
 
-        // ---- Step 5: Parse and restore ----
         await runAnalysis(ofp.data, true);
         await restoreOFPData(ofp);
         await renderOFPMangerTable();
 
-        // ---- Step 6: Switch tab if requested ----
+        // ---- Step 5: Switch tab if requested ----
         if (switchTab) {
             const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
             if (summaryBtn) {
@@ -1900,20 +1884,10 @@ window.activateOFP = async function(id, switchTab = true, retryCount = 0) {
 
     } catch (error) {
         console.error("Error activating OFP:", error);
-        // If we haven't retried too many times, try the whole function again
-        if (retryCount < 2) {
-            console.log(`Retrying activation (attempt ${retryCount + 1}) in 1s`);
-            setTimeout(() => {
-                isActivating = false; // release flag for retry
-                activateOFP(id, switchTab, retryCount + 1);
-            }, 1000);
-        } else {
-            showToast(`Failed to activate OFP: ${error.message}`, 'error');
-            isActivating = false;
-        }
+        showToast(`Failed to activate OFP: ${error.message}`, 'error');
     } finally {
-        // Only reset flag if no further retry is scheduled
-        if (retryCount >= 2) isActivating = false;
+        // ALWAYS reset the flag, regardless of success or failure
+        isActivating = false;
     }
 };
     // Delete OFP
