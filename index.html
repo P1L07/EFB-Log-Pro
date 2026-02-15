@@ -367,6 +367,18 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
     color: white;
 }
 
+/* Hide clear buttons by default */
+#clear-atis-btn,
+#clear-atc-btn {
+    display: none;
+}
+
+/* Show only in writing mode */
+body[data-atis-mode="writing"] #clear-atis-btn,
+body[data-atis-mode="writing"] #clear-atc-btn {
+    display: inline-block; 
+}
+
 .btn-clear-pill {
     padding: 4px 12px;
     background: transparent;
@@ -1245,6 +1257,6 @@ button:disabled,
 <script src="pdf-lib.min.js"></script>
 <script src="pdf.min.js"></script>
 <script src="signature_pad.umd.min.js"></script>
-<script src="efb-log-pro.js?v=2.0.3"></script>
+<script src="efb-log-pro.js?v=2.0.4"></script>
 </body>
 </html>

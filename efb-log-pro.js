@@ -1,7 +1,7 @@
 (function() {
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const RELEASE_NOTES = {
-    "2.0.3": {
+    "2.0.4": {
         title: "Release Notes",
         notes: [
             "✍️ Write or Type ATIS/ATC",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
+const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -997,6 +997,7 @@ const PERSISTENT_INPUT_IDS = [
     let ofpCache = null; let cacheTime = 0; const CACHE_TTL = 5000;
     let waypointATOCache = [];   // array of input elements for o-a-*
     let alternateATOCache = [];  // array for a-a-*
+    let isActivating = false;
     let signaturePad = null;
     let savedSignatureData = null;
     let takeoffFuelInput = null;
@@ -1773,12 +1774,18 @@ const PERSISTENT_INPUT_IDS = [
 
     // Activate OFP
     window.activateOFP = async function(id, switchTab = true) {
-        const ofpToActivate = await getOFPById(id);
-        if (ofpToActivate && ofpToActivate.finalized) {
-            showToast("Cannot activate a finalized OFP", 'error');
+        if (isActivating) {
+            console.warn('Already activating an OFP, please wait');
+            showToast('Please wait, activation in progress', 'info');
             return;
         }
+        isActivating = true;
         try {
+            const ofpToActivate = await getOFPById(id);
+            if (ofpToActivate && ofpToActivate.finalized) {
+                showToast("Cannot activate a finalized OFP", 'error');
+                return;
+            }
             await setActiveOFP(id);
             const ofp = await getActiveOFPFromDB();
             if (ofp && ofp.data) {
@@ -1816,7 +1823,9 @@ const PERSISTENT_INPUT_IDS = [
             }
         } catch (error) {
             console.error("Error activating OFP:", error);
-            showToast("Failed to activate OFP", 'error');
+            showToast("Failed to activate OFP: " + error.message, 'error');
+        } finally {
+            isActivating = false;
         }
     };
 
@@ -3108,14 +3117,6 @@ const PERSISTENT_INPUT_IDS = [
 
     // Handle changing tabs
     window.showTab = window.showTab || function(id, btn) {
-        // Save signature before leaving
-        const activeSection = document.querySelector('.tool-section.active');
-        if (activeSection && activeSection.id === 'section-confirm' && signaturePad) {
-            if (!signaturePad.isEmpty()) {
-                savedSignatureData = signaturePad.toDataURL(); 
-            }
-        }
-        
         // Standard tab switching logic
         document.querySelectorAll('.tool-section').forEach(s => s.classList.remove('active'));
         document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -3151,14 +3152,14 @@ const PERSISTENT_INPUT_IDS = [
             }, 100);
         }
 
-        // Save Signature
+        // Confirm tab – restore signature from persistent storage
         if (id === 'confirm') {
             validateOFPInputs();
+            // Ensure canvas is visible and then restore
             setTimeout(() => {
                 resizePad('main');
-                if (savedSignatureData && pads.main.pad) {
-                    pads.main.pad.fromDataURL(savedSignatureData, { ratio: pads.main.lastRatio });
-                }
+                // Restore from IndexedDB/backup, not from savedSignatureData
+                restorePadDrawing('main', 'signature');
             }, 50);
         }
 
@@ -3597,7 +3598,7 @@ const PERSISTENT_INPUT_IDS = [
     // DRAWING FUNCTIONS
     function attachPadOnEnd(pad, name) {
         if (!pad) return;
-        const canvas = pad.canvas; // <-- get canvas from pad
+        const canvas = pad.canvas;
         if (!canvas) {
             console.warn(`attachPadOnEnd: canvas not found for pad ${name}`);
             return;
@@ -3608,9 +3609,12 @@ const PERSISTENT_INPUT_IDS = [
             canvas.removeEventListener('pointerup', pad._pointerUpListener);
         }
 
-        // Save function
+        // Save function that also triggers validation for main pad
         const saveFunc = () => {
             saveState();
+            if (name === 'main') {
+                validateOFPInputs(); // updates button state
+            }
         };
 
         // Primary: library's onEnd
@@ -3618,7 +3622,6 @@ const PERSISTENT_INPUT_IDS = [
 
         // Fallback: direct pointerup event
         const onPointerUp = (e) => {
-            // Small delay to allow library to process if needed
             setTimeout(() => {
                 if (pad && !pad.isEmpty()) {
                     saveFunc();
@@ -3738,9 +3741,8 @@ function resizePad(name) {
                 return;
             }
             let data = ofp.userInputs[drawingKey];
-            
-            // If not found in IndexedDB, try localStorage backup
-            if (!data) {
+            // Only try backup if the key does NOT exist (undefined), not if it's null
+            if (data === undefined) {
                 const backupKey = `drawing_backup_${activeId}_${drawingKey === 'front-atis-drawing' ? 'atis' : drawingKey === 'front-atc-drawing' ? 'atc' : 'signature'}`;
                 const backup = localStorage.getItem(backupKey);
                 if (backup) {
@@ -3757,10 +3759,9 @@ function resizePad(name) {
                 }
             }
 
-            if (!data) {
+            if (!data) { // still no data? (null or undefined)
                 return;
             }
-
             console.log(`Restoring ${drawingKey}, data length:`, data.length);
             if (!data.startsWith('data:image/png;base64,') || data.length < 100) {
                 console.warn(`Invalid data URL for ${drawingKey}, skipping`);
@@ -3792,6 +3793,15 @@ function resizePad(name) {
             pad.clear();
             if (padName === 'main') {
                 validateOFPInputs();
+            }
+            // Remove backup from localStorage
+            const activeId = localStorage.getItem('activeOFPId');
+            if (activeId) {
+                let backupKey;
+                if (padName === 'main') backupKey = `drawing_backup_${activeId}_signature`;
+                else if (padName === 'atis') backupKey = `drawing_backup_${activeId}_atis`;
+                else if (padName === 'atc') backupKey = `drawing_backup_${activeId}_atc`;
+                if (backupKey) localStorage.removeItem(backupKey);
             }
             debouncedSave(); // save cleared state
         }
@@ -4036,6 +4046,9 @@ function applyInputMode(mode) {
             
             const valid = checks.every(c => c.valid);
             const sendBtn = el('btn-send-ofp');
+            if (sendBtn) {
+                sendBtn.disabled = !valid;
+            }
         }
     };
 
