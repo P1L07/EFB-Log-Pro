@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
+const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1780,6 +1780,7 @@ const PERSISTENT_INPUT_IDS = [
             showToast('Please wait, activation in progress', 'info');
             return;
         }
+        await getCachedOFPs(true);
         isActivating = true;
 
         try {
@@ -3112,7 +3113,7 @@ const PERSISTENT_INPUT_IDS = [
 
             const db = await getDB();
 
-            // Step 1: read only id and order for all OFPs (no blob)
+            // ---- Step 1: read only id and order (no blob) ----
             const tx1 = db.transaction("ofps", "readonly");
             const store1 = tx1.objectStore("ofps");
             const ofpsLight = [];
@@ -3139,12 +3140,15 @@ const PERSISTENT_INPUT_IDS = [
             if (index === -1) throw new Error(`OFP with id ${numericId} not found`);
 
             const swapIndex = index + direction;
-            if (swapIndex < 0 || swapIndex >= ofpsLight.length) return; // no change
+            if (swapIndex < 0 || swapIndex >= ofpsLight.length) {
+                showToast("Cannot move further", 'info');
+                return;
+            }
 
             const id1 = ofpsLight[index].id;
             const id2 = ofpsLight[swapIndex].id;
 
-            // Step 2: fetch the two full records (with blob)
+            // ---- Step 2: fetch only the two full records ----
             const tx2 = db.transaction("ofps", "readwrite");
             const store2 = tx2.objectStore("ofps");
 
@@ -3162,6 +3166,7 @@ const PERSISTENT_INPUT_IDS = [
             // Swap orders
             [ofp1.order, ofp2.order] = [ofp2.order, ofp1.order];
 
+            // Save back
             store2.put(ofp1);
             store2.put(ofp2);
 
@@ -3170,10 +3175,7 @@ const PERSISTENT_INPUT_IDS = [
                 tx2.onerror = (e) => reject(e.target.error);
             });
 
-            // Step 3: renumber all orders (optional but keeps them consecutive)
-            await renumberOFPOrders();
-
-            // Step 4: refresh cache and table
+            // ---- Step 3: refresh cache and UI ----
             await getCachedOFPs(true);
             await renderOFPMangerTable();
 
@@ -6021,7 +6023,6 @@ function applyInputMode(mode) {
         // Save combined inputs to IndexedDB
         try {
             await updateOFP(activeId, { userInputs: combinedInputs });
-            console.log('✅ User inputs (incl. drawings) saved');
         } catch (e) {
             console.warn('❌ Failed to save user inputs', e);
         }
@@ -6044,7 +6045,6 @@ function applyInputMode(mode) {
         // Fallback sync save (unencrypted)
         try {
             localStorage.setItem('efb_log_state_fallback', JSON.stringify(state));
-            console.log('✅ Fallback state saved');
         } catch (e) {
             console.error('Storage full or error:', e);
         }
@@ -6054,13 +6054,11 @@ function applyInputMode(mode) {
             if (typeof encryptData === 'function') {
                 const encryptedState = await encryptData(state);
                 localStorage.setItem('efb_log_state', encryptedState);
-                console.log('✅ Encrypted state saved');
             }
         } catch (error) {
             console.warn('Encryption save failed, relying on fallback.', error);
         }
 
-        console.log('🏁 saveState completed');
     }
 
     // 2. LOAD FUNCTION 
