@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
+const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1191,6 +1191,7 @@ const PERSISTENT_INPUT_IDS = [
             console.log("No active OFP set – activating the newest OFP.");
             await activateOFP(allOFPs[0].id);
         }
+
         // Add event listener for file input change
         const fileInput = document.getElementById('ofp-file-in');
         if (fileInput) {
@@ -1545,8 +1546,8 @@ const PERSISTENT_INPUT_IDS = [
                 console.error("Unexpected error during save:", error);
                 const emergencyResult = await emergencySaveOFP(blob, metadata, existingOFP || null);
                 let toastMessage = existingOFP
-                    ? "OFP replaced (emergency mode"
-                    : "OFP saved (emergency mode";
+                    ? "OFP replaced (emergency mode)"
+                    : "OFP saved (emergency mode)";
                 if (!emergencyResult.pdfSaved) toastMessage += " – PDF not saved";
                 if (!emergencyResult.ofpsRecordCreated) toastMessage += " – record not created";
                 toastMessage += ")";
@@ -1813,7 +1814,6 @@ const PERSISTENT_INPUT_IDS = [
 
     // Activate OFP
 window.activateOFP = async function(id, switchTab = true) {
-    // Prevent concurrent activations
     if (isActivating) {
         console.warn('Activation already in progress, please wait');
         showToast('Activation in progress, please wait...', 'info');
@@ -1824,34 +1824,34 @@ window.activateOFP = async function(id, switchTab = true) {
     try {
         const numericId = Number(id);
         if (isNaN(numericId)) throw new Error('Invalid OFP ID');
+        alert(`[activateOFP] Starting activation for ID: ${numericId}`);
 
-        // ---- Step 0: Refresh cache to ensure we have the latest data ----
+        // Refresh cache
         await getCachedOFPs(true);
 
-        // ---- Step 1: Retrieve the OFP with retries (handle temporary unavailability) ----
+        // Retrieve the OFP with retries
         let ofpToActivate = null;
         const maxRetries = 3;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            alert(`[activateOFP] Attempt ${attempt} to fetch OFP by ID ${numericId}`);
             try {
                 ofpToActivate = await getOFPById(numericId);
-                break; // success
+                alert(`[activateOFP] OFP found on attempt ${attempt}`);
+                break;
             } catch (err) {
+                console.warn(`[activateOFP] Attempt ${attempt} failed: ${err.message}`);
                 if (attempt === maxRetries) {
-                    // Last attempt failed – try to find it by scanning all OFPs
-                    const allOFPs = await getCachedOFPs(); // already fresh
+                    const allOFPs = await getCachedOFPs();
                     const found = allOFPs.find(o => o.id === numericId);
                     if (found) {
-                        // It exists in cache but not in direct get? That's odd, but we can use the cached metadata to attempt activation anyway
-                        console.warn('OFP found in cache but not in direct get, attempting to proceed');
-                        ofpToActivate = found; // use metadata (may not have data blob)
-                        // We'll need to fetch full data later
+                        alert('[activateOFP] OFP found in cache, proceeding with metadata');
+                        ofpToActivate = found;
                         break;
                     } else {
                         throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
                     }
                 }
-                console.warn(`Attempt ${attempt} failed, retrying in 500ms...`);
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 200));
             }
         }
 
@@ -1860,36 +1860,89 @@ window.activateOFP = async function(id, switchTab = true) {
             return;
         }
 
-        // ---- Step 2: Set as active in database ----
-        await setActiveOFP(numericId);
+        // Set active ID in localStorage only
+        localStorage.setItem('activeOFPId', numericId);
+        alert(`[activateOFP] Active ID set to ${numericId}`);
 
-        // ---- Step 3: Retrieve the full active OFP (again with retry) ----
+        // Retrieve the full active OFP with retries
         let ofp = null;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            ofp = await getActiveOFPFromDB();
-            if (ofp && ofp.data) break;
+            alert(`[activateOFP] Attempt ${attempt} to get active OFP from DB`);
+            ofp = await getOFPById(numericId);
+            if (ofp && ofp.data) {
+                alert(`[activateOFP] Active OFP retrieved on attempt ${attempt}`);
+                break;
+            }
             if (attempt === maxRetries) {
-                // Try to get by ID directly as fallback
-                ofp = await getOFPById(numericId).catch(() => null);
-                if (ofp && ofp.data) break;
                 throw new Error('Failed to load OFP data after multiple attempts');
             }
-            console.warn(`Active OFP not ready, retry ${attempt} in 200ms...`);
+            alert(`[activateOFP] Active OFP not ready, retry ${attempt} in 200ms...`);
             await new Promise(resolve => setTimeout(resolve, 200));
         }
 
-        // ---- Step 4: Clear existing UI and load new OFP ----
+        // Clear UI
         if (typeof clearOFPInputs === 'function') clearOFPInputs();
 
         setOFPLoadedState(true);
         window.ofpPdfBytes = await ofp.data.arrayBuffer();
         window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
 
+        // Run analysis (parses PDF and populates waypoints etc.)
         await runAnalysis(ofp.data, true);
-        await restoreOFPData(ofp);
+
+        // Load user data from new store
+        const userData = await loadOFPUserData(numericId);
+        if (userData) {
+            // Restore waypoints
+            if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
+                userData.userWaypoints.forEach((data, i) => {
+                    if (i < waypoints.length) {
+                        if (data.ato) safeSet(`o-a-${i}`, data.ato);
+                        if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                        if (data.notes) safeSet(`o-n-${i}`, data.notes);
+                        if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+                    }
+                });
+                runFlightLogCalculations();
+                syncLastWaypoint();
+            }
+            // Restore inputs and drawings
+            if (userData.userInputs && typeof userData.userInputs === 'object') {
+                Object.keys(userData.userInputs).forEach(id => {
+                    const val = userData.userInputs[id];
+                    if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') {
+                        // Handle later after pads are ready
+                    } else {
+                        safeSet(id, val);
+                    }
+                });
+                // Restore drawings after a short delay (pads may not be ready)
+                setTimeout(() => {
+                    if (userData.userInputs.signature && pads.main.pad) {
+                        pads.main.pad.fromDataURL(userData.userInputs.signature);
+                    }
+                    if (userData.userInputs['front-atis-drawing'] && pads.atis.pad) {
+                        pads.atis.pad.fromDataURL(userData.userInputs['front-atis-drawing']);
+                    }
+                    if (userData.userInputs['front-atc-drawing'] && pads.atc.pad) {
+                        pads.atc.pad.fromDataURL(userData.userInputs['front-atc-drawing']);
+                    }
+                }, 200);
+            }
+        }
+
+        // --- MIGRATION: If the OFP still has old userWaypoints/userInputs in the main record, move them to new store and remove from main ---
+        if (ofp.userWaypoints || ofp.userInputs) {
+            alert('[activateOFP] Migrating old user data to new store');
+            const oldWaypoints = ofp.userWaypoints || [];
+            const oldInputs = ofp.userInputs || {};
+            await saveOFPUserData(numericId, oldWaypoints, oldInputs);
+            // Remove from main record
+            await updateOFP(numericId, { userWaypoints: undefined, userInputs: undefined });
+        }
+
         await renderOFPMangerTable();
 
-        // ---- Step 5: Switch tab if requested ----
         if (switchTab) {
             const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
             if (summaryBtn) {
@@ -1904,10 +1957,9 @@ window.activateOFP = async function(id, switchTab = true) {
         showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
 
     } catch (error) {
-        console.error("Error activating OFP:", error);
+        alert("[activateOFP] Error activating OFP:"+ error);
         showToast(`Failed to activate OFP: ${error.message}`, 'error');
     } finally {
-        // ALWAYS reset the flag, regardless of success or failure
         isActivating = false;
     }
 };
@@ -3008,34 +3060,24 @@ window.activateOFP = async function(id, switchTab = true) {
     window.renderOFPMangerTable = async function() {
         try {
             const tbody = document.getElementById('ofp-manager-tbody');
-            if (!tbody) {
-                console.error('OFP Manager table body not found');
-                return;
-            }
+            if (!tbody) return;
 
             const ofps = await getCachedOFPs();
             const filterText = document.getElementById('ofp-search-input')?.value.toLowerCase() || '';
+            const activeId = localStorage.getItem('activeOFPId');
 
             if (ofps.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="9" style="text-align: center; padding: 30px; color: var(--dim);">
-                            No OFPs uploaded yet.<br>
-                        </td>
-                    </tr>
-                `;
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 30px; color: var(--dim);">No OFPs uploaded yet.</td></tr>`;
                 return;
             }
 
-            // Filter logic
             const filtered = ofps.filter(ofp => {
                 if (!filterText) return true;
                 const flight = (ofp.flight || '').toLowerCase();
                 const date = (ofp.date || '').toLowerCase();
                 const dep = (ofp.departure || '').toLowerCase();
                 const dest = (ofp.destination || '').toLowerCase();
-                return flight.includes(filterText) || date.includes(filterText) || 
-                    dep.includes(filterText) || dest.includes(filterText);
+                return flight.includes(filterText) || date.includes(filterText) || dep.includes(filterText) || dest.includes(filterText);
             });
 
             if (filtered.length === 0) {
@@ -3048,24 +3090,24 @@ window.activateOFP = async function(id, switchTab = true) {
                 const date = ofp.date || '—';
                 const dep = ofp.departure || '—';
                 const dest = ofp.destination || '—';
+                const isActive = String(ofp.id) === String(activeId);
 
-                // Status badge
                 let statusBadge = '';
                 if (ofp.finalized) {
                     statusBadge = `<span class="status-badge status-finalized">✓ Finalized</span>`;
                 } else {
-                    statusBadge = `<span class="status-badge ${ofp.isActive ? 'status-active' : 'status-inactive'}">
-                        ${ofp.isActive ? '✓ Active' : 'Inactive'}
+                    statusBadge = `<span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">
+                        ${isActive ? '✓ Active' : 'Inactive'}
                     </span>`;
                 }
 
-                const activateDisabled = ofp.finalized || ofp.isActive;
+                const activateDisabled = ofp.finalized || isActive;
                 const activateTitle = ofp.finalized 
                     ? 'Cannot activate – OFP is finalized' 
-                    : (ofp.isActive ? 'Already active' : 'Activate this OFP');
+                    : (isActive ? 'Already active' : 'Activate this OFP');
 
                 return `
-                    <tr data-ofp-id="${ofp.id}" ${ofp.isActive ? 'class="active-ofp-row"' : ''}>
+                    <tr data-ofp-id="${ofp.id}" ${isActive ? 'class="active-ofp-row"' : ''}>
                         <td><strong>${sanitizeHTML(flight)}</strong></td>
                         <td>${sanitizeHTML(date)}</td>
                         <td>${sanitizeHTML(dep)}</td>
@@ -3115,9 +3157,8 @@ window.activateOFP = async function(id, switchTab = true) {
                     </tr>
                 `;
             }).join('');
-            
         } catch (error) {
-            console.error('Error rendering OFP Manager table:', error);
+            alert('Error rendering OFP Manager table:', error);
             const tbody = document.getElementById('ofp-manager-tbody');
             if (tbody) {
                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 30px; color: var(--error);">
@@ -6050,11 +6091,9 @@ function applyInputMode(mode) {
     ];
 
     // 1. SAVE FUNCTION 
-    // 1. SAVE FUNCTION 
     async function saveState() {
         if (!isAppLoaded) return;
 
-        // MUST be declared before any usage
         const activeId = localStorage.getItem('activeOFPId');
         if (!activeId) {
             console.log('No active OFP, skipping save');
@@ -6062,19 +6101,12 @@ function applyInputMode(mode) {
         }
 
         // Capture waypoint user inputs
-        const userInputs = waypoints.map((wp, i) => ({
+        const userWaypoints = waypoints.map((wp, i) => ({
             ato: el(`o-a-${i}`)?.value || "",
             fuel: el(`o-f-${i}`)?.value || "",
             notes: el(`o-n-${i}`)?.value || "",
             agl: el(`o-agl-${i}`)?.value || ""
         }));
-
-        // Save waypoint inputs to IndexedDB
-        try {
-            await updateOFP(activeId, { userWaypoints: userInputs });
-        } catch (e) {
-            console.warn('❌ Failed to save waypoint inputs', e);
-        }
 
         // Prepare combined user inputs (persistent fields + drawings + signature)
         const combinedInputs = {};
@@ -6092,15 +6124,12 @@ function applyInputMode(mode) {
 
         // ATIS/ATC drawings
         if (currentAtisInputMode === 'writing') {
-
             if (pads.atis.pad && !pads.atis.pad.isEmpty()) {
                 const data = pads.atis.pad.toDataURL();
                 if (isValidDataURL(data)) {
                     combinedInputs['front-atis-drawing'] = data;
-                    // Backup to localStorage
                     localStorage.setItem(`drawing_backup_${activeId}_atis`, data);
                 } else {
-                    console.log('⚠️ Invalid ATIS drawing data, not saving');
                     combinedInputs['front-atis-drawing'] = null;
                 }
             } else {
@@ -6113,7 +6142,6 @@ function applyInputMode(mode) {
                     combinedInputs['front-atc-drawing'] = data;
                     localStorage.setItem(`drawing_backup_${activeId}_atc`, data);
                 } else {
-                    console.log('⚠️ Invalid ATC drawing data, not saving');
                     combinedInputs['front-atc-drawing'] = null;
                 }
             } else {
@@ -6129,24 +6157,22 @@ function applyInputMode(mode) {
             const data = pads.main.pad.toDataURL();
             if (isValidDataURL(data)) {
                 combinedInputs.signature = data;
-                console.log('📸 Signature captured, length:', data.length);
                 localStorage.setItem(`drawing_backup_${activeId}_signature`, data);
             } else {
-                console.warn('⚠️ Invalid signature data, not saving');
                 combinedInputs.signature = null;
             }
         } else {
             combinedInputs.signature = null;
         }
 
-        // Save combined inputs to IndexedDB
+        // Save to the new store
         try {
-            await updateOFP(activeId, { userInputs: combinedInputs });
+            await saveOFPUserData(Number(activeId), userWaypoints, combinedInputs);
         } catch (e) {
-            console.warn('❌ Failed to save user inputs', e);
+            console.warn('❌ Failed to save user data', e);
         }
 
-        // Save non‑OFP state to localStorage (encrypted + fallback)
+        // Save non‑OFP state to localStorage (encrypted + fallback) – unchanged
         const state = {
             inputs: {},
             dailyLegs: dailyLegs,
@@ -6161,7 +6187,7 @@ function applyInputMode(mode) {
             if (e) state.inputs[id] = e.value;
         });
 
-        // Fallback sync save (unencrypted)
+        // Fallback sync save
         try {
             localStorage.setItem('efb_log_state_fallback', JSON.stringify(state));
         } catch (e) {
@@ -6177,7 +6203,6 @@ function applyInputMode(mode) {
         } catch (error) {
             console.warn('Encryption save failed, relying on fallback.', error);
         }
-
     }
 
     // 2. LOAD FUNCTION 
@@ -6267,12 +6292,17 @@ function applyInputMode(mode) {
     function getDB() {
         if (!dbPromise) {
             dbPromise = new Promise((resolve, reject) => {
-                const request = indexedDB.open("EFB_PDF_DB", 8); // Version 8
+                const request = indexedDB.open("EFB_PDF_DB", 10); // Version 9
 
                 request.onupgradeneeded = function(e) {
                     const db = e.target.result;
                     const oldVersion = e.oldVersion;
                     const tx = e.target.transaction;
+
+                    if (!db.objectStoreNames.contains("ofp_user_data")) {
+                        db.createObjectStore("ofp_user_data", { keyPath: "ofpId" });
+                        console.log('Created ofp_user_data store (upgrade to v10)');
+                    }
 
                     // GUARANTEE OFPs STORE EXISTS
                     if (!db.objectStoreNames.contains("ofps")) {
@@ -6360,6 +6390,13 @@ function applyInputMode(mode) {
                             };
                         }
                     }
+                    if (oldVersion < 9) {
+                        if (!db.objectStoreNames.contains("ofp_user_data")) {
+                            const userDataStore = db.createObjectStore("ofp_user_data", { keyPath: "ofpId" });
+                            // No indexes needed – we'll access directly by ofpId
+                            console.log('Created ofp_user_data store');
+                        }
+                    }
                 };
 
                 request.onsuccess = e => resolve(e.target.result);
@@ -6413,8 +6450,7 @@ function applyInputMode(mode) {
                         tripTime: metadata.tripTime || '',
                         maxSR: metadata.maxSR || '',
                         requestNumber: metadata.requestNumber || '',
-                        userWaypoints: [],
-                        userInputs: {}
+
                     };
 
                     const addRequest = ofpsStore.add(ofpRecord);
@@ -6608,106 +6644,77 @@ async function updateOFP(id, updates) {
     }
 
     // Get active OFP
-async function getActiveOFPFromDB() {
-    const activeId = localStorage.getItem('activeOFPId');
-    if (!activeId) return null;
-
-    const db = await getDB();
-    return new Promise((resolve, reject) => {
-        const tx = db.transaction("ofps", "readonly");
-        const store = tx.objectStore("ofps");
-        const request = store.get(Number(activeId));
-        request.onsuccess = () => {
-            const ofp = request.result;
-            if (!ofp) {
-                console.warn(`Active OFP with id ${activeId} not found in DB`);
-            }
-            resolve(ofp || null);
-        };
-        request.onerror = (e) => reject(e);
-    });
-}
+    async function getActiveOFPFromDB() {
+        const activeId = localStorage.getItem('activeOFPId');
+        if (!activeId) return null;
+        return getOFPById(Number(activeId));
+    }
 
     async function setActiveOFP(id) {
-        const db = await getDB();
-        const tx = db.transaction("ofps", "readwrite");
-        const store = tx.objectStore("ofps");
-        const numericId = Number(id);
-
-        return new Promise((resolve, reject) => {
-            const request = store.openCursor();
-            request.onsuccess = (e) => {
-                const cursor = e.target.result;
-                if (cursor) {
-                    const ofp = cursor.value;
-                    const shouldBeActive = (ofp.id === numericId);
-                    if (ofp.isActive !== shouldBeActive) {
-                        ofp.isActive = shouldBeActive;
-                        
-                        // Log blob info if present
-                        if (ofp.data) {
-                            alert('[setActiveOFP] OFP data type:'+ ofp.data.constructor.name+ 'size:'+ ofp.data.size);
-                        } else {
-                            alert('[setActiveOFP] OFP has no data blob');
-                        }
-
-                        try {
-                            cursor.update(ofp);
-                            alert('[setActiveOFP] Updated OFP', ofp.id);
-                        } catch (updateError) {
-                            alert('[setActiveOFP] cursor.update failed:'+ updateError.message);
-                            reject(updateError);
-                            return;
-                        }
-                    }
-                    cursor.continue();
-                }
-            };
-            tx.oncomplete = () => {
-                localStorage.setItem('activeOFPId', numericId);
-                alert('[setActiveOFP] Transaction complete, active ID set to'+ numericId);
-                resolve();
-            };
-            tx.onerror = (e) => {
-                alert('[setActiveOFP] Transaction error:'+ e.target.error);
-                reject(e.target.error);
-            };
-        });
+        localStorage.setItem('activeOFPId', Number(id));
+        console.log(`[setActiveOFP] active ID set to ${id}`);
     }
 
     // Delete OFP by ID
-    async function deleteOFPFromDB(id) {
-        const db = await getDB();
-        const tx = db.transaction(["ofps", "ofp_orders"], "readwrite");
-        const ofpsStore = tx.objectStore("ofps");
-        const ordersStore = tx.objectStore("ofp_orders");
+async function deleteOFPFromDB(id) {
+    const db = await getDB();
+    const numericId = Number(id);
 
-        ofpsStore.delete(Number(id));
-        ordersStore.delete(Number(id));
-
-        await new Promise((resolve, reject) => {
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject(e.target.error);
-        });
+    const storesToUse = ['ofps', 'ofp_orders'];
+    if (db.objectStoreNames.contains('ofp_user_data')) {
+        storesToUse.push('ofp_user_data');
     }
+
+    const tx = db.transaction(storesToUse, "readwrite");
+    tx.objectStore('ofps').delete(numericId);
+    tx.objectStore('ofp_orders').delete(numericId);
+    if (storesToUse.includes('ofp_user_data')) {
+        tx.objectStore('ofp_user_data').delete(numericId);
+    }
+
+    await new Promise((resolve, reject) => {
+        tx.oncomplete = () => {
+            const activeId = localStorage.getItem('activeOFPId');
+            if (activeId && Number(activeId) === numericId) {
+                localStorage.removeItem('activeOFPId');
+            }
+            resolve();
+        };
+        tx.onerror = (e) => reject(e.target.error);
+    });
+}
 
     // Clear all OFPs
-    async function clearAllOFPsFromDB() {
-        const db = await getDB();
-        const tx = db.transaction(["ofps", "ofp_orders"], "readwrite");
-        const ofpsStore = tx.objectStore("ofps");
-        const ordersStore = tx.objectStore("ofp_orders");
+async function clearAllOFPsFromDB() {
+    const db = await getDB();
+    const storesToClear = [];
+    if (db.objectStoreNames.contains('ofps')) storesToClear.push('ofps');
+    if (db.objectStoreNames.contains('ofp_orders')) storesToClear.push('ofp_orders');
+    if (db.objectStoreNames.contains('ofp_user_data')) storesToClear.push('ofp_user_data');
 
-        ofpsStore.clear();
-        ordersStore.clear();
-
-        await new Promise((resolve, reject) => {
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject(e.target.error);
-        });
-
+    if (storesToClear.length === 0) {
+        alert('[clearAllOFPsFromDB] No stores to clear');
         localStorage.removeItem('activeOFPId');
+        return;
     }
+
+    const tx = db.transaction(storesToClear, "readwrite");
+    storesToClear.forEach(storeName => {
+        tx.objectStore(storeName).clear();
+    });
+
+    await new Promise((resolve, reject) => {
+        tx.oncomplete = () => {
+            localStorage.removeItem('activeOFPId');
+            alert('[clearAllOFPsFromDB] All existing stores cleared');
+            resolve();
+        };
+        tx.onerror = (e) => {
+            alert('[clearAllOFPsFromDB] Transaction error:'+ e.target.error);
+            reject(e.target.error);
+        };
+    });
+}
 
     // Check if PDF exists
     async function checkPdfInDB() {
@@ -6757,41 +6764,121 @@ async function getActiveOFPFromDB() {
         tx.objectStore("files").delete("currentOFP");
     }
 
-    async function getAllOFPMetadata() {
+async function getAllOFPMetadata() {
+    const db = await getDB();
+    if (!db.objectStoreNames.contains('ofps')) return [];
+
+    if (db.objectStoreNames.contains('ofp_orders')) {
+        const tx = db.transaction(["ofps", "ofp_orders"], "readonly");
+        const ofpsStore = tx.objectStore("ofps");
+        const ordersStore = tx.objectStore("ofp_orders");
+
+        const [ofps, orders] = await Promise.all([
+            new Promise((res, rej) => {
+                const req = ofpsStore.getAll();
+                req.onsuccess = () => res(req.result);
+                req.onerror = (e) => rej(e);
+            }),
+            new Promise((res, rej) => {
+                const req = ordersStore.getAll();
+                req.onsuccess = () => res(req.result);
+                req.onerror = (e) => rej(e);
+            })
+        ]);
+
+        const orderMap = {};
+        orders.forEach(o => { orderMap[o.id] = o.order; });
+
+        // Exclude userWaypoints and userInputs – they are no longer in ofps
+        const metadata = ofps.map(({ data, loggedPdfData, userWaypoints, userInputs, ...rest }) => ({
+            ...rest,
+            order: orderMap[rest.id] || 0
+        }));
+        metadata.sort((a, b) => (a.order || 0) - (b.order || 0));
+        return metadata;
+    } else {
+        // Fallback (should not happen)
+        return [];
+    }
+}
+
+    // Save user data for a specific OFP
+async function saveOFPUserData(ofpId, userWaypoints, userInputs) {
+    const db = await getDB();
+    if (!db.objectStoreNames.contains('ofp_user_data')) {
+        alertn('[saveOFPUserData] ofp_user_data store missing – cannot save');
+        return;
+    }
+    const tx = db.transaction("ofp_user_data", "readwrite");
+    const store = tx.objectStore("ofp_user_data");
+    store.put({ ofpId, userWaypoints, userInputs });
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e.target.error);
+    });
+}
+
+// Load user data for a specific OFP
+async function loadOFPUserData(ofpId) {
+    const db = await getDB();
+    if (!db.objectStoreNames.contains('ofp_user_data')) {
+        alertn('[loadOFPUserData] ofp_user_data store missing – returning empty');
+        return { userWaypoints: [], userInputs: {} };
+    }
+    const tx = db.transaction("ofp_user_data", "readonly");
+    const store = tx.objectStore("ofp_user_data");
+    return new Promise((resolve, reject) => {
+        const req = store.get(ofpId);
+        req.onsuccess = () => resolve(req.result || { userWaypoints: [], userInputs: {} });
+        req.onerror = (e) => reject(e.target.error);
+    });
+}
+
+    // Load user data for a specific OFP
+    async function loadOFPUserData(ofpId) {
         const db = await getDB();
-        if (!db.objectStoreNames.contains('ofps')) return [];
+        const tx = db.transaction("ofp_user_data", "readonly");
+        const store = tx.objectStore("ofp_user_data");
+        return new Promise((resolve, reject) => {
+            const req = store.get(ofpId);
+            req.onsuccess = () => resolve(req.result || { userWaypoints: [], userInputs: {} });
+            req.onerror = (e) => reject(e.target.error);
+        });
+    }
 
-        if (db.objectStoreNames.contains('ofp_orders')) {
-            const tx = db.transaction(["ofps", "ofp_orders"], "readonly");
-            const ofpsStore = tx.objectStore("ofps");
-            const ordersStore = tx.objectStore("ofp_orders");
-
-            const [ofps, orders] = await Promise.all([
-                new Promise((res, rej) => {
-                    const req = ofpsStore.getAll();
-                    req.onsuccess = () => res(req.result);
-                    req.onerror = (e) => rej(e);
-                }),
-                new Promise((res, rej) => {
-                    const req = ordersStore.getAll();
-                    req.onsuccess = () => res(req.result);
-                    req.onerror = (e) => rej(e);
-                })
-            ]);
-
-            console.log('Orders from ordersStore:', orders);
-
-            const orderMap = {};
-            orders.forEach(o => { orderMap[o.id] = o.order; });
-
-            const metadata = ofps.map(({ data, ...rest }) => ({
-                ...rest,
-                order: orderMap[rest.id] || 0
-            }));
-            metadata.sort((a, b) => (a.order || 0) - (b.order || 0));
-            return metadata;
-        } else {
-            // fallback
+    async function restoreOFPUserData(userData) {
+        if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
+            userData.userWaypoints.forEach((data, i) => {
+                if (i < waypoints.length) {
+                    if (data.ato) safeSet(`o-a-${i}`, data.ato);
+                    if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                    if (data.notes) safeSet(`o-n-${i}`, data.notes);
+                    if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+                }
+            });
+            runFlightLogCalculations();
+            syncLastWaypoint();
+        }
+        if (userData.userInputs && typeof userData.userInputs === 'object') {
+            Object.keys(userData.userInputs).forEach(id => {
+                const val = userData.userInputs[id];
+                if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') {
+                    // Handle drawings after pads are initialized (already handled elsewhere)
+                    // We'll rely on the pad restoration logic
+                } else {
+                    safeSet(id, val);
+                }
+            });
+            // Restore drawings if needed – you may need to call a separate function
+            if (userData.userInputs.signature && pads.main.pad) {
+                pads.main.pad.fromDataURL(userData.userInputs.signature);
+            }
+            if (userData.userInputs['front-atis-drawing'] && pads.atis.pad) {
+                pads.atis.pad.fromDataURL(userData.userInputs['front-atis-drawing']);
+            }
+            if (userData.userInputs['front-atc-drawing'] && pads.atc.pad) {
+                pads.atc.pad.fromDataURL(userData.userInputs['front-atc-drawing']);
+            }
         }
     }
 
