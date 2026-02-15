@@ -1,7 +1,7 @@
 (function() {
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.3";
 const RELEASE_NOTES = {
-    "2.0.4": {
+    "2.0.3": {
         title: "Release Notes",
         notes: [
             "✍️ Write or Type ATIS/ATC",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
+const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1825,6 +1825,9 @@ window.activateOFP = async function(id, switchTab = true) {
         const numericId = Number(id);
         if (isNaN(numericId)) throw new Error('Invalid OFP ID');
 
+        // ---- Step 0: Refresh cache to ensure we have the latest data ----
+        await getCachedOFPs(true);
+
         // ---- Step 1: Retrieve the OFP with retries (handle temporary unavailability) ----
         let ofpToActivate = null;
         const maxRetries = 3;
@@ -1833,7 +1836,20 @@ window.activateOFP = async function(id, switchTab = true) {
                 ofpToActivate = await getOFPById(numericId);
                 break; // success
             } catch (err) {
-                if (attempt === maxRetries) throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
+                if (attempt === maxRetries) {
+                    // Last attempt failed – try to find it by scanning all OFPs
+                    const allOFPs = await getCachedOFPs(); // already fresh
+                    const found = allOFPs.find(o => o.id === numericId);
+                    if (found) {
+                        // It exists in cache but not in direct get? That's odd, but we can use the cached metadata to attempt activation anyway
+                        console.warn('OFP found in cache but not in direct get, attempting to proceed');
+                        ofpToActivate = found; // use metadata (may not have data blob)
+                        // We'll need to fetch full data later
+                        break;
+                    } else {
+                        throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
+                    }
+                }
                 console.warn(`Attempt ${attempt} failed, retrying in 200ms...`);
                 await new Promise(resolve => setTimeout(resolve, 200));
             }
@@ -1852,7 +1868,12 @@ window.activateOFP = async function(id, switchTab = true) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             ofp = await getActiveOFPFromDB();
             if (ofp && ofp.data) break;
-            if (attempt === maxRetries) throw new Error('Failed to load OFP data after multiple attempts');
+            if (attempt === maxRetries) {
+                // Try to get by ID directly as fallback
+                ofp = await getOFPById(numericId).catch(() => null);
+                if (ofp && ofp.data) break;
+                throw new Error('Failed to load OFP data after multiple attempts');
+            }
             console.warn(`Active OFP not ready, retry ${attempt} in 200ms...`);
             await new Promise(resolve => setTimeout(resolve, 200));
         }
