@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.3";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
+const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1783,11 +1783,14 @@ const PERSISTENT_INPUT_IDS = [
         isActivating = true;
 
         try {
+            
             const numericId = Number(id);
             if (isNaN(numericId)) throw new Error('Invalid OFP ID');
+            console.log('Activating OFP with ID:', numericId);
 
             // This will throw if not found
             const ofpToActivate = await getOFPById(numericId);
+            console.log('OFP retrieved:', ofpToActivate);
             if (ofpToActivate.finalized) {
                 showToast("Cannot activate a finalized OFP", 'error');
                 return;
@@ -3050,19 +3053,39 @@ const PERSISTENT_INPUT_IDS = [
         const db = await getDB();
         const tx = db.transaction("ofps", "readwrite");
         const store = tx.objectStore("ofps");
-        
-        const ofps = await new Promise((resolve, reject) => {
-            const req = store.getAll();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = (e) => reject(e);
+
+        // Use a cursor to get only id and order
+        const ofpsLight = [];
+        await new Promise((resolve, reject) => {
+            const cursorReq = store.openCursor();
+            cursorReq.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                    ofpsLight.push({
+                        id: cursor.value.id,
+                        order: cursor.value.order || 0
+                    });
+                    cursor.continue();
+                } else {
+                    resolve();
+                }
+            };
+            cursorReq.onerror = (e) => reject(e);
         });
-        
-        ofps.sort((a, b) => (a.order || 0) - (b.order || 0));
-        ofps.forEach((ofp, idx) => {
-            ofp.order = idx + 1;
+
+        ofpsLight.sort((a, b) => a.order - b.order);
+
+        // Now update each record with the new order
+        for (let i = 0; i < ofpsLight.length; i++) {
+            const ofp = await new Promise((res, rej) => {
+                const req = store.get(ofpsLight[i].id);
+                req.onsuccess = () => res(req.result);
+                req.onerror = (e) => rej(e);
+            });
+            ofp.order = i + 1;
             store.put(ofp);
-        });
-        
+        }
+
         await new Promise((resolve, reject) => {
             tx.oncomplete = resolve;
             tx.onerror = (e) => reject(e.target.error);
@@ -3088,46 +3111,69 @@ const PERSISTENT_INPUT_IDS = [
             if (isNaN(numericId)) throw new Error('Invalid ID');
 
             const db = await getDB();
-            const tx = db.transaction("ofps", "readwrite");
-            const store = tx.objectStore("ofps");
 
-            // Get all OFPs
-            const allOfps = await new Promise((resolve, reject) => {
-                const req = store.getAll();
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = (e) => reject(e);
+            // Step 1: read only id and order for all OFPs (no blob)
+            const tx1 = db.transaction("ofps", "readonly");
+            const store1 = tx1.objectStore("ofps");
+            const ofpsLight = [];
+            await new Promise((resolve, reject) => {
+                const cursorReq = store1.openCursor();
+                cursorReq.onsuccess = (e) => {
+                    const cursor = e.target.result;
+                    if (cursor) {
+                        ofpsLight.push({
+                            id: cursor.value.id,
+                            order: cursor.value.order || 0
+                        });
+                        cursor.continue();
+                    } else {
+                        resolve();
+                    }
+                };
+                cursorReq.onerror = (e) => reject(e);
             });
 
-            // Sort by current order
-            allOfps.sort((a, b) => (a.order || 0) - (b.order || 0));
+            ofpsLight.sort((a, b) => a.order - b.order);
 
-            const index = allOfps.findIndex(o => o.id === numericId);
-            if (index === -1) {
-                throw new Error(`OFP with id ${numericId} not found`);
-            }
+            const index = ofpsLight.findIndex(o => o.id === numericId);
+            if (index === -1) throw new Error(`OFP with id ${numericId} not found`);
 
             const swapIndex = index + direction;
-            if (swapIndex < 0 || swapIndex >= allOfps.length) return; // no change
+            if (swapIndex < 0 || swapIndex >= ofpsLight.length) return; // no change
 
-            // Swap order values
-            const tempOrder = allOfps[index].order;
-            allOfps[index].order = allOfps[swapIndex].order;
-            allOfps[swapIndex].order = tempOrder;
+            const id1 = ofpsLight[index].id;
+            const id2 = ofpsLight[swapIndex].id;
 
-            // Put updated records
-            store.put(allOfps[index]);
-            store.put(allOfps[swapIndex]);
+            // Step 2: fetch the two full records (with blob)
+            const tx2 = db.transaction("ofps", "readwrite");
+            const store2 = tx2.objectStore("ofps");
 
-            // Wait for transaction to complete
-            await new Promise((resolve, reject) => {
-                tx.oncomplete = resolve;
-                tx.onerror = (e) => reject(e.target.error);
+            const ofp1 = await new Promise((res, rej) => {
+                const req = store2.get(id1);
+                req.onsuccess = () => res(req.result);
+                req.onerror = (e) => rej(e);
+            });
+            const ofp2 = await new Promise((res, rej) => {
+                const req = store2.get(id2);
+                req.onsuccess = () => res(req.result);
+                req.onerror = (e) => rej(e);
             });
 
-            // Renumber all orders to ensure consistency
+            // Swap orders
+            [ofp1.order, ofp2.order] = [ofp2.order, ofp1.order];
+
+            store2.put(ofp1);
+            store2.put(ofp2);
+
+            await new Promise((resolve, reject) => {
+                tx2.oncomplete = resolve;
+                tx2.onerror = (e) => reject(e.target.error);
+            });
+
+            // Step 3: renumber all orders (optional but keeps them consecutive)
             await renumberOFPOrders();
 
-            // Refresh cache and table
+            // Step 4: refresh cache and table
             await getCachedOFPs(true);
             await renderOFPMangerTable();
 
@@ -5924,15 +5970,11 @@ function applyInputMode(mode) {
 
         // ATIS/ATC drawings
         if (currentAtisInputMode === 'writing') {
-            console.log('saveState: currentAtisInputMode = writing');
-            console.log('saveState: pads.atis.pad exists?', !!pads.atis.pad);
-            console.log('saveState: pads.atis.pad.isEmpty()?', pads.atis.pad ? pads.atis.pad.isEmpty() : 'N/A');
 
             if (pads.atis.pad && !pads.atis.pad.isEmpty()) {
                 const data = pads.atis.pad.toDataURL();
                 if (isValidDataURL(data)) {
                     combinedInputs['front-atis-drawing'] = data;
-                    console.log('📸 ATIS drawing captured, length:', data.length);
                     // Backup to localStorage
                     localStorage.setItem(`drawing_backup_${activeId}_atis`, data);
                 } else {
@@ -5947,7 +5989,6 @@ function applyInputMode(mode) {
                 const data = pads.atc.pad.toDataURL();
                 if (isValidDataURL(data)) {
                     combinedInputs['front-atc-drawing'] = data;
-                    console.log('📸 ATC drawing captured, length:', data.length);
                     localStorage.setItem(`drawing_backup_${activeId}_atc`, data);
                 } else {
                     console.log('⚠️ Invalid ATC drawing data, not saving');
