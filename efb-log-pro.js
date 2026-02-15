@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.3";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
+const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1824,16 +1824,37 @@ const PERSISTENT_INPUT_IDS = [
             const numericId = Number(id);
             if (isNaN(numericId)) throw new Error('Invalid OFP ID');
 
-            // Get OFP by ID – this throws if not found
-            const ofpToActivate = await getOFPById(numericId);
+            // First, try to get the OFP with retry (in case of temporary unavailability)
+            let ofpToActivate = null;
+            let retries = 3;
+            while (retries > 0) {
+                try {
+                    ofpToActivate = await getOFPById(numericId);
+                    break; // success
+                } catch (err) {
+                    retries--;
+                    if (retries === 0) throw err;
+                    console.warn(`Retrying getOFPById for ${numericId}, attempts left: ${retries}`);
+                    await new Promise(resolve => setTimeout(resolve, 100)); // wait 100ms
+                }
+            }
+
             if (ofpToActivate.finalized) {
                 showToast("Cannot activate a finalized OFP", 'error');
                 return;
             }
 
             await setActiveOFP(numericId);
-            const ofp = await getActiveOFPFromDB(); // This gets the active OFP after setting
-            if (!ofp) throw new Error('Failed to load OFP data');
+
+            // After setting active, get the full OFP again (it should now be active)
+            const ofp = await getActiveOFPFromDB();
+            if (!ofp || !ofp.data) {
+                // Try to get it by ID directly
+                const direct = await getOFPById(numericId);
+                if (!direct || !direct.data) throw new Error('Failed to load OFP data');
+                // Use direct
+                ofp = direct;
+            }
 
             // Clear existing data
             if (typeof clearOFPInputs === 'function') clearOFPInputs();
@@ -3191,6 +3212,9 @@ const PERSISTENT_INPUT_IDS = [
                 tx2.oncomplete = () => resolve();
                 tx2.onerror = (e) => reject(e.target.error);
             });
+
+            // Wait a tiny bit to ensure transaction fully committed
+            await new Promise(resolve => setTimeout(resolve, 50));
 
             await getCachedOFPs(true);
             await renderOFPMangerTable();
@@ -6534,7 +6558,6 @@ function applyInputMode(mode) {
 
     async function findOFPByFlightAndDate(flight, date) {
         if (!flight || !date || flight === 'N/A' || date === 'N/A') return null;
-        // Ensure flight is a string
         const flightStr = String(flight);
         const db = await getDB();
         return new Promise((resolve, reject) => {
@@ -6556,13 +6579,19 @@ function applyInputMode(mode) {
     async function getActiveOFPFromDB() {
         const activeId = localStorage.getItem('activeOFPId');
         if (!activeId) return null;
-        
+
         const db = await getDB();
         return new Promise((resolve, reject) => {
             const tx = db.transaction("ofps", "readonly");
             const store = tx.objectStore("ofps");
             const request = store.get(Number(activeId));
-            request.onsuccess = () => resolve(request.result);
+            request.onsuccess = () => {
+                const ofp = request.result;
+                if (!ofp) {
+                    console.warn(`Active OFP with id ${activeId} not found in DB`);
+                }
+                resolve(ofp || null);
+            };
             request.onerror = (e) => reject(e);
         });
     }
