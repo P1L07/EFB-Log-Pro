@@ -1,5 +1,5 @@
 (function() {
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.3";
 const RELEASE_NOTES = {
     "2.0.4": {
         title: "Release Notes",
@@ -29,7 +29,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
 const AUDIT_LOG_KEY = 'efb_audit_log';
 const MAX_LOG_ENTRIES = 1000;
-const EXPECTED_SW_HASH = '43c3ee5e095f8a16ccf0e5677a19a68920d243eed6d2f64857243571eeff1a22';
+const EXPECTED_SW_HASH = '473aff4b0683319fb3eb4049c48dbe0f0a98c3529d645dbc31856c1f6cb8dd14';
 const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
 const PERSISTENT_INPUT_IDS = [
     'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -6152,8 +6152,8 @@ function applyInputMode(mode) {
     function getDB() {
         if (!dbPromise) {
             dbPromise = new Promise((resolve, reject) => {
-                const request = indexedDB.open("EFB_PDF_DB", 7); // Version 7
-                
+                const request = indexedDB.open("EFB_PDF_DB", 8); // Version 8
+
                 request.onupgradeneeded = function(e) {
                     const db = e.target.result;
                     const oldVersion = e.oldVersion;
@@ -6229,12 +6229,11 @@ function applyInputMode(mode) {
                             });
                         };
                     }
+                    // Version 8: create ofp_orders store and copy existing orders
                     if (oldVersion < 8) {
-                        // Create orders store
                         if (!db.objectStoreNames.contains("ofp_orders")) {
                             const orderStore = db.createObjectStore("ofp_orders", { keyPath: "id" });
                             // Copy existing orders from ofps store
-                            const tx = e.target.transaction;
                             const ofpsStore = tx.objectStore("ofps");
                             const ordersStore = tx.objectStore("ofp_orders");
                             const getAllReq = ofpsStore.getAll();
