@@ -43,47 +43,6 @@
     }
 }
 
-/* Empty state upload - inside panels */
-.empty-state-upload {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 400px;
-    gap: 20px;
-    padding: 40px;
-}
-
-.empty-state-upload .upload-center-btn {
-    width: 150px;
-    height: 150px;
-    font-size: 36px;
-    animation: pulse 2s infinite;
-}
-
-/* Center button styling */
-.upload-center-btn {
-    width: 200px;
-    height: 200px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, var(--accent), #5ac8fa);
-    color: white;
-    border: none;
-    font-size: 48px;
-    cursor: pointer;
-    box-shadow: 0 10px 40px rgba(0, 132, 255, 0.4);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    gap: 10px;
-    transition: all 0.3s ease;
-}
-
-.upload-center-btn:hover {
-    transform: scale(1.1);
-    box-shadow: 0 15px 50px rgba(0, 132, 255, 0.6);
-}
 
 .upload-center-btn span {
     font-size: 16px;
@@ -347,6 +306,23 @@ td{padding:12px;border-bottom:1px solid var(--border);font-size:14px}
 canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px solid var(--border)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
 
+.btn-tab {
+    padding: 10px 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--dim);
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex: 0 1 auto;
+}
+.btn-tab.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
 .btn-icon {
     background: #e5e5ea;
     border: none;
@@ -371,6 +347,11 @@ canvas{width:100%;height:200px;background:#fff;border-radius:12px;border:1px sol
 #clear-atis-btn,
 #clear-atc-btn {
     display: none;
+}
+
+
+#journey-table-container[hidden] {
+    display: none !important;
 }
 
 /* Show only in writing mode */
@@ -486,11 +467,11 @@ button:disabled,
 }
 
 /* Table enhancements */
-#ofp-manager-table td {
+#file-manager-table td {
     vertical-align: middle;
 }
 
-#ofp-manager-table .btn-icon {
+#file-manager-table .btn-icon {
     margin: 0 2px;
 }
 
@@ -699,13 +680,14 @@ button:disabled,
 <body>
 
 <div id="upload-overlay" class="upload-overlay hidden">
-    <button class="upload-center-btn" onclick="document.getElementById('ofp-file-in').click()">
-        📁
-        <span>Upload OFPs</span>
-    </button>
-    <div style="position: absolute; bottom: 50px; color: var(--dim); text-align: center; width: 100%;">
-        <p>Drop multiple OFPs anywhere or click to browse</p>
-        <p style="font-size: 12px; margin-top: 5px;">Support questions janri.kallas@gmail.com</p>
+    <div style="max-width: 500px; width: 100%; background: var(--panel); border-radius: 20px; padding: 40px 30px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); border: 1px solid var(--border); text-align: center;">
+        <span style="font-size: 80px; display: block; margin-bottom: 20px; line-height: 1;">📁</span>
+        <h2 style="color: var(--text); margin: 0 0 10px; font-size: 28px;">No OFPs Uploaded</h2>
+        <p style="color: var(--dim); margin: 0 0 30px; font-size: 16px; line-height: 1.6;">
+            Upload your first Operational Flight Plan to get started.<br>
+            You can also drop multiple PDFs anywhere on this screen.
+        </p>
+        <button onclick="document.getElementById('ofp-file-in').click()" style="background: var(--accent); color: white; border: none; padding: 15px 40px; border-radius: 50px; font-weight: 600; font-size: 18px; cursor: pointer; box-shadow: 0 8px 20px rgba(0,132,255,0.4); transition: transform 0.2s, box-shadow 0.2s;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 12px 28px rgba(0,132,255,0.6)';" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 8px 20px rgba(0,132,255,0.4)';">Upload OFP</button>
     </div>
 </div>
 
@@ -722,7 +704,7 @@ button:disabled,
         <button class="nav-btn" data-tab="paper">Paper Flight Plan</button>
         <button class="nav-btn" data-tab="journey">Journey Log</button>
         <button class="nav-btn" data-tab="confirm">Finalize OFP</button>
-        <button class="nav-btn" data-tab="sectors">OFP Manager</button>
+        <button class="nav-btn" data-tab="sectors">File Manager</button>
         <button class="nav-btn" data-tab="settings">Settings</button>
     </div>
         <div class="sidebar-footer">
@@ -730,48 +712,8 @@ button:disabled,
         </div>
     </aside>
 <input type="file" id="ofp-file-in" style="display:none" multiple accept=".pdf">
-
     <main class="main-content">
-        <section id="section-sectors" class="tool-section">
-            <div class="ofp-search" style="margin-bottom: 15px;">
-                <input type="text" id="ofp-search-input" class="input" 
-                    placeholder="🔍 Filter by flight, date, departure or destination..." 
-                    oninput="filterOFPs()">
-            </div>
-            
-            <div class="table-container">
-                <table id="ofp-manager-table">
-                    <thead>
-                        <tr>
-                            <th>Flight</th>
-                            <th>Date</th>
-                            <th>Departure</th>
-                            <th>Destination</th>
-                            <th>Trip</th>
-                            <th>Max SR</th>
-                            <th>Request #</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="ofp-manager-tbody">
-                        <!-- dynamic content -->
-                    </tbody>
-                </table>
-            </div>
-            <div class="btn-group" style="margin-top: 20px;">
-                <button onclick="document.getElementById('ofp-file-in').click()" 
-                        class="btn btn-save">
-                    📁 Upload New OFP
-                </button>
-                <button onclick="clearAllOFPs()" 
-                        class="btn btn-danger">
-                    🗑️ Clear All
-                </button>
-            </div>
-        </section>
         <section id="section-summary" class="tool-section">
-
             <div class="panel">
                 <div class="grid-row">
                     <div class="field"><label>Flight</label><div id="view-flt" class="data-box">-</div></div>
@@ -826,116 +768,113 @@ button:disabled,
                 </div>
             </div>
         </section>
+        <section id="section-weights-fuel" class="tool-section">
+            <div class="panel">
+                <div class="grid-row" style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:15px">
+                    <div class="field"><label>MTOW</label><div id="view-mtow" class="data-box">-</div></div>
+                    <div class="field"><label>TOW</label><div id="view-tow" class="data-box">-</div></div>
+                    <div class="field"><label>MZFW</label><div id="view-mzfw" class="data-box">-</div></div>
+                    <div class="field"><label>ZFW</label><div id="view-zfw" class="data-box">-</div></div>
+                    <div class="field"><label>MLW</label><div id="view-mlw" class="data-box">-</div></div>
+                    <div class="field"><label>LW</label><div id="view-lw" class="data-box">-</div></div>
+                    <div class="field"><label>MPLD</label><div id="view-mpld" class="data-box">-</div></div>
+                    <div class="field"><label>PLD</label><div id="view-pld" class="data-box">-</div></div>
+                    <div class="field"><label>FCAP</label><div id="view-fcap" class="data-box">-</div></div>
+                    <div class="field"><label>DOW</label><div id="view-dow" class="data-box">-</div></div>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>Item</th><th>Time</th><th>Fuel (kg)</th><th>Remarks</th></tr></thead>
+                        <tbody id="fuel-tbody">
+                            <tr><td colspan="4" style="text-align:center;color:gray;padding:20px">Upload OFP to load fuel data</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+            <div class="field">
+                <label>Extra Fuel (kg)</label>
+                <input id="front-extra-kg" class="input" readonly style="background:transparent; border:none; color:var(--dim); font-weight:bold; padding-left:0;">
+            </div>
+            
+            <div class="field">
+                <label>Reason for Extra</label>
+                <input id="front-extra-reason" class="input">
+            </div>
+        </div>
 
-<section id="section-weights-fuel" class="tool-section">
-    <div class="panel">
-        <div class="grid-row" style="margin-bottom:15px; border-bottom:1px solid var(--border); padding-bottom:15px">
-            <div class="field"><label>MTOW</label><div id="view-mtow" class="data-box">-</div></div>
-            <div class="field"><label>TOW</label><div id="view-tow" class="data-box">-</div></div>
-            <div class="field"><label>MZFW</label><div id="view-mzfw" class="data-box">-</div></div>
-            <div class="field"><label>ZFW</label><div id="view-zfw" class="data-box">-</div></div>
-            <div class="field"><label>MLW</label><div id="view-mlw" class="data-box">-</div></div>
-            <div class="field"><label>LW</label><div id="view-lw" class="data-box">-</div></div>
-            <div class="field"><label>MPLD</label><div id="view-mpld" class="data-box">-</div></div>
-            <div class="field"><label>PLD</label><div id="view-pld" class="data-box">-</div></div>
-            <div class="field"><label>FCAP</label><div id="view-fcap" class="data-box">-</div></div>
-            <div class="field"><label>DOW</label><div id="view-dow" class="data-box">-</div></div>
-        </div>
-        <div class="table-container">
-            <table>
-                <thead><tr><th>Item</th><th>Time</th><th>Fuel (kg)</th><th>Remarks</th></tr></thead>
-                <tbody id="fuel-tbody">
-                    <tr><td colspan="4" style="text-align:center;color:gray;padding:20px">Upload OFP to load fuel data</td></tr>
-                </tbody>
-            </table>
-        </div>
-    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-    <div class="field">
-        <label>Extra Fuel (kg)</label>
-        <input id="front-extra-kg" class="input" readonly style="background:transparent; border:none; color:var(--dim); font-weight:bold; padding-left:0;">
-    </div>
-    
-    <div class="field">
-        <label>Reason for Extra</label>
-        <input id="front-extra-reason" class="input">
-    </div>
-</div>
-
-    <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-        <div class="field">
-            <label>Burn Increase per 1T</label>
-            <div id="view-burn-inc" class="data-box">32 kg</div>
-        </div>
-        
-        <div class="field">
-            <label>PIC Block Fuel</label>
-            <input id="view-pic-block" class="input" type="tel" pattern="\d*" 
-                style="color:var(--accent); font-weight:bold; font-size:18px;" 
-                oninput="calculateExtraFromTotal()">
-        </div>
-    </div>
-</section>
-
-<section id="section-log" class="tool-section">
-    <div class="panel" style="margin-top: 0; ">
-        <div class="table-container">
-            <input type="time" id="ofp-atd-in" style="display: none">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="min-width:60px">WAYPOINT</th>
-                        <th style="width:50px">AWY</th>
-                        <th style="width:40px">SR</th>
-                        <th style="width:40px">FL</th>
-                        <th style="width:40px">TRK</th>
-                        <th style="width:60px">WIND</th>
-                        <th style="width:40px">TAS</th>
-                        <th style="width:40px">GS</th>
-                        <th style="min-width:100px">NOTES</th>
-                        <th>ETO</th>
-                        <th>ATO</th>
-                        <th>EFOB</th>
-                        <th>AFOB</th>
-                        <th>ACT FL</th>
-                    </tr>
-                </thead>
-                <tbody id="ofp-tbody"></tbody>
-            </table>
-        </div>
-        <p style="text-align:center; font-size:11px; color:gray; margin-top:10px;">
-            Last Waypoint inputs will auto-fill Journey Log.
-        </p>
-    </div>
-</section>
-
-<section id="section-altn" class="tool-section">
-    <div class="panel">
-        <h3>Alternate Route</h3>
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="min-width:60px">WAYPOINT</th>
-                        <th style="width:50px">AWY</th>
-                        <th style="width:40px">SR</th>
-                        <th style="width:40px">FL</th>
-                        <th style="width:40px">TRK</th>
-                        <th style="width:60px">WIND</th>
-                        <th style="width:40px">TAS</th>
-                        <th style="width:40px">GS</th>
-                        <th style="min-width:100px">NOTES</th>
-                        <th>ETO</th>
-                        <th>ATO</th>
-                        <th>EFOB</th>
-                        <th>AFOB</th>
-                        <th>ACT FL</th>
-                    </tr>
-                </thead>
-                <tbody id="altn-tbody"></tbody>
-            </table>
-        </div>
-    </div>
-</section>
+            <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
+                <div class="field">
+                    <label>Burn Increase per 1T</label>
+                    <div id="view-burn-inc" class="data-box">32 kg</div>
+                </div>
+                
+                <div class="field">
+                    <label>PIC Block Fuel</label>
+                    <input id="view-pic-block" class="input" type="tel" pattern="\d*" 
+                        style="color:var(--accent); font-weight:bold; font-size:18px;" 
+                        oninput="calculateExtraFromTotal()">
+                </div>
+            </div>
+        </section>
+        <section id="section-log" class="tool-section">
+            <div class="panel" style="margin-top: 0; ">
+                <div class="table-container">
+                    <input type="time" id="ofp-atd-in" style="display: none">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="min-width:60px">WAYPOINT</th>
+                                <th style="width:50px">AWY</th>
+                                <th style="width:40px">SR</th>
+                                <th style="width:40px">FL</th>
+                                <th style="width:40px">TRK</th>
+                                <th style="width:60px">WIND</th>
+                                <th style="width:40px">TAS</th>
+                                <th style="width:40px">GS</th>
+                                <th style="min-width:100px">NOTES</th>
+                                <th>ETO</th>
+                                <th>ATO</th>
+                                <th>EFOB</th>
+                                <th>AFOB</th>
+                                <th>ACT FL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ofp-tbody"></tbody>
+                    </table>
+                </div>
+                <p style="text-align:center; font-size:11px; color:gray; margin-top:10px;">
+                    Last Waypoint inputs will auto-fill Journey Log.
+                </p>
+            </div>
+        </section>
+        <section id="section-altn" class="tool-section">
+            <div class="panel">
+                <h3>Alternate Route</h3>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="min-width:60px">WAYPOINT</th>
+                                <th style="width:50px">AWY</th>
+                                <th style="width:40px">SR</th>
+                                <th style="width:40px">FL</th>
+                                <th style="width:40px">TRK</th>
+                                <th style="width:60px">WIND</th>
+                                <th style="width:40px">TAS</th>
+                                <th style="width:40px">GS</th>
+                                <th style="min-width:100px">NOTES</th>
+                                <th>ETO</th>
+                                <th>ATO</th>
+                                <th>EFOB</th>
+                                <th>AFOB</th>
+                                <th>ACT FL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="altn-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
         <section id="section-weather" class="tool-section">
             <div class="panel">
                 <h3>Weather Information</h3>
@@ -944,7 +883,6 @@ button:disabled,
                 </div>
             </div>
         </section>
-
         <section id="section-notams" class="tool-section">
             <div class="panel">
                 <h3>NOTAMS Information</h3>
@@ -953,26 +891,26 @@ button:disabled,
                 </div>
             </div>
         </section>
-<section id="section-paper" class="tool-section">
-    <div class="panel" style="height: 85vh; padding: 0; overflow: hidden; background: #525659;">
-        <div id="pdf-render-container" style="height: 100%; overflow-y: auto; padding: 20px; text-align: center; display: none;">
-            <!-- PDF will be rendered here -->
-        </div>
-        <div id="pdf-fallback" style="display:flex; justify-content:center; align-items:center; height:100%; color:#ccc; flex-direction:column;">
-            <div id="empty-state-upload" class="empty-state-upload" style="display: none;">
-                <div style="font-size: 48px; color: #ccc;">📄</div>
-                <h3 style="color: #ccc;">No OFP Uploaded</h3>
-                <p style="color: #ccc; text-align: center; max-width: 300px;">
-                    Upload your Operational Flight Plan to view it here
-                </p>
-                <button class="upload-center-btn" onclick="document.getElementById('ofp-file-in').click()">
-                    📁
-                    <span>Upload</span>
-                </button>
+        <section id="section-paper" class="tool-section">
+            <div class="panel" style="height: 85vh; padding: 0; overflow: hidden; background: #525659;">
+                <div id="pdf-render-container" style="height: 100%; overflow-y: auto; padding: 20px; text-align: center; display: none;">
+                    <!-- PDF will be rendered here -->
+                </div>
+                <div id="pdf-fallback" style="display:flex; justify-content:center; align-items:center; height:100%; color:#ccc; flex-direction:column;">
+                    <div id="empty-state-upload" class="empty-state-upload" style="display: none;">
+                        <div style="font-size: 48px; color: #ccc;">📄</div>
+                        <h3 style="color: #ccc;">No OFP Uploaded</h3>
+                        <p style="color: #ccc; text-align: center; max-width: 300px;">
+                            Upload your Operational Flight Plan to view it here
+                        </p>
+                        <button class="upload-center-btn" onclick="document.getElementById('ofp-file-in').click()">
+                            📁
+                            <span>Upload</span>
+                        </button>
+                    </div>
+                </div>
             </div>
-        </div>
-    </div>
-</section>
+        </section>
         <section id="section-journey" class="tool-section">
             <input type="hidden" id="j-flt"><input type="hidden" id="j-reg"><input type="hidden" id="j-date">
             <input type="hidden" id="j-dep"><input type="hidden" id="j-dest"><input type="hidden" id="j-altn">
@@ -1035,10 +973,9 @@ button:disabled,
                 <div class="table-container" style="margin-bottom:10px">
                     <table>
                         <thead>
-                            <tr><th>#</th><th>Flt No</th><th>Route</th><th>FDP</th></tr>
+                            <tr><th>#</th><th>Flt No</th><th>Route</th><th style="text-align: right;">Actions</th></tr>
                         </thead>
                         <tbody id="journey-list-body">
-                            <tr><td colspan="5" style="text-align:center; color:gray; padding:20px;">No legs.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1072,15 +1009,6 @@ button:disabled,
         <input type="number" id="j-cc-count" class="input" value="4" min="0" max="10">
     </div>
     </div>
-<div class="panel" style="margin-top:15px;">
-    <div class="field" margin-top:10px;>
-        <label>Upload Journey Log</label>
-        <input type="file" id="journey-log-file" class="input" accept=".pdf">
-    </div>
-    <p style="font-size:12px;color:var(--dim);margin-top:10px;">
-        Upload the official journey log PDF template. Data will be filled into this template.
-    </p>
-</div>
 <div class="btn-group" style="margin-top: 20px;">
     <button class="btn btn-save" onclick="downloadJourneyLog('email')">
         Finalize Journey Log
@@ -1097,7 +1025,6 @@ button:disabled,
 </div>
             </div>
         </section>
-
         <section id="section-confirm" class="tool-section">
             <div class="panel">
                 <h3>Crosscheck Before Saving OFP</h3>
@@ -1112,6 +1039,70 @@ button:disabled,
                 </div>
                 <div class="btn-group">
                     <button id="btn-send-ofp" class="btn btn-save" onclick="DownloadOFP('email')" disabled>Finalize OFP</button>
+                </div>
+            </div>
+        </section>
+        <section id="section-sectors" class="tool-section">
+            <!-- Tab buttons -->
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <button id="tab-ofp" class="btn-tab active">📋 OFP List</button>
+                <button id="tab-journey" class="btn-tab">📓 Journey Logs</button>
+            </div>
+
+            <!-- OFP table container -->
+            <div id="ofp-table-container">
+                <div class="ofp-search" style="margin-bottom: 15px;">
+                    <input type="text" id="ofp-search-input" class="input" 
+                        placeholder="🔍 Filter by flight, date, departure or destination..." 
+                        oninput="filterOFPs()">
+                </div>
+                <div class="table-container">
+                    <table id="file-manager-table">
+                        <thead>
+                            <tr>
+                                <th>Flight</th>
+                                <th>Date</th>
+                                <th>Departure</th>
+                                <th>Destination</th>
+                                <th>Trip</th>
+                                <th>Max SR</th>
+                                <th>Request #</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ofp-manager-tbody">
+                            <!-- dynamic content -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="btn-group" style="margin-top: 20px;">
+                    <button onclick="document.getElementById('ofp-file-in').click()" class="btn btn-save">
+                        📁 Upload New OFP
+                    </button>
+                    <button onclick="clearAllOFPs()" class="btn btn-danger">
+                        🗑️ Clear All
+                    </button>
+                </div>
+            </div>
+
+            <!-- Journey Log table container (initially hidden) -->
+            <div id="journey-table-container" hidden>
+                <div class="table-container">
+                    <table id="journey-log-table">
+                        <thead>
+                            <tr>
+                                <th>Flight</th>
+                                <th>Date</th>
+                                <th>Legs</th>
+                                <th>Finalized</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="journey-log-tbody">
+                            <!-- populated dynamically -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </section>
@@ -1257,6 +1248,6 @@ button:disabled,
 <script src="pdf-lib.min.js"></script>
 <script src="pdf.min.js"></script>
 <script src="signature_pad.umd.min.js"></script>
-<script src="efb-log-pro.js?v=2.0.6"></script>
+<script src="efb-log-pro.js?v=2.0.7"></script>
 </body>
 </html>
