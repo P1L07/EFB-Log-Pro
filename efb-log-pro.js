@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.0.8";
+    const APP_VERSION = "2.0.7";
     const RELEASE_NOTES = {
-        "2.0.8": {
+        "2.0.7": {
             title: "Release Notes",
             notes: [
                 "📋 Finalized Journey logs and OFPs are being saved",
@@ -34,7 +34,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'f05341ec9ba85e436dd83997558a520bdd1cf8dda7ffb3e3c8dcdf4616919655';
+    const EXPECTED_SW_HASH = 'bde80d329d5b6d075fdd24e0262600815fde794df01248a52908a8afe4d9bc45';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -5581,37 +5581,32 @@
         return new Promise((resolve) => {
             const input = document.createElement('input');
             input.type = 'file';
-            input.accept = '.pdf';
+            input.accept = 'application/pdf'; // Stricter accept type helps iOS
             input.style.display = 'none';
             document.body.appendChild(input);
 
             input.addEventListener('change', async () => {
                 const file = input.files[0];
-                document.body.removeChild(input);
-                if (file) {
-                    const buffer = await file.arrayBuffer();
-                    const blob = new Blob([buffer], { type: 'application/pdf' });
-                    await saveJourneyTemplateToDB(blob);
-                    resolve(buffer);
+                
+                // CLEANUP IMMEDIATELY to free DOM reference
+                if (document.body.contains(input)) {
+                    document.body.removeChild(input);
                 }
-            });
 
-            input.addEventListener('cancel', () => {
-                document.body.removeChild(input);
-                resolve(null);
-            });
+                if (file) {
+                    try {
 
-            window.addEventListener('focus', function onFocus() {
-                setTimeout(() => {
-                    if (!input.files.length) {
-                        window.removeEventListener('focus', onFocus);
-                        if (document.body.contains(input)) {
-                            document.body.removeChild(input);
-                        }
+                        await saveJourneyTemplateToDB(file);
+                        const buffer = await file.arrayBuffer();
+                        resolve(buffer); 
+                    } catch (e) {
+                        alert("Error saving file: " + e.message);
                         resolve(null);
                     }
-                }, 300);
-            }, { once: true });
+                } else {
+                    resolve(null);
+                }
+            });
 
             input.click();
         });
@@ -6976,43 +6971,39 @@
         }
     };
 
-    async function saveJourneyTemplateToDB(blob) {
-        alert('Saving journey template to DB, size:', blob.size);
+    async function saveJourneyTemplateToDB(fileBlob) {
         const db = await getDB();
         const tx = db.transaction("files", "readwrite");
         const store = tx.objectStore("files");
-        store.put(blob, "journeyTemplate");
+        
+        store.put(fileBlob, "journeyTemplate");
+        
         return new Promise((resolve, reject) => {
             tx.oncomplete = () => {
-                alert('Journey template saved successfully');
                 resolve();
             };
             tx.onerror = (e) => {
-                alert('Failed to save journey template', e);
+                alert('DB Write Failed: ' + e.target.error);
                 reject(e);
             };
         });
     }
 
     async function loadJourneyTemplateFromDB() {
-        alert('Loading journey template from DB');
         const db = await getDB();
         const tx = db.transaction("files", "readonly");
         const store = tx.objectStore("files");
+        
         return new Promise((resolve, reject) => {
             const req = store.get("journeyTemplate");
             req.onsuccess = () => {
                 if (req.result) {
-                    alert('Journey template found in DB, size:', req.result.size);
+                    resolve(req.result); 
                 } else {
-                    alert('No journey template in DB');
+                    resolve(null);
                 }
-                resolve(req.result);
             };
-            req.onerror = (e) => {
-                alert('Error loading journey template', e);
-                reject(e);
-            };
+            req.onerror = (e) => reject(e);
         });
     }
 
