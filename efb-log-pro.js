@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.0.8";
+    const APP_VERSION = "2.0.7";
     const RELEASE_NOTES = {
-        "2.0.8": {
+        "2.0.7": {
             title: "Release Notes",
             notes: [
                 "📋 Finalized Journey logs and OFPs are being saved",
@@ -34,7 +34,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'f05341ec9ba85e436dd83997558a520bdd1cf8dda7ffb3e3c8dcdf4616919655';
+    const EXPECTED_SW_HASH = 'bde80d329d5b6d075fdd24e0262600815fde794df01248a52908a8afe4d9bc45';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1422,21 +1422,14 @@
             };
         }
         
-        // Journey Log Template Upload (now in File Manager tab)
-        const journeyTemplateInput = document.getElementById('journey-log-template');
-        if (journeyTemplateInput) {
-            journeyTemplateInput.addEventListener('change', async function(e) {
-                const file = e.target.files[0];
-                if (file) {
-                    try {
-                        journeyLogTemplateBytes = await file.arrayBuffer();
-                        showToast('Journey log template loaded', 'success');
-                    } catch (error) {
-                        console.error('Failed to load template:', error);
-                        showToast('Failed to load template', 'error');
-                    }
-                }
-            });
+        // Restore journey log template from IndexedDB if available
+        try {
+            const templateBlob = await loadJourneyTemplateFromDB();
+            if (templateBlob) {
+                journeyLogTemplateBytes = await templateBlob.arrayBuffer();
+            }
+        } catch (e) {
+            console.warn('Failed to load journey template from DB', e);
         }
         
         // REAL-TIME CALCULATION LISTENERS (debounced)
@@ -5567,7 +5560,6 @@
 // ==========================================
 
     async function requestJourneyLogTemplate() {
-        // Show explanation modal
         const confirmed = await createModal({
             title: 'Journey Log Template Required',
             message: '<div style="text-align:center;">Please select the blank Journey Log PDF template.<br><br>This is the official form that will be filled with your leg data.</div>',
@@ -5580,7 +5572,6 @@
 
         if (!confirmed) return null;
 
-        // User confirmed – open file picker
         return new Promise((resolve) => {
             const input = document.createElement('input');
             input.type = 'file';
@@ -5588,10 +5579,17 @@
             input.style.display = 'none';
             document.body.appendChild(input);
 
-            input.addEventListener('change', () => {
+            input.addEventListener('change', async () => {
                 const file = input.files[0];
                 document.body.removeChild(input);
-                resolve(file);
+                if (file) {
+                    const buffer = await file.arrayBuffer();
+                    const blob = new Blob([buffer], { type: 'application/pdf' });
+                    await saveJourneyTemplateToDB(blob);
+                    resolve(buffer);
+                } else {
+                    resolve(null);
+                }
             });
 
             input.addEventListener('cancel', () => {
@@ -5599,7 +5597,6 @@
                 resolve(null);
             });
 
-            // Handle case where user closes dialog without selecting
             window.addEventListener('focus', function onFocus() {
                 setTimeout(() => {
                     if (!input.files.length) {
@@ -5626,9 +5623,12 @@
             
             // If no template is loaded, prompt user to upload one
             if (!journeyLogTemplateBytes) {
-                const templateFile = await requestJourneyLogTemplate();
-                if (!templateFile) return; // user cancelled
-                journeyLogTemplateBytes = await templateFile.arrayBuffer();
+                const templateBuffer = await requestJourneyLogTemplate();
+                if (!templateBuffer) {
+                    isFinalizingJourneyLog = false;
+                    return; // user cancelled
+                }
+                journeyLogTemplateBytes = templateBuffer; // Assign directly
                 showToast('Journey log template loaded', 'success');
             }
 
@@ -5790,15 +5790,16 @@
             );
 
             if (userChoice) {
-                // Save to IndexedDB
+                // Save to IndexedDB...
                 const blob = new Blob([out], { type: 'application/pdf' });
                 await saveJourneyLog(blob, { flight: flt, date, legCount: dailyLegs.length });
                 showToast('Journey log saved', 'success');
 
-                // Unload template to free memory
+                // Clear template from memory and IndexedDB
                 journeyLogTemplateBytes = null;
+                await deleteJourneyTemplateFromDB();
 
-                // Clear leg data and reset journey log UI
+                // Clear leg data and reset UI
                 await performDataReset(false, false);
             }
 
@@ -6970,6 +6971,39 @@
             showToast("Download failed", 'error');
         }
     };
+
+    async function saveJourneyTemplateToDB(blob) {
+        const db = await getDB();
+        const tx = db.transaction("files", "readwrite");
+        const store = tx.objectStore("files");
+        store.put(blob, "journeyTemplate");
+        return new Promise((resolve, reject) => {
+            tx.oncomplete = resolve;
+            tx.onerror = reject;
+        });
+    }
+
+    async function loadJourneyTemplateFromDB() {
+        const db = await getDB();
+        const tx = db.transaction("files", "readonly");
+        const store = tx.objectStore("files");
+        return new Promise((resolve, reject) => {
+            const req = store.get("journeyTemplate");
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = reject;
+        });
+    }
+
+    async function deleteJourneyTemplateFromDB() {
+        const db = await getDB();
+        const tx = db.transaction("files", "readwrite");
+        const store = tx.objectStore("files");
+        store.delete("journeyTemplate");
+        return new Promise((resolve, reject) => {
+            tx.oncomplete = resolve;
+            tx.onerror = reject;
+        });
+    }
 // ==========================================
 // 14. DATA HANDLING
 // ==========================================
