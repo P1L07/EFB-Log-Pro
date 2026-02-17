@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.0.7";
+    const APP_VERSION = "2.0.8";
     const RELEASE_NOTES = {
-        "2.0.7": {
+        "2.0.8": {
             title: "Release Notes",
             notes: [
                 "📋 Finalized Journey logs and OFPs are being saved",
@@ -34,7 +34,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'bde80d329d5b6d075fdd24e0262600815fde794df01248a52908a8afe4d9bc45';
+    const EXPECTED_SW_HASH = 'f05341ec9ba85e436dd83997558a520bdd1cf8dda7ffb3e3c8dcdf4616919655';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1427,10 +1427,7 @@
             const templateBlob = await loadJourneyTemplateFromDB();
             if (templateBlob) {
                 journeyLogTemplateBytes = await templateBlob.arrayBuffer();
-                alert('Restored journey template from DB, size:', journeyLogTemplateBytes.byteLength);
-                showToast('Journey log template loaded from storage', 'info');
             } else {
-                alert('No journey template in DB');
             }
         } catch (e) {
             alert('Failed to load journey template from DB', e);
@@ -5628,7 +5625,6 @@
                     return; // user cancelled
                 }
                 journeyLogTemplateBytes = templateBuffer; // Assign directly
-                showToast('Journey log template loaded', 'success');
             }
 
             if (dailyLegs.length === 0) return alert("No legs to print.");
@@ -7015,7 +7011,6 @@
         store.delete("journeyTemplate");
         return new Promise((resolve, reject) => {
             tx.oncomplete = () => {
-                alert('Journey template deleted');
                 resolve();
             };
             tx.onerror = (e) => reject(e);
