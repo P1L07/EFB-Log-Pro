@@ -1,5 +1,5 @@
-const CACHE_NAME = 'efb-log-pro-v2.0.7';
-const SW_VERSION = '2.0.7';
+const CACHE_NAME = 'efb-log-pro-v2.0.8';
+const SW_VERSION = '2.0.8';
 
 const STATIC_ASSETS = [
   './pdf-lib.min.js',

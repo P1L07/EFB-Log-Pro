@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.0.7";
+    const APP_VERSION = "2.0.8";
     const RELEASE_NOTES = {
-        "2.0.7": {
+        "2.0.8": {
             title: "Release Notes",
             notes: [
                 "📋 Finalized Journey logs and OFPs are being saved",
@@ -34,7 +34,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'bde80d329d5b6d075fdd24e0262600815fde794df01248a52908a8afe4d9bc45';
+    const EXPECTED_SW_HASH = 'f05341ec9ba85e436dd83997558a520bdd1cf8dda7ffb3e3c8dcdf4616919655';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -5523,18 +5523,17 @@
 
     // Share PDF
     async function sharePdf(pdfBytes, filename, subject, body) {
-        // 1. Create a "File" object from the PDF bytes
         const blob = new Blob([pdfBytes], { type: 'application/pdf' });
         const file = new File([blob], filename, { type: 'application/pdf' });
 
-        // 2. Copy the target email to clipboard automatically
+        // Optional: copy email to clipboard (silent fail if not possible)
         try {
             await navigator.clipboard.writeText("ofp@airastana.com");
         } catch (err) {
             console.log("Clipboard write failed", err);
         }
 
-        // 3. Check if the device supports native file sharing (iPad/iPhone do)
+        // Try native share if supported and files can be shared
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
             try {
                 await navigator.share({
@@ -5542,13 +5541,14 @@
                     title: subject,
                     text: body || subject
                 });
+                return; // success, exit
             } catch (err) {
-                console.log("Share cancelled or failed", err);
+                console.log("Share cancelled or failed, falling back to download", err);
+                // fall through to download
             }
-        } else {
-            // Fallback for computers
-            downloadBlob(pdfBytes, filename);
         }
+        // Fallback: direct download
+        downloadBlob(pdfBytes, filename);
     }
 
     // Download PDF
