@@ -3,11 +3,12 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.0.8";
+    const APP_VERSION = "2.0.9";
     const RELEASE_NOTES = {
-        "2.0.8": {
+        "2.0.9": {
             title: "Release Notes",
             notes: [
+                "⚡ Analyze Relevant Weather and NOTAMs",
                 "📋 Finalized Journey logs and OFPs are being saved",
                 "✍️ Write or Type ATIS/ATC",
                 "⚡ DOM caching for waypoint inputs – 10x faster flight log updates",
@@ -34,12 +35,31 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'f05341ec9ba85e436dd83997558a520bdd1cf8dda7ffb3e3c8dcdf4616919655';
+    const EXPECTED_SW_HASH = 'd1ef6e0251a925d6893a82b51b3de72825d0cd3d5c5d6cfe0069ed05711cc413';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
         'front-extra-kg', 'front-extra-reason', 'view-pic-block'
     ];
+    const FLIGHT_THREAT_DICTIONARY = {
+        notams: [
+            { regex: /\b(?:AD|AERODROME|APPT)\s+(?:CLSD|CLOSED)\b/i, level: 'critical', type: 'Airport Closed' },
+            { regex: /\bRWY\s+([0-9]{2}[LRC]?)\s+(?:CLSD|CLOSED)\b/i, level: 'critical', type: 'Runway Closed' },
+            { regex: /\b(?:ILS|LOC|GP|GLIDEPATH|VOR|NDB|DME|RNP|RNAV)\s+.*?(?:U\/S|UNSERVICEABLE|NOT AVBL|OUT OF SERVICE)\b/i, level: 'warning', type: 'NAVAID Unserviceable' },
+            { regex: /\bTWY\s+([A-Z0-9]+(?:\s+AND\s+[A-Z0-9]+)*)\s+(?:CLSD|CLOSED)\b/i, level: 'warning', type: 'Taxiway Closed' },
+            { regex: /\bFCT\s+(?:U\/S|NOT AVBL)\b|\b(?:FIRE AND RESCUE|RFFS)\s+DOWNGRADED\b/i, level: 'critical', type: 'Fire/Rescue Downgraded' },
+            { regex: /\bBA\s+(?:POOR|1|2)\b|\b(?:ICE|SNOW|SLUSH)\s+ON\s+RWY\b/i, level: 'warning', type: 'Poor Braking Action / Contamination' },
+            { regex: /\bBIRD\b/i, level: 'info', type: 'Bird Hazard' },
+            { regex: /\b(?:WIP|WORK IN PROGRESS)\b/i, level: 'info', type: 'Work in Progress' }
+        ],
+        weather: [
+            { regex: /\b(?:TS|TSRA|VCTS|\+TSRA)\b/i, level: 'critical', type: 'Thunderstorms' },
+            { regex: /\b(?:FZRA|FZDZ|\+SN|BLSN)\b/i, level: 'critical', type: 'Freezing Wx / Heavy Snow' },
+            { regex: /\b(?:WS\s+RWY|WINDSHEAR)\b/i, level: 'critical', type: 'Windshear' },
+            { regex: /\b(?:OVC|BKN|VV)00[0-2]\b/i, level: 'warning', type: 'Low Ceiling (< 300ft)' },
+            { regex: /\bR[0-9]{2}[LRC]?\/0[0-5][0-9]{2}/i, level: 'warning', type: 'Low RVR (< 600m)' }
+        ]
+    };
     const JOURNEY_CONFIG = {
         fontSize: 10,
         
@@ -1987,6 +2007,7 @@
         let parseResult;
         try {
             parseResult = await parsePDFData(window.ofpPdfBytes, isAutoLoad);
+            window.ofpFullText = parseResult.fullText;
         } catch (error) {
             console.error('PDF parsing failed:', error);
             setOFPLoadedState(false);
@@ -2879,6 +2900,143 @@
         }
     }
 
+    function extractNOTAMs(fullText) {
+            const notams = [];
+            
+            // 1. IMPROVED REGEX: 
+            // Matches "NOTAMUAAA A1234/26" OR "- UAOO C7718/25" OR just "SW0075/26"
+            const notamIdRegex = /(?:NOTAM\s*[A-Z]{4}\s+|-\s+[A-Z]{4}\s+)?([A-Z]{1,2}\d{4}\/\d{2})/g;
+            
+            // 2. matchAll fixes the skipping bug
+            const matches = [...fullText.matchAll(notamIdRegex)];
+            let count = 0;
+
+            for (let i = 0; i < matches.length; i++) {
+                const match = matches[i];
+                const start = match.index;
+                // The end of this NOTAM is the start of the next one, or the end of the text
+                const end = (i + 1 < matches.length) ? matches[i + 1].index : fullText.length;
+
+                let rawText = fullText.substring(start, end).trim();
+
+                // 3. Clean the raw text: remove trailing headers/footers
+                const lines = rawText.split('\n');
+                const cleanLines = [];
+                
+                for (let line of lines) {
+                    const trimmed = line.trim();
+                    
+                    // Stop reading if we hit a known section marker
+                    if (/^(ARRIVAL:|OTHER:|PAGE|AIR ASTANA BRIEF)/i.test(trimmed)) {
+                        break;
+                    }
+                    
+                    if (trimmed !== '') {
+                        cleanLines.push(trimmed);
+                    }
+                }
+
+                // 4. CRITICAL: Join with a SPACE, not \n. 
+                // This prevents "TWY \n CLSD" from breaking the threat analyzer
+                let cleanedText = cleanLines.join(' ').trim();
+
+                // 5. Broadened keywords to catch more items
+                const keywords = [
+                    'RWY', 'TWY', 'CLSD', 'U/S', 'NOT AVBL', 'WIP', 'FIRE', 'RESCUE', 
+                    'BIRD', 'BA', 'ICE', 'SNOW', 'SLUSH', 'ILS', 'VOR', 'NDB', 'DME', 
+                    'RNAV', 'GPS', 'RNP', 'APU', 'DE-ICING', 'PUSHBACK', 'STAND', 
+                    'AD', 'TWR', 'DOWNGRADED'
+                ];
+                
+                const upper = cleanedText.toUpperCase();
+                const hasKeyword = keywords.some(kw => upper.includes(kw));
+
+                // Must contain keyword and be a reasonable length
+                if (hasKeyword && cleanedText.length > 20) {
+                    notams.push(cleanedText);
+                    
+                    if (count++ < 10) {
+                        console.log('Sample captured NOTAM:', cleanedText.substring(0, 150));
+                    }
+                }
+            }
+            
+            console.log(`Found ${notams.length} potential NOTAMs after filtering`);
+            return notams;
+        }
+
+    function extractWeather(fullText) {
+        const weather = [];
+        // Pattern: 4 uppercase letters, space, 6 digits, Z (e.g., "UAAA 281800Z")
+        const weatherRegex = /[A-Z]{4}\s+\d{6}Z/g;
+        let match;
+        while ((match = weatherRegex.exec(fullText)) !== null) {
+            const start = match.index;
+            // Look for the end of this report – usually it's followed by another ICAO or end
+            const nextMatch = weatherRegex.exec(fullText);
+            const end = nextMatch ? nextMatch.index : fullText.length;
+            const report = fullText.substring(start, end).trim();
+            weather.push(report);
+            weatherRegex.lastIndex = end;
+        }
+        console.log(`Found ${weather.length} weather reports`);
+        if (weather.length === 0) {
+            // Fallback: look for lines that might contain METAR data (e.g., "METAR" or "TAF")
+            const metarLines = fullText.match(/^.*METAR.*$/gm);
+            const tafLines = fullText.match(/^.*TAF.*$/gm);
+            console.log('No standard weather pattern found. METAR lines:', metarLines, 'TAF lines:', tafLines);
+        }
+        return weather;
+    }
+
+    function cleanNOTAMText(text) {
+    // Case 1: "NOTAM" followed immediately or with space by 4 letters
+    let match = text.match(/NOTAM\s*([A-Z]{4})/i);
+    if (match) {
+        const airport = match[1].toUpperCase();
+        // Remove the "NOTAMXXXX" prefix (including optional space)
+        let cleaned = text.replace(/NOTAM\s*[A-Z]{4}/i, '').trim();
+        return { airport, text: cleaned };
+    }
+    // Case 2: Leading ICAO code with optional dash/spaces (e.g., "- UAAA" or "UAAA")
+    match = text.match(/^[-–—\s]*([A-Z]{4})\b/);
+    if (match) {
+        const airport = match[1].toUpperCase();
+        let cleaned = text.replace(/^[-–—\s]*[A-Z]{4}\s*/, '').trim();
+        return { airport, text: cleaned };
+    }
+    // Case 3: Four letters at the very end (maybe preceded by space)
+    match = text.match(/([A-Z]{4})$/);
+    if (match) {
+        const airport = match[1];
+        let cleaned = text.replace(/\s*[A-Z]{4}$/, '').trim();
+        return { airport, text: cleaned };
+    }
+    // Fallback: Unknown
+    return { airport: 'Unknown', text };
+}
+
+    function extractVisibility(report) {
+        const match = report.match(/(\d+\s?\d?\/?\d*)SM/);
+        if (match) {
+            const visStr = match[1].replace(/\s+/g, '');
+            if (visStr.includes('/')) {
+                const [num, den] = visStr.split('/').map(Number);
+                return num / den;
+            }
+            return parseInt(visStr);
+        }
+        return 10; // default if not found (CAVOK)
+    }
+
+    function extractCeiling(report) {
+        const match = report.match(/(BKN|OVC)(\d{3})/);
+        if (match) {
+            return parseInt(match[2]) * 100;
+        }
+        return 9999; // unlimited
+    }
+
 // ==========================================
 // 5. CALCULATION LOGIC
 // ==========================================
@@ -3623,15 +3781,21 @@
             const extractedWaypoints = await parseAllWaypoints(pdf);
             waypoints = extractedWaypoints;
 
-            // 5. Detect cutoff page (if any)
-            for (let i = 4; i <= pdf.numPages; i++) { // start from page 4
+            // 5. Collect full text from all pages (starting from page 2) and detect cutoff
+            let fullText = page1Text;
+            for (let i = 2; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const content = await page.getTextContent();
-                const textContent = content.items.map(x => x.str).join(' ');
-                const cutoff = detectCutoffPage(textContent, i);
-                if (cutoff !== null) {
-                    window.cutoffPageIndex = cutoff;
-                    break;
+                const pageText = content.items.map(x => x.str).join(' ');
+                fullText += ' ' + pageText;
+
+                // Detect cutoff page (starting from page 4)
+                if (i >= 4) {
+                    const cutoff = detectCutoffPage(pageText, i);
+                    if (cutoff !== null) {
+                        window.cutoffPageIndex = cutoff;
+                        // Do not break – we still want the rest of the text (NOTAMs/weather)
+                    }
                 }
             }
 
@@ -3662,13 +3826,14 @@
             // 9. Update UI tables and calculations
             updateUIAfterParsing();
 
-            // 10. Return everything needed
+            // 10. Return everything needed, including full text
             return {
                 success: true,
                 metadata,
                 tripTime,
                 maxSR,
-                requestNumber
+                requestNumber,
+                fullText  // <-- new
             };
 
         } catch (error) {
@@ -3677,9 +3842,440 @@
         }
     }
 
+window.analyzeNotamsAndWeather = function() {
+    const resultsDiv = document.getElementById('notam-results');
+    if (!resultsDiv) return;
+
+    const fullText = window.ofpFullText;
+    if (!fullText) {
+        resultsDiv.innerHTML = '<div class="error">No OFP loaded or parsed. Please upload an OFP first.</div>';
+        return;
+    }
+
+    // --- Get flight times and date ---
+    const flightDateStr = (document.getElementById('view-date')?.innerText || '').trim();
+    const etdStr = (document.getElementById('view-etd-text')?.innerText || '').trim();
+    const etaStr = (document.getElementById('view-eta-text')?.innerText || '').trim();
+
+    console.log('Flight date:', flightDateStr, 'ETD:', etdStr, 'ETA:', etaStr);
+
+    if (!flightDateStr || !etdStr || !etaStr) {
+        resultsDiv.innerHTML = '<div class="error">Flight date or times not available. Please ensure OFP is fully parsed.</div>';
+        return;
+    }
+
+    // Parse flight date (format "06/02/26")
+
+    const [day, month, year] = flightDateStr.split('/').map(Number);
+    const flightDate = new Date(Date.UTC(2000 + year, month - 1, day));
+    console.log('Parsed flight date (UTC):', flightDate.toISOString());
+
+    const parseTime = (timeStr) => {
+        const [h, m] = timeStr.split(':').map(Number);
+        return h * 60 + m;
+    };
+    const etdMinutes = parseTime(etdStr);
+    const etaMinutes = parseTime(etaStr);
+    console.log('ETD minutes:', etdMinutes, 'ETA minutes:', etaMinutes);
+
+    // Time windows in minutes since midnight UTC
+    const depStart = etdMinutes;
+    const depEnd = etdMinutes + 60;
+    const arrStart = Math.max(0, etaMinutes - 60);
+    const arrEnd = etaMinutes + 60;
+    let otherStart = etdMinutes;
+    let otherEnd = etaMinutes + 60;
+    if (etaMinutes < etdMinutes) otherEnd += 1440;
+
+    // Convert windows to UTC timestamps
+    const getWindowTimes = (startMin, endMin) => {
+        let start = Date.UTC(flightDate.getUTCFullYear(), flightDate.getUTCMonth(), flightDate.getUTCDate(),
+                            Math.floor(startMin / 60), startMin % 60);
+        let end = Date.UTC(flightDate.getUTCFullYear(), flightDate.getUTCMonth(), flightDate.getUTCDate(),
+                        Math.floor(endMin / 60), endMin % 60);
+        if (endMin >= 1440) end += 86400000; // next day
+        return { start, end };
+    };
+
+    const depWindow = getWindowTimes(depStart, depEnd);
+    const arrWindow = getWindowTimes(arrStart, arrEnd);
+    const otherWindow = getWindowTimes(otherStart, otherEnd);
+
+    console.log('Departure window (UTC):', new Date(depWindow.start).toISOString(), '-', new Date(depWindow.end).toISOString());
+    console.log('Arrival window (UTC):', new Date(arrWindow.start).toISOString(), '-', new Date(arrWindow.end).toISOString());
+    console.log('Other window (UTC):', new Date(otherWindow.start).toISOString(), '-', new Date(otherWindow.end).toISOString());
+
+    // --- Airport codes ---
+    const depAirport = (document.getElementById('view-dep')?.innerText || '').trim().toUpperCase();
+    const destAirport = (document.getElementById('view-dest')?.innerText || '').trim().toUpperCase();
+    const altnAirport = (document.getElementById('view-altn')?.innerText || '').trim().toUpperCase();
+    const altn2Airport = (document.getElementById('view-altn2')?.innerText || '').trim().toUpperCase();
+    const eraAirport = (document.getElementById('view-era-text')?.innerText || '').trim().toUpperCase();
+
+    const alternates = [altnAirport, altn2Airport, eraAirport].filter(code => code && /^[A-Z]{4}$/.test(code));
+    const uniqueAlternates = [...new Set(alternates)];
+    console.log('Key airports - DEP:', depAirport, 'DEST:', destAirport, 'ALT:', uniqueAlternates);
+
+    resultsDiv.innerHTML = '<div class="loading">Analyzing NOTAMs and weather...</div>';
+
+    setTimeout(() => {
+        try {
+            console.log('=== Starting NOTAM/Weather Analysis ===');
+
+            // ---------- Helper functions for date parsing ----------
+            const parseNotamDateTime = (str, baseDate) => {
+                const match = str.match(/(\d{2})([A-Z]{3})(\d{2})(\d{2})/i);
+                if (!match) return null;
+                const day = parseInt(match[1], 10);
+                const monthStr = match[2].toUpperCase();
+                const hour = parseInt(match[3], 10);
+                const minute = parseInt(match[4], 10);
+                const months = { JAN:0, FEB:1, MAR:2, APR:3, MAY:4, JUN:5, JUL:6, AUG:7, SEP:8, OCT:9, NOV:10, DEC:11 };
+                const month = months[monthStr];
+                if (month === undefined) return null;
+
+                let year = baseDate.getUTCFullYear();
+                // If the NOTAM month is less than the flight month, it's probably next year
+                if (month < baseDate.getUTCMonth()) year += 1;
+                // Create UTC date
+                return new Date(Date.UTC(year, month, day, hour, minute));
+            };
+
+            const getNotamValidity = (text) => {
+                // Look for patterns like "06FEB1509-06FEB2309" or "06FEB1509 06FEB2309" or "06FEB1509/06FEB2309"
+                // Allow optional spaces around the separator
+                const match = text.match(/(\d{2}[A-Z]{3}\d{4})\s*[-/]\s*(\d{2}[A-Z]{3}\d{4})/i);
+                if (match) {
+                    const start = parseNotamDateTime(match[1], flightDate);
+                    const end = parseNotamDateTime(match[2], flightDate);
+                    return { start, end };
+                }
+                // If no end date (e.g., permanent), treat as always valid
+                return null; // null means no time info, treat as always valid in filtering
+            };
+
+            // ---------- Extract data ----------
+            const notams = extractNOTAMs(fullText);
+            const weather = extractWeather(fullText);
+            console.log('Extracted NOTAMs count:', notams.length);
+            console.log('Extracted weather count:', weather.length);
+
+            // ---------- Generate alerts (no time filtering yet) ----------
+            let alerts = runRulesOnText(notams, weather);
+            console.log('Alerts before time filtering:', alerts.length);
+
+            // ---------- Apply time filtering ----------
+            // ---------- Filter alerts based on time windows ----------
+            const filteredAlerts = [];
+            alerts.forEach(alert => {
+                const airport = alert.airport ? alert.airport.toUpperCase() : '';
+                let include = true;
+
+                // Debug for specific NOTAM
+                if (alert.message && alert.message.includes('SW0151/26')) {
+                    console.log('Found SW0151/26 - airport:', airport, 'type:', alert.type);
+                    console.log('Message:', alert.message.substring(0,200));
+                }
+
+                // For NOTAMs, try to filter by time; if no validity, include.
+                if (alert.type && alert.type.includes('NOTAM')) {
+                    const validity = getNotamValidity(alert.message);
+                    if (validity && validity.start && validity.end) {
+                        const startTime = validity.start.getTime();
+                        const endTime = validity.end.getTime();
+
+                        let windowStart, windowEnd;
+                        if (airport === depAirport) {
+                            windowStart = depWindow.start;
+                            windowEnd = depWindow.end;
+                        } else if (airport === destAirport || uniqueAlternates.includes(airport)) {
+                            windowStart = arrWindow.start;
+                            windowEnd = arrWindow.end;
+                        } else {
+                            windowStart = otherWindow.start;
+                            windowEnd = otherWindow.end;
+                        }
+
+                        // Debug for UACC
+                        if (airport === 'UACC') {
+                            console.log(`=== UACC NOTAM ===`);
+                            console.log(`Message: ${alert.message.substring(0,200)}`);
+                            console.log(`Start UTC: ${validity.start.toISOString()}`);
+                            console.log(`End UTC: ${validity.end.toISOString()}`);
+                            console.log(`Window: ${new Date(windowStart).toISOString()} - ${new Date(windowEnd).toISOString()}`);
+                            console.log(`Overlap condition: ${endTime >= windowStart && startTime <= windowEnd}`);
+                        }
+
+                        if (endTime < windowStart || startTime > windowEnd) {
+                            include = false;
+                        }
+                    } else {
+                        // No validity parsed – include by default
+                        console.log(`No validity parsed for ${airport}, including: ${alert.message.substring(0,100)}`);
+                    }
+                } else {
+                    // Weather or other types – include for now
+                    include = true;
+                }
+
+                if (include) filteredAlerts.push(alert);
+            });
+            console.log(`Alerts after time filtering: ${filteredAlerts.length}`);
+            // --- If all alerts were filtered out, use the original (with warning) ---
+            if (filteredAlerts.length === 0 && alerts.length > 0) {
+                console.warn('Time filtering removed all NOTAMs. Showing unfiltered list.');
+                // Keep original alerts but maybe add a note?
+                // For now, we'll use the original alerts
+                var finalAlerts = alerts;
+            } else {
+                var finalAlerts = filteredAlerts;
+            }
+
+            // --- Track which airports have alerts after filtering ---
+            const airportsWithAlerts = new Set();
+            finalAlerts.forEach(a => {
+                if (a.airport && a.airport !== 'Unknown') {
+                    airportsWithAlerts.add(a.airport.toUpperCase());
+                }
+            });
+
+            // --- Add placeholders for key airports with no alerts ---
+            if (depAirport && !airportsWithAlerts.has(depAirport)) {
+                finalAlerts.push({
+                    severity: 'info',
+                    type: 'INFO',
+                    airport: depAirport,
+                    message: 'No relevant WX/NOTAM to report.'
+                });
+            }
+            if (destAirport && !airportsWithAlerts.has(destAirport)) {
+                finalAlerts.push({
+                    severity: 'info',
+                    type: 'INFO',
+                    airport: destAirport,
+                    message: 'No relevant WX/NOTAM to report.'
+                });
+            }
+            uniqueAlternates.forEach(alt => {
+                if (alt && !airportsWithAlerts.has(alt) && alt !== depAirport && alt !== destAirport) {
+                    finalAlerts.push({
+                        severity: 'info',
+                        type: 'INFO',
+                        airport: alt,
+                        message: 'No relevant WX/NOTAM to report.'
+                    });
+                }
+            });
+
+            console.log('Alerts after placeholders:', finalAlerts.length);
+
+            // --- Sort by priority and severity ---
+            const getAirportRank = (airportCode) => {
+                if (!airportCode || airportCode === 'Unknown') return 4;
+                const code = airportCode.toUpperCase();
+                if (code === depAirport) return 0;
+                if (code === destAirport) return 1;
+                if (uniqueAlternates.includes(code)) return 2;
+                return 3;
+            };
+
+            finalAlerts.sort((a, b) => {
+                const severityOrder = { critical: 0, warning: 1, info: 2 };
+                const sevA = severityOrder[(a.severity || '').toLowerCase()] ?? 3;
+                const sevB = severityOrder[(b.severity || '').toLowerCase()] ?? 3;
+                if (sevA !== sevB) return sevA - sevB;
+
+                const rankA = getAirportRank(a.airport);
+                const rankB = getAirportRank(b.airport);
+                if (rankA !== rankB) return rankA - rankB;
+
+                return (a.type || '').localeCompare(b.type || '');
+            });
+
+            console.log('Final alerts count:', finalAlerts.length);
+            if (finalAlerts.length > 0) {
+                console.log('First alert sample:', finalAlerts[0]);
+            }
+
+            // Store for filter
+            window.notamFullAlerts = finalAlerts.slice();
+
+            // ---------- Render ----------
+            renderNotamResults(finalAlerts);
+
+        } catch (error) {
+            console.error('Analysis error:', error);
+            resultsDiv.innerHTML = `<div class="error">Analysis failed: ${error.message}</div>`;
+        }
+    }, 100);
+};
+
+    function getNotamValidity(text) {
+        const match = text.match(/(\d{2}[A-Z]{3}\d{4})\s*[-/]?\s*(\d{2}[A-Z]{3}\d{4})/i);
+        if (match) {
+            const start = parseNotamDateTime(match[1], flightDate); // flightDate needs to be in scope
+            const end = parseNotamDateTime(match[2], flightDate);
+            return { start, end };
+        }
+        return null;
+    }
+
+    function runRulesOnText(notams, weather) {
+        const alerts = [];
+        let notamCount = 0;
+
+        // Process NOTAMs
+        notams.forEach(rawText => {
+            notamCount++;
+            const { airport, text: cleaned } = cleanNOTAMText(rawText);
+            if (cleaned.length < 20) {
+                console.log(`NOTAM skipped (too short): ${airport} - ${cleaned.substring(0,50)}`);
+                return;
+            }
+
+            // Log every NOTAM being processed
+            console.log(`Processing NOTAM #${notamCount} for ${airport}: ${cleaned.substring(0,100)}`);
+
+            // Track if any rule matched
+            let matched = false;
+            FLIGHT_THREAT_DICTIONARY.notams.forEach(rule => {
+                if (rule.regex.test(cleaned)) {
+                    alerts.push({
+                        severity: rule.level,
+                        type: `NOTAM: ${rule.type}`,
+                        airport: airport,
+                        message: cleaned.substring(0, 200) + (cleaned.length > 200 ? '...' : '')
+                    });
+                    matched = true;
+                }
+            });
+
+            // If no specific threat matched, still add a general NOTAM alert
+            if (!matched) {
+                alerts.push({
+                    severity: 'info',
+                    type: 'NOTAM',
+                    airport: airport,
+                    message: cleaned.substring(0, 200) + (cleaned.length > 200 ? '...' : '')
+                });
+                console.log(`Added general NOTAM for ${airport}`);
+            }
+        });
+
+        // Process weather reports (unchanged)
+        weather.forEach(report => {
+            const airportMatch = report.match(/^([A-Z]{4})/);
+            const airport = airportMatch ? airportMatch[1] : 'Unknown';
+            FLIGHT_THREAT_DICTIONARY.weather.forEach(rule => {
+                if (rule.regex.test(report)) {
+                    alerts.push({
+                        severity: rule.level,
+                        type: `Weather: ${rule.type}`,
+                        airport: airport,
+                        message: report.substring(0, 200) + (report.length > 200 ? '...' : '')
+                    });
+                }
+            });
+        });
+
+        console.log(`Total NOTAMs processed: ${notamCount}, alerts generated: ${alerts.length}`);
+        return alerts;
+    }
+
 // ==========================================
 // 7. UI RENDERING
 // ==========================================
+
+    function renderNotamResults(alerts) {
+        const container = document.getElementById('notam-results');
+        if (!container) return;
+
+        if (alerts.length === 0) {
+            container.innerHTML = '<div class="info">✅ No significant NOTAMs or weather concerns found.</div>';
+            return;
+        }
+
+        // Get current airport codes from the UI (static during session)
+        const depAirport = (document.getElementById('view-dep')?.innerText || '').trim().toUpperCase();
+        const destAirport = (document.getElementById('view-dest')?.innerText || '').trim().toUpperCase();
+        const altnAirport = (document.getElementById('view-altn')?.innerText || '').trim().toUpperCase();
+        const altn2Airport = (document.getElementById('view-altn2')?.innerText || '').trim().toUpperCase();
+        const eraAirport = (document.getElementById('view-era-text')?.innerText || '').trim().toUpperCase();
+
+        // Build unique list of alternates (including ERA)
+        const alternates = [];
+        [altnAirport, altn2Airport, eraAirport].forEach(code => {
+            if (code && /^[A-Z]{4}$/.test(code) && !alternates.includes(code)) {
+                alternates.push(code);
+            }
+        });
+
+        // Helper to check role
+        const isDep = code => code === depAirport;
+        const isDest = code => code === destAirport;
+        const isAlt = code => alternates.includes(code) && code !== depAirport && code !== destAirport;
+
+        // Group alerts by role
+        const depAlerts = [];
+        const destAlerts = [];
+        const altAlerts = [];
+        const otherAlerts = [];
+
+        alerts.forEach(alert => {
+            const airport = alert.airport ? alert.airport.toString().trim().toUpperCase() : '';
+            if (!airport || !/^[A-Z]{4}$/.test(airport)) {
+                otherAlerts.push(alert);
+            } else if (isDep(airport)) {
+                depAlerts.push(alert);
+            } else if (isDest(airport)) {
+                destAlerts.push(alert);
+            } else if (isAlt(airport)) {
+                altAlerts.push(alert);
+            } else {
+                otherAlerts.push(alert);
+            }
+        });
+
+        // Sorting by severity within each group
+        const severityOrder = { critical: 0, warning: 1, info: 2 };
+        const sortBySeverity = (a, b) => {
+            const sevA = severityOrder[(a.severity || '').toLowerCase()] ?? 3;
+            const sevB = severityOrder[(b.severity || '').toLowerCase()] ?? 3;
+            return sevA - sevB;
+        };
+
+        depAlerts.sort(sortBySeverity);
+        destAlerts.sort(sortBySeverity);
+        altAlerts.sort(sortBySeverity);
+        otherAlerts.sort(sortBySeverity);
+
+        // Helper to render a list of alerts with a title
+        const renderAlertList = (alertArray, title) => {
+            if (alertArray.length === 0) return '';
+            let html = `<h3 class="section-title">${title}</h3><div class="alerts-list">`;
+            alertArray.forEach(alert => {
+                const cleanType = alert.type.includes(':') ? alert.type.split(':')[1].trim() : alert.type;
+                html += `
+                    <div class="alert-item ${alert.severity}">
+                        <span class="alert-type">${cleanType}</span>
+                        <span class="alert-airport">${alert.airport}</span>
+                        <span class="alert-message">${alert.message}</span>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            return html;
+        };
+
+        // Build final HTML
+        let finalHtml = '';
+        finalHtml += renderAlertList(depAlerts, 'Departure Airport');
+        finalHtml += renderAlertList(destAlerts, 'Destination Airport');
+        finalHtml += renderAlertList(altAlerts, 'Alternate Airports');
+        finalHtml += renderAlertList(otherAlerts, 'Other Airports');
+
+        container.innerHTML = finalHtml;
+    }
 
     function showToast(message, type = 'success') {
         const toast = document.createElement('div');
@@ -4262,6 +4858,10 @@
                 restorePadDrawing('main', 'signature');
                 updateEmptyStates(); 
             }, 50);
+        }
+
+        if (id === 'flight-analysis') {
+            analyzeNotamsAndWeather();
         }
 
         // Update upload button visibility
@@ -7655,6 +8255,22 @@
             }
         });
 
+        document.getElementById('notam-filter')?.addEventListener('input', function() {
+            const filterText = this.value.toLowerCase().trim();
+            if (!window.notamFullAlerts) return;
+            if (filterText === '') {
+                renderNotamResults(window.notamFullAlerts);
+            } else {
+                const filtered = window.notamFullAlerts.filter(alert => {
+                    const airport = (alert.airport || '').toLowerCase();
+                    const message = (alert.message || '').toLowerCase();
+                    const type = (alert.type || '').toLowerCase();
+                    return airport.includes(filterText) || message.includes(filterText) || type.includes(filterText);
+                });
+                renderNotamResults(filtered);
+            }
+        });
+
         // Activity tracking
         if (sessionStorage.getItem('efb_authenticated') === 'true') {
             setupActivityTracking();
@@ -7686,6 +8302,8 @@
     window.addEventListener('pagehide', () => {
         saveState();
     });
+
+    
 
 
 // FUNCTIONS NOT USED ANYMORE
