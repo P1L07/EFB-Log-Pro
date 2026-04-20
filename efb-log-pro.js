@@ -69,7 +69,6 @@
     };
     const JOURNEY_CONFIG = {
         fontSize: 10,
-        
         // Vertical positioning for the leg list
         rowStartMain: 525, 
         rowStartFuel: 420,
@@ -265,7 +264,7 @@
                 
                 const win = window.open('', '_blank');
                 if (!win) {
-                    alert('Pop-up blocked. Please allow pop-ups for this site.');
+                    alert('Pop-up blocked. Please allow pop-ups');
                     return;
                 }
 
@@ -284,7 +283,6 @@
             }
         };
 
-    // Setup for Authentication
     async function setupAuthentication() {
         // Check if already authenticated in this session
         if (sessionStorage.getItem('efb_authenticated') === 'true') {
@@ -780,7 +778,6 @@
         showToast('PIN changed successfully');
     }
 
-    // Generate or retrieve encryption key
     async function getEncryptionKey() {
         // Try to get existing key from storage
         const storedKey = localStorage.getItem(ENCRYPTION_KEY_NAME);
@@ -812,7 +809,6 @@
         }
     }
 
-    // Encrypt data
     async function encryptData(data) {
         try {
             const key = await getEncryptionKey();
@@ -856,7 +852,6 @@
         }
     }
 
-    // Decrypt data
     async function decryptData(encryptedBase64) {
         try {
             // Check if it's unencrypted fallback
@@ -1298,7 +1293,6 @@
 
     }
 
-    // Validate OFP
     async function validateOFP(file) {
         try {
             // 1. BASIC CHECKS
@@ -1418,7 +1412,6 @@
         if (typeof pdfjsLib !== 'undefined') {
             // Set worker source synchronously – no need to wait for script load
             pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
-            
             // Optional: still load with integrity for future use, but workerSrc is already set
             const WORKER_HASH = 'sha384-cdzss87ZwpiG252tPQexupMwS1W1lTzzgy/UlNUHXW6h8aaJpBizRQk9j8Vj3zw9';
             const workerScript = document.createElement('script');
@@ -1475,7 +1468,6 @@
 
         ['j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw'].forEach(id => {
             const e = el(id);
-            if (e) e.addEventListener('input', debounce(calculateFuelForJourneyLog, 300));
         });
 
         const ofpAtdInput = el('ofp-atd-in');
@@ -1593,7 +1585,7 @@
             console.warn('Order cleanup failed', e);
         }
 
-        // Check for Active OFP
+        // Check for Active OFP and set Sectors tab active
         const allOFPs = await getCachedOFPs();
         if (allOFPs.length > 0 && !localStorage.getItem('activeOFPId')) {
             setOFPLoadedState(false);  // Ensure no OFP is loaded
@@ -1662,7 +1654,6 @@
 
         if (pads.atis.pad) {
             pads.atis.pad.clear();
-            // optionally re‑init (resize handled later)
         }
         if (pads.atc.pad) {
             pads.atc.pad.clear();
@@ -2052,8 +2043,8 @@
                 console.error("Unexpected error during save:", error);
                 const emergencyResult = await emergencySaveOFP(blob, metadata, existingOFP || null);
                 let toastMessage = existingOFP
-                    ? "OFP replaced (emergency mode"
-                    : "OFP saved (emergency mode";
+                    ? "OFP replaced (emergency mode)"
+                    : "OFP saved (emergency mode)";
                 if (!emergencyResult.pdfSaved) toastMessage += " – PDF not saved";
                 if (!emergencyResult.ofpsRecordCreated) toastMessage += " – record not created";
                 toastMessage += ")";
@@ -2413,7 +2404,6 @@
             { name: "MIN DIVERSION", regex: /MIN\s+DIVERSION\s+([\d.]+)\s+(\d+)/ },
             
             // CONTINGENCY: CONTINGENCY 3% ERA 00.11 423 or CONTINGENCY 5% 00.10 200
-            // Try more specific pattern first
             { name: "CONTINGENCY", regex: /CONTINGENCY\s+\d+%\s*(?:ERA)?\s+([\d.]+)\s+(\d+)/ },
             
             // MIN ADDITIONAL: MIN ADDITIONAL 00.00 0
@@ -2907,6 +2897,26 @@
         }
     }
 
+    async function parsePage1(pdf) {
+        const page = await pdf.getPage(1);
+        const content = await page.getTextContent();
+        const textContent = content.items.map(x => x.str).join(' ');
+
+        extractMainPageCoordinates(content.items);
+        try {
+            parsePageOne(textContent);
+        } catch (parseError) {
+            console.warn('Failed to parse page 1:', parseError);
+            if (typeof setOFPLoadedState === 'function') {
+                setOFPLoadedState(false);
+            }
+            throw parseError;
+        }
+
+        const requestNumber = extractRequestNumber(textContent);
+        return { requestNumber, textContent };
+    }
+
     function extractNOTAMs(fullText) {
         const notams = [];
         // Updated regex: allow 1-2 letters at start of NOTAM ID
@@ -3284,221 +3294,134 @@
     window.calculateDutyValues = function(std, flt, dep, dest) {
         if (!std) return { fc: "00:00", cc: "00:00", max: "00:00", ccMax: "00:00" };
 
-        // 1. Identify Airline & Route
         const fltUpper = (flt || "").toUpperCase();
         const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
-        const isAYN = fltUpper.includes('AYN') || fltUpper.includes('FS'); 
-        
-        const isDepUA = (dep || "").toUpperCase().startsWith('UA');
-        const isDestUA = (dest || "").toUpperCase().startsWith('UA');
+        const isAYN = fltUpper.includes('AYN') || fltUpper.includes('FS');
 
-        // 2. FC Offset Logic
-        let fcOffset = 60; // Default (International Return)
-        if (isDepUA) { 
-            if (isKZR) fcOffset = (!isDestUA) ? 90 : 75; // KZR: 90 Int'l, 75 Dom
-            else if (isAYN) fcOffset = (!isDestUA) ? 75 : 60; // AYN: 75 Int'l, 60 Dom
-        } 
+        const isDepKZ = (dep || "").toUpperCase().startsWith('UA');
+        const isDestKZ = (dest || "").toUpperCase().startsWith('UA');
 
-        // 3. FC Start Time
-        const stdMins = parseTimeString(std);
-        let fcStartMins = stdMins - fcOffset;
-        if (fcStartMins < 0) fcStartMins += 1440;
+        // 1. Flight Crew offset (minutes before STD)
+        let fcOffset = 60; // default
+        if (isDepKZ) {
+            if (isKZR) {
+                fcOffset = isDestKZ ? 75 : 90;
+            } else if (isAYN) {
+                fcOffset = isDestKZ ? 60 : 75;
+            }
+        }
 
-        // 4. CC Start Time
-        let ccDiff = (isKZR && isDepUA) ? 15 : 0; // KZR CC reports 15min earlier from UAXX bases
-        let ccStartMins = fcStartMins - ccDiff;
-        if (ccStartMins < 0) ccStartMins += 1440;
+        // 2. Cabin Crew offset (minutes before FC)
+        let ccOffset = 0;
+        if (isKZR && isDepKZ) {
+            ccOffset = 15;
+        }
 
-        // 5. Helper function to calculate max FDP based on reporting time
-        const calculateMaxFDP = (startMins) => {
-            // Using the standard table
-            if (startMins >= 360 && startMins <= 809) return 780;  // 06:00-13:29
-            else if (startMins >= 810 && startMins <= 839) return 765;
-            else if (startMins >= 840 && startMins <= 869) return 750;
-            else if (startMins >= 870 && startMins <= 899) return 735;
-            else if (startMins >= 900 && startMins <= 929) return 720;
-            else if (startMins >= 930 && startMins <= 959) return 705;
-            else if (startMins >= 960 && startMins <= 989) return 690;
-            else if (startMins >= 990 && startMins <= 1019) return 675;
-            else if (startMins >= 1020 || startMins <= 299) return 660; // 11:00 for night
-            else if (startMins >= 300 && startMins <= 314) return 720;  // 05:00-05:14
-            else if (startMins >= 315 && startMins <= 329) return 735;  // 05:15-05:29
-            else if (startMins >= 330 && startMins <= 344) return 750;  // 05:30-05:44
-            else if (startMins >= 345 && startMins <= 359) return 765;  // 05:45-05:59
+        const stdMins = parseTimeString(std);   // STD in UTC minutes
 
-            return 780; // Default
-        };
+        // FC report in UTC
+        let fcStartUTC = stdMins - fcOffset;
+        if (fcStartUTC < 0) fcStartUTC += 1440;
 
-        // 6. Calculate base FDP based on FC reporting time
-        const baseFDP = calculateMaxFDP(fcStartMins);
-        
-        // 7. Calculate CC max FDP: base FDP + reporting difference (capped at 60 mins)
-        const reportingDiff = (ccDiff > 0) ? ccDiff : 0;
-        const cappedDiff = Math.min(reportingDiff, 60);
-        const ccMaxFDP = baseFDP + cappedDiff;
+        // CC report in UTC
+        let ccStartUTC = fcStartUTC - ccOffset;
+        if (ccStartUTC < 0) ccStartUTC += 1440;
+
+        // Convert FC report UTC to local Kazakhstan (UTC+5) for FDP table
+        let localStart = (fcStartUTC + 300) % 1440;
+        const baseFDP = calculateBaseMaxFDP(localStart);
+        const ccMaxFDP = baseFDP + Math.min(ccOffset, 60);
 
         return {
-            fc: minsToTime(fcStartMins),
-            cc: minsToTime(ccStartMins),
-            max: minsToTime(baseFDP),     
+            fc: minsToTime(fcStartUTC),
+            cc: minsToTime(ccStartUTC),
+            max: minsToTime(baseFDP),
             ccMax: minsToTime(ccMaxFDP)
         };
     };
 
     window.calcDutyLogic = function() {
-        // 1. GATHER DATA
         let flt = (el('j-flt')?.value || "").trim();
         let dep = (el('j-dep')?.value || "").trim();
         let dest = (el('j-dest')?.value || "").trim();
-        
-        // Define 'std' by getting the value from the input field
         let std = (el('j-std')?.value || "").trim();
 
-        // Fallback: If inputs are empty, try looking at the first saved leg
         if ((!std || !flt) && dailyLegs.length > 0) {
-            flt = (dailyLegs[0]['j-flt'] || "").trim();
-            dep = (dailyLegs[0]['j-dep'] || "").trim();
-            dest = (dailyLegs[0]['j-dest'] || "").trim();
-            std = (dailyLegs[0]['j-std'] || "").trim();
+            flt = dailyLegs[0]['j-flt'] || "";
+            dep = dailyLegs[0]['j-dep'] || "";
+            dest = dailyLegs[0]['j-dest'] || "";
+            std = dailyLegs[0]['j-std'] || "";
         }
 
-        if (!std) return; // Now 'std' is defined, we can safely check it
+        if (!std) return;
 
-        // 2. IDENTIFY AIRLINE & ROUTE
-        const fltUpper = flt.toUpperCase();
-        const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
-        const isAYN = fltUpper.includes('AYN') || fltUpper.includes('FS'); 
-        
-        // Check if Departure/Destination is in Kazakhstan (ICAO code starts with UA)
-        const isDepUA = dep.toUpperCase().startsWith('UA');  
-        const isDestUA = dest.toUpperCase().startsWith('UA');
+        const dutyValues = calculateDutyValues(std, flt, dep, dest);
 
-        // 3. CALCULATE FC OFFSET (Minutes before STD)
-        let fcOffset = 60; // Default: 1h (Inbound/Return)
+        const currentFc = el('j-duty-start')?.value;
+        const currentCc = el('j-cc-duty-start')?.value;
 
-        if (isDepUA) { 
-            // OUTBOUND from Kazakhstan
-            if (isKZR) {
-                // Air Astana
-                if (!isDestUA) fcOffset = 90; // Int'l -> 1h 30m
-                else fcOffset = 75;           // Domestic -> 1h 15m
-            } 
-            else if (isAYN) {
-                // FlyArystan
-                if (!isDestUA) fcOffset = 75; // Int'l -> 1h 15m
-                else fcOffset = 60;           // Domestic -> 1h 00m
-            }
-        } 
-
-        // 4. CALCULATE FC START TIME
-        const stdMins = parseTimeString(std);
-        let fcStartMins = stdMins - fcOffset;
-        if (fcStartMins < 0) fcStartMins += 1440;
-
-        // 5. CALCULATE CC START TIME (Relative to FC)
-        // Rule: KZR CC reports 15m earlier. AYN CC reports same time.
-        let ccDiff = 0;
-        // Only KZR departing from Kazakhstan gets 15-minute earlier reporting
-        if (isKZR && isDepUA) {
-            ccDiff = 15;
+        if (!currentFc || currentFc.trim() === '') {
+            safeSet('j-duty-start', dutyValues.fc);
         }
-        
-        let ccStartMins = fcStartMins - ccDiff;
-        if (ccStartMins < 0) ccStartMins += 1440;
+        if (!currentCc || currentCc.trim() === '') {
+            safeSet('j-cc-duty-start', dutyValues.cc);
+        }
 
-        // 6. UPDATE UI (Only if the field exists)
-        safeSet('j-duty-start', minsToTime(fcStartMins));
-        safeSet('j-cc-duty-start', minsToTime(ccStartMins));
-
-        // Update Global Duty Start
-        dutyStartTime = fcStartMins;
-        
-        // Recalculate Max FDP
-        if(typeof recalcMaxFDP === 'function') recalcMaxFDP();
+        dutyStartTime = parseTimeString(el('j-duty-start')?.value);
+        recalcMaxFDP();
     };
 
+    function calculateBaseMaxFDP(localStartMins) {
+        const t = localStartMins % 1440;
+        if (t >= 360 && t <= 809) return 780;   // 06:00-13:29
+        if (t >= 810 && t <= 839) return 765;   // 13:30-13:59
+        if (t >= 840 && t <= 869) return 750;   // 14:00-14:29
+        if (t >= 870 && t <= 899) return 735;   // 14:30-14:59
+        if (t >= 900 && t <= 929) return 720;   // 15:00-15:29
+        if (t >= 930 && t <= 959) return 705;   // 15:30-15:59
+        if (t >= 960 && t <= 989) return 690;   // 16:00-16:29
+        if (t >= 990 && t <= 1019) return 675;  // 16:30-16:59
+        if (t >= 1020 || t <= 299) return 660;  // 17:00-04:59
+        if (t >= 300 && t <= 314) return 720;   // 05:00-05:14
+        if (t >= 315 && t <= 329) return 735;   // 05:15-05:29
+        if (t >= 330 && t <= 344) return 750;   // 05:30-05:44
+        if (t >= 345 && t <= 359) return 765;   // 05:45-05:59
+        return 780;
+    }
+
     window.recalcMaxFDP = function() {
-        // 1. Get FC and CC Start Times
         const fcTimeStr = el('j-duty-start')?.value;
         const ccTimeStr = el('j-cc-duty-start')?.value;
         if (!fcTimeStr) return;
 
-        // Update global for other functions
-        const fcMins = parseTimeString(fcTimeStr);
-        const ccMins = ccTimeStr ? parseTimeString(ccTimeStr) : fcMins;
-        dutyStartTime = fcMins; 
+        const fcMinsUTC = parseTimeString(fcTimeStr);
+        const ccMinsUTC = ccTimeStr ? parseTimeString(ccTimeStr) : fcMinsUTC;
+        dutyStartTime = fcMinsUTC;
 
-        // 2. Count Sectors
         const sectors = dailyLegs.length;
 
-        // 3. Helper function to calculate BASE max FDP based on reporting time
-        const calculateBaseMaxFDP = (startMins) => {
-            // Convert UTC to local Kazakhstan time
-            const localStartMins = (startMins + 300) % 1440; // +5 hours = +300 minutes
-            
-            // FDP table (same for both FC and CC, based on reporting time)
-            if (localStartMins >= 360 && localStartMins <= 809) return 780;  // 06:00-13:29 local
-            else if (localStartMins >= 810 && localStartMins <= 839) return 765; // 13:30-13:59
-            else if (localStartMins >= 840 && localStartMins <= 869) return 750; // 14:00-14:29
-            else if (localStartMins >= 870 && localStartMins <= 899) return 735; // 14:30-14:59
-            else if (localStartMins >= 900 && localStartMins <= 929) return 720; // 15:00-15:29
-            else if (localStartMins >= 930 && localStartMins <= 959) return 705; // 15:30-15:59
-            else if (localStartMins >= 960 && localStartMins <= 989) return 690; // 16:00-16:29
-            else if (localStartMins >= 990 && localStartMins <= 1019) return 675; // 16:30-16:59
-            else if (localStartMins >= 1020 || localStartMins <= 299) return 660; // 17:00-04:59 (night)
-            else if (localStartMins >= 300 && localStartMins <= 314) return 720;  // 05:00-05:14
-            else if (localStartMins >= 315 && localStartMins <= 329) return 735;  // 05:15-05:29
-            else if (localStartMins >= 330 && localStartMins <= 344) return 750;  // 05:30-05:44
-            else if (localStartMins >= 345 && localStartMins <= 359) return 765;  // 05:45-05:59
-            
-            return 780; // Default
-        };
+        // Convert UTC to local Kazakhstan (UTC+5) for FDP table
+        const localFcMins = (fcMinsUTC + 300) % 1440;
+        const baseFDP = calculateBaseMaxFDP(localFcMins);
 
-        // 4. Calculate base max FDP based on FLIGHT CREW reporting time
-        const baseFDP = calculateBaseMaxFDP(fcMins);
-
-        // 5. Calculate reporting time difference
-        let reportingDiff = fcMins - ccMins;
-        if (reportingDiff < 0) reportingDiff += 1440; // Handle midnight crossing
-        
-        // Cap the difference at 60 minutes (1 hour)
+        let reportingDiff = fcMinsUTC - ccMinsUTC;
+        if (reportingDiff < 0) reportingDiff += 1440;
         const cappedDiff = Math.min(reportingDiff, 60);
-        
-        // 6. Apply sector reductions
+
         const getMaxFDPWithSectors = (baseMax, sectors) => {
             let finalMax = baseMax;
-            
-            // Apply reductions
-            if (sectors === 2) {
-                // No reduction
-            } else if (sectors === 3) {
-                finalMax -= 30; // 3 Sectors: -30 mins
-            } else if (sectors === 4) {
-                finalMax -= 60; // 4 Sectors: -60 mins
-            } else if (sectors >= 5) {
-                finalMax -= 90; // 5+ Sectors: -90 mins
-            }
-            
-            // Ensure minimum 660 minutes (11 hours)
+            if (sectors === 3) finalMax -= 30;
+            else if (sectors === 4) finalMax -= 60;
+            else if (sectors >= 5) finalMax -= 90;
             return Math.max(finalMax, 660);
         };
 
-        // 7. Calculate Flight Crew max FDP
         const fcMax = getMaxFDPWithSectors(baseFDP, sectors);
-        
-        // 8. Calculate Cabin Crew max FDP: Base FDP + capped reporting difference (then apply sector reductions)
-        const ccBaseMax = baseFDP + cappedDiff;
-        const ccMax = getMaxFDPWithSectors(ccBaseMax, sectors);
+        const ccMax = getMaxFDPWithSectors(baseFDP + cappedDiff, sectors);
 
-        // 9. Update both fields
         safeSet('j-max-fdp', minsToTime(fcMax));
-        
-        // Update hidden cabin crew max FDP
         const ccMaxInput = document.getElementById('j-cc-max-fdp-hidden');
-        if (ccMaxInput) {
-            ccMaxInput.value = minsToTime(ccMax);
-        }
-        
+        if (ccMaxInput) ccMaxInput.value = minsToTime(ccMax);
     };
 
     function calculateNightDuty(startMinsUTC, endMinsUTC) {
@@ -3752,26 +3675,6 @@
             return pageIndex - 1; // page before this one
         }
         return null;
-    }
-
-    async function parsePage1(pdf) {
-        const page = await pdf.getPage(1);
-        const content = await page.getTextContent();
-        const textContent = content.items.map(x => x.str).join(' ');
-
-        extractMainPageCoordinates(content.items);
-        try {
-            parsePageOne(textContent);
-        } catch (parseError) {
-            console.warn('Failed to parse page 1:', parseError);
-            if (typeof setOFPLoadedState === 'function') {
-                setOFPLoadedState(false);
-            }
-            throw parseError;
-        }
-
-        const requestNumber = extractRequestNumber(textContent);
-        return { requestNumber, textContent };
     }
 
     async function parsePDFData(pdfBytes, isAutoLoad) {
@@ -6855,7 +6758,7 @@
         'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
         'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
         'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
-        'j-report-type', 'j-fc-count', 'j-cc-count', 'front-extra-reason',
+        'j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count','j-report-type', 'front-extra-reason',
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block',
     ];
 
