@@ -6521,18 +6521,44 @@
                         if (i === 1) {
                             // ATIS/ATC – only if in typing mode
                             if (currentAtisInputMode === 'typing') {
-                                const frontItems = [ 
-                                    {id:'front-atis', offset:40, coord:frontCoords.atis}, 
-                                    {id:'front-atc', offset:50, coord:frontCoords.atcLabel}
-                                ];
-                                frontItems.forEach(f => {
-                                    const v = el(f.id)?.value;
-                                    if(f.coord && v) newPage.drawText(v.toUpperCase(), { 
-                                        x: f.coord.transform[4] + f.offset, 
-                                        y: f.coord.transform[5] + V_LIFT, 
-                                        size: 12, font: fontB, color: PDFLib.rgb(0,0,0)
+                                const lineHeight = 16;   // spacing between lines (font size 12 + 2)
+                                const maxCharsPerLine = 50;
+
+                                // Helper to draw a field with optional wrapping
+                                const drawWrappedField = (id, offset, coord) => {
+                                    const rawText = el(id)?.value;
+                                    if (!coord || !rawText) return;
+
+                                    const fullText = rawText.toUpperCase();
+                                    const lines = fullText.match(new RegExp(`.{1,${maxCharsPerLine}}`, 'g')) || [fullText];
+                                    const baseX = coord.transform[4] + offset;
+                                    let baseY = coord.transform[5] + V_LIFT;
+
+                                    lines.forEach((line, idx) => {
+                                        newPage.drawText(line.trim(), {
+                                            x: baseX,
+                                            y: baseY - idx * lineHeight,
+                                            size: 12,
+                                            font: fontB,
+                                            color: PDFLib.rgb(0, 0, 0)
+                                        });
                                     });
-                                });
+                                };
+
+                                // ATIS – wrap after 50 chars
+                                drawWrappedField('front-atis', 40, frontCoords.atis);
+
+                                // ATC – single line (no wrapping)
+                                const atcText = el('front-atc')?.value;
+                                if (frontCoords.atcLabel && atcText) {
+                                    newPage.drawText(atcText.toUpperCase(), {
+                                        x: frontCoords.atcLabel.transform[4] + 50,
+                                        y: frontCoords.atcLabel.transform[5] + V_LIFT,
+                                        size: 12,
+                                        font: fontB,
+                                        color: PDFLib.rgb(0, 0, 0)
+                                    });
+                                }
                             }
                             // ATIS/ATC – only if in drawing mode
                             if (currentAtisInputMode === 'writing') {
