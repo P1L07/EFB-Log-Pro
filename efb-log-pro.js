@@ -2038,6 +2038,10 @@
                     // Pass isBatchUpload to the handler
                     await handleNewOFP(blob, metadata, isBatchUpload);
                 }
+                // After replacement or new OFP, refresh OFP manager if sectors tab is active
+                if (!isBatchUpload && document.querySelector('.tool-section.active')?.id === 'section-sectors') {
+                    await renderOFPMangerTable();
+                }
             } catch (error) {
                 // Emergency fallback – something went wrong in the handlers
                 console.error("Unexpected error during save:", error);
@@ -2050,6 +2054,39 @@
                 toastMessage += ")";
                 showToast(toastMessage, emergencyResult.ofpsRecordCreated ? 'warning' : 'error');
                 setOFPLoadedState(true);
+            }
+        }
+
+        // After saving, reload user data for the currently active OFP
+        if (!isAutoLoad && !isBatchUpload) {
+            const activeId = localStorage.getItem('activeOFPId');
+            if (activeId) {
+                const userData = await loadOFPUserData(Number(activeId));
+                if (userData) {
+                    // Restore waypoint inputs
+                    if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
+                        userData.userWaypoints.forEach((data, i) => {
+                            if (i < waypoints.length) {
+                                if (data.ato) safeSet(`o-a-${i}`, data.ato);
+                                if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                                if (data.notes) safeSet(`o-n-${i}`, data.notes);
+                                if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+                            }
+                        });
+                        runFlightLogCalculations();
+                        syncLastWaypoint();
+                    }
+                    // Restore persistent text inputs (excluding drawings)
+                    if (userData.userInputs && typeof userData.userInputs === 'object') {
+                        Object.keys(userData.userInputs).forEach(id => {
+                            const val = userData.userInputs[id];
+                            if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') return;
+                            if (val !== undefined && val !== null) {
+                                safeSet(id, val);
+                            }
+                        });
+                    }
+                }
             }
         }
 
@@ -3425,33 +3462,24 @@
     };
 
     function calculateNightDuty(startMinsUTC, endMinsUTC) {
-        if(!startMinsUTC || !endMinsUTC) return "00:00";
-        
-        // Kazakhstan night for duty: 21:00-23:59 UTC and 00:00-01:59 UTC
+        if (!startMinsUTC && startMinsUTC !== 0 || !endMinsUTC && endMinsUTC !== 0) return "00:00";
+
         let nightOverlap = 0;
-        
-        // Adjust for midnight crossing
         let start = startMinsUTC;
         let end = endMinsUTC;
-        if (end < start) end += 1440;
-        
-        // Night windows in UTC for duty
-        const nightWindows = [
-            { start: 0, end: 119 },    // 00:00-01:59 UTC
-            { start: 1260, end: 1439 }  // 21:00-23:59 UTC
-        ];
-        
+        if (end < start) end += 1440;   // handle crossing midnight
+
+        // Night window in UTC: 21:00 (1260) to 23:59 (1439)
+        const nightStart = 1260;
+        const nightEnd = 1439;
+
         for (let i = start; i < end; i++) {
             const minuteOfDay = i % 1440;
-            
-            for (const window of nightWindows) {
-                if (minuteOfDay >= window.start && minuteOfDay <= window.end) {
-                    nightOverlap++;
-                    break; // Count each minute only once
-                }
+            if (minuteOfDay >= nightStart && minuteOfDay <= nightEnd) {
+                nightOverlap++;
             }
         }
-        
+
         return minsToTime(nightOverlap);
     }
 
@@ -6165,7 +6193,7 @@
         return new Promise((resolve) => {
             const input = document.createElement('input');
             input.type = 'file';
-            input.accept = 'application/pdf'; // Stricter accept type helps iOS
+            input.accept = 'application/pdf';
             input.style.display = 'none';
             document.body.appendChild(input);
 
@@ -6194,6 +6222,20 @@
 
             input.click();
         });
+    }
+
+    async function findTextInPDF(pdfBytes, searchText) {
+        const loadingTask = pdfjsLib.getDocument(pdfBytes);
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+        const textContent = await page.getTextContent();
+        
+        for (const item of textContent.items) {
+            if (item.str && item.str.toLowerCase().includes(searchText.toLowerCase())) {
+                return item.transform; // [scaleX, skewX, skewY, scaleY, x, y]
+            }
+        }
+        return null; // not found
     }
 
     window.downloadJourneyLog = async function(mode = 'download') {
@@ -6273,24 +6315,30 @@
             });
 
             // SIGNATURE
-            if (signaturePad && !signaturePad.isEmpty()) {
-                try {
-                    const sigImageBase64 = signaturePad.toDataURL();
-                    const sigImage = await pdfDoc.embedPng(sigImageBase64);
-                    
-                    page.drawImage(sigImage, {
-                        x: 570,        
-                        y: 120 + CREW_OFFSET,
-                        width: 200,    
-                        height: 50,    
-                    });
-                } catch (sigError) {
-                    console.error("Error Embedding the Signature ", sigError);
-                    await logSecurityEvent('SIGNATURE_EMBED_ERROR', {
-                        error: sigError.message,
-                        timestamp: new Date().toISOString()
-                    });
+            const sigAnchor = await findTextInPDF(journeyLogTemplateBytes, "Captain's Signature");// Find the text anchor
+
+            if (sigAnchor) {
+                const [sx, , , , x, y] = sigAnchor; // destructure transform array
+                // sx is font size scale, we can ignore it for position
+                const sigX = x + 120; // place signature to the right of the text (adjust offset as needed)
+                const sigY = y - 15;  // small vertical align correction
+
+                if (pads.main.pad && !pads.main.pad.isEmpty()) {
+                    try {
+                        const sigImageBase64 = pads.main.pad.toDataURL();
+                        const sigImage = await pdfDoc.embedPng(sigImageBase64);
+                        page.drawImage(sigImage, {
+                            x: sigX,
+                            y: sigY,
+                            width: 200,
+                            height: 50,
+                        });
+                    } catch (sigError) {
+                        // error handling...
+                    }
                 }
+            } else {
+                console.warn("'Captain's Signature' text not found in template");
             }
 
             // CREW DUTY DATA
@@ -7180,7 +7228,7 @@
             };
 
             if (existingOFP && existingOFP.id) {
-                // --- Update existing record (preserve ID, isActive, order) ---
+                // Update existing record (preserve ID, isActive, order)
                 const updates = {
                     ...minimalMetadata,
                     data: null,
@@ -7196,7 +7244,7 @@
                 results.ofpsRecordCreated = true;
                 console.log(`Emergency: existing ofps record updated, ID = ${existingOFP.id}`);
             } else {
-                // --- Create new minimal record (bottom of order, inactive) ---
+                // Create new minimal record (bottom of order, inactive)
                 const all = await getCachedOFPs();
                 const maxOrder = all.length > 0 ? Math.max(...all.map(o => o.order || 0)) : 0;
                 const ofpRecord = {
@@ -7254,16 +7302,8 @@
                     return;
                 }
                 Object.assign(ofp, updates);
-                
-                // Log blob presence
-                if (ofp.data) {
-                    //Not required anymore
-                }
 
                 const putRequest = store.put(ofp);
-                putRequest.onsuccess = () => {
-                    //Not required anymore
-                };
                 putRequest.onerror = (e) => {
                     alert('Put error:'+ e.target.error);
                     reject(e.target.error);
@@ -7591,7 +7631,6 @@
     }
 
     async function deleteJourneyTemplateFromDB() {
-        alert('Deleting journey template from DB');
         const db = await getDB();
         const tx = db.transaction("files", "readwrite");
         const store = tx.objectStore("files");
@@ -7650,40 +7689,41 @@
         );
         
         if (confirmed) {
-        // Try all storage methods
-        const recoveryMethods = [
-            { key: 'efb_log_state', type: 'encrypted' },
-            { key: 'efb_log_state_fallback', type: 'unencrypted' },
-            { key: 'efb_log_state_plain', type: 'legacy' }
-        ];
-        
-        for (const method of recoveryMethods) {
-            try {
-                const data = localStorage.getItem(method.key);
-                if (data) {
-                    let state;
-                    if (method.type === 'encrypted') {
-                        state = await decryptData(data);
-                    } else {
-                        state = JSON.parse(data);
-                    }
-                    
-                    if (state && state.inputs) {
-                        // Restore inputs
-                        Object.keys(state.inputs).forEach(id => {
-                            if (state.inputs[id]) safeSet(id, state.inputs[id]);
-                        });
+
+            // Try all storage methods
+            const recoveryMethods = [
+                { key: 'efb_log_state', type: 'encrypted' },
+                { key: 'efb_log_state_fallback', type: 'unencrypted' },
+                { key: 'efb_log_state_plain', type: 'legacy' }
+            ];
+            
+            for (const method of recoveryMethods) {
+                try {
+                    const data = localStorage.getItem(method.key);
+                    if (data) {
+                        let state;
+                        if (method.type === 'encrypted') {
+                            state = await decryptData(data);
+                        } else {
+                            state = JSON.parse(data);
+                        }
                         
-                        alert(`Recovered data from ${method.type} storage`);
-                        return;
+                        if (state && state.inputs) {
+                            // Restore inputs
+                            Object.keys(state.inputs).forEach(id => {
+                                if (state.inputs[id]) safeSet(id, state.inputs[id]);
+                            });
+                            
+                            alert(`Recovered data from ${method.type} storage`);
+                            return;
+                        }
                     }
+                } catch (e) {
+                    console.log(`Recovery from ${method.key} failed:`, e);
                 }
-            } catch (e) {
-                console.log(`Recovery from ${method.key} failed:`, e);
             }
         }
-        }
-        alert("No recoverable data found");
+        showToast("No recoverable data found", 'info');
     };
 
     async function confirmFactoryReset() {
@@ -7707,6 +7747,7 @@
 
             // Clear IndexedDB
             try {
+
                 const db = await getDB();
                 // Delete the ofps store (all OFPs, metadata, logged PDFs)
                 if (db.objectStoreNames.contains('ofps')) {
@@ -7717,6 +7758,7 @@
                         tx.onerror = reject;
                     });
                 }
+
                 // Delete the old files store (legacy OFP blob)
                 if (db.objectStoreNames.contains('files')) {
                     const tx = db.transaction('files', 'readwrite');
@@ -7726,6 +7768,7 @@
                         tx.onerror = reject;
                     });
                 }
+
             } catch (e) {
                 console.error('Failed to clear IndexedDB:', e);
             }
@@ -7890,6 +7933,7 @@
                 }
             }
         } else {
+
             // 12.1 FULL RESET (End of Day)
             localStorage.removeItem('efb_log_state');
             localStorage.removeItem('efb_log_state_fallback'); 
@@ -7923,6 +7967,7 @@
 // ==========================================
     
     function updateStorageDisplay(bytes) {
+
         const storageEl = document.getElementById('settings-storage');
         if (!storageEl) return;
         
@@ -7980,6 +8025,7 @@
     }
 
     function initializeSettingsTab() {
+
         // Bind buttons to their handlers
         const settingsButtons = {
             'btn-change-pin': changePIN,
@@ -8016,6 +8062,7 @@
     }
 
     async function initializeSettings() {
+
         // Bind buttons and listeners (only once)
         initializeSettingsTab();
         
@@ -8090,6 +8137,7 @@
     }
 
     function saveSettings() {
+
         const settings = {
             autoLockTime: document.getElementById('auto-lock-time')?.value || '15',
             pdfQuality: document.getElementById('pdf-quality')?.value || '2.0',
@@ -8098,6 +8146,7 @@
             atisInputMode: document.getElementById('atis-input-mode')?.value || 'typing',
             lastSaved: new Date().toISOString()
         };
+
         // Persistent authentication logic
         if (settings.autoLockTime == 0) {
             // If currently authenticated, set persistent flag
@@ -8108,6 +8157,7 @@
             // Auto-lock is enabled → remove persistent authentication
             localStorage.removeItem(PERSIST_AUTH_KEY);
         }
+
         localStorage.setItem('efb_settings', JSON.stringify(settings));
         if (sessionStorage.getItem('efb_authenticated') === 'true') {
             resetAutoLockTimer();
