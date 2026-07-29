@@ -8430,16 +8430,16 @@ function showAtisPopup() {
             </div>
 
             <div>
-    <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Visibility</label>
-    <div style="margin-top: 2px;">
-        <input type="text" id="atis-vis" maxlength="10" placeholder="10KM" value="10"
-               style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
-    </div>
-</div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Visibility</label>
+                <div style="margin-top: 2px;">
+                    <input type="text" id="atis-vis" maxlength="4" placeholder="10KM" value="10"
+                        style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+                </div>
+            </div>
 
-<div>
-    <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Cloud</label>
-    <div style="margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Cloud</label>
+                <div style="margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
                     <label style="display: flex; align-items: center; gap: 3px; font-size: 13px;">
                         <input type="checkbox" id="cloud-few"> FEW
                         <input type="text" id="cloud-few-alt" placeholder="040" maxlength="3" inputmode="numeric" pattern="[0-9]*"
