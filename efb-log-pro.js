@@ -2956,7 +2956,6 @@
 
     function extractNOTAMs(fullText) {
         const notams = [];
-        // Updated regex: allow 1-2 letters at start of NOTAM ID
         const notamIdPattern = '[A-Z]{1,2}\\d{4}\\/\\d{2}';
         const notamStartRegex = new RegExp(
             '(?:^|\\s)(?:-)?\\s*([A-Z]{4})\\s+(' + notamIdPattern + ')|NOTAM([A-Z]{4})\\s+(' + notamIdPattern + ')',
@@ -2964,9 +2963,12 @@
         );
         
         const stopMarkers = [
-            'ARRIVAL:', 'OTHER:', 'PAGE', 'AIR ASTANA BRIEF', '---', 
-            'DEPARTURE:', 'CTR', 'RWY', 'TWY', 'ACFT STAND', 'APRON', 
-            'ILS', 'APCH LGT', 'TWY CENTRELINE LGT', 'Fir:', 'Region:'
+            'ARRIVAL:', 'OTHER:', 'DEPARTURE:', '---', 
+            'PAGE', 'FLY ARYSTAN BRIEF', 'AIR ASTANA BRIEF',
+            'CTR', 'RWY TDZ LGT', 'ACFT STAND', 'APRON',
+            'ILS', 'APCH LGT', 'TWY CENTRELINE LGT', 'Fir:', 'Region:',
+            'TWY', 'RWY', 'AD', 'TWR', 'STAR', 'SID', 'PJE',
+            'NOT CLASSIFIED', 'FIRE AND RESCUE', 'FIREFIGHTING'
         ];
 
         const matches = [];
@@ -2981,15 +2983,26 @@
             const end = next ? next.start : fullText.length;
             let rawText = fullText.substring(current.start, end).trim();
 
-            // Truncate at first stop marker
-            let stopIdx = rawText.length;
-            for (let marker of stopMarkers) {
-                let idx = rawText.indexOf(marker);
-                if (idx !== -1 && idx < stopIdx) stopIdx = idx;
+            const lines = rawText.split('\n');
+            let stopLineIndex = lines.length;
+            for (let j = 0; j < lines.length; j++) {
+                const trimmed = lines[j].trim();
+                if (stopMarkers.some(marker => trimmed.startsWith(marker))) {
+                    stopLineIndex = j;
+                    break;
+                }
             }
-            let cleanedText = rawText.substring(0, stopIdx).trim();
+            let cleanedText = lines.slice(0, stopLineIndex).join('\n').trim();
 
-            // Expanded keywords list
+            // --- Cleanup: remove inline footer and section headers ---
+            cleanedText = cleanedText
+                .replace(/\s*FLY\s+ARYSTAN\s+BRIEF\s+PAGE\s+\d+\s+OF\s+\d+(\s+PAGE\s+\d+\s+OF\s+\d+)?.*$/gi, '')
+                .replace(/\s+PAGE\s+\d+\s+OF\s+\d+.*$/gi, '')
+                .replace(/\s*Fir:\s*.*$/i, '')       // NEW
+                .replace(/\s*Region:\s*.*$/i, '')    // NEW
+                .trim();
+
+            // Keyword check
             const keywords = [
                 'RWY', 'TWY', 'CLSD', 'U/S', 'NOT AVBL', 'WIP', 'FIRE', 'RESCUE', 'BIRD', 'BA',
                 'ICE', 'SNOW', 'SLUSH', 'ILS', 'VOR', 'NDB', 'DME', 'RNAV', 'GPS', 'RNP',
@@ -2999,10 +3012,6 @@
             ];
             const upper = cleanedText.toUpperCase();
             const hasKeyword = keywords.some(kw => upper.includes(kw));
-
-            if (cleanedText.includes('SW0158/26')) {
-                console.log('DEBUG: Found SW0158/26 – keyword:', hasKeyword, 'length:', cleanedText.length);
-            }
 
             if (hasKeyword && cleanedText.length > 20) {
                 notams.push(cleanedText);
@@ -3816,8 +3825,8 @@
         const depEnd = etdMinutes + 60;
         const arrStart = Math.max(0, etaMinutes - 60);
         const arrEnd = etaMinutes + 60;
-        let otherStart = etdMinutes;
-        let otherEnd = etaMinutes + 60;
+        let otherStart = 0;
+        let otherEnd = 1440;
         if (etaMinutes < etdMinutes) otherEnd += 1440;
 
         // Convert windows to UTC timestamps
@@ -3848,7 +3857,7 @@
         setTimeout(() => {
             try {
                 // Helper functions for date parsing
-                const parseNotamDateTime = (str, baseDate) => {
+                const parseNotamDateTime = (str, baseYear) => {
                     const match = str.match(/(\d{2})([A-Z]{3})(\d{2})(\d{2})/i);
                     if (!match) return null;
                     const day = parseInt(match[1], 10);
@@ -3859,23 +3868,49 @@
                     const month = months[monthStr];
                     if (month === undefined) return null;
 
-                    let year = baseDate.getUTCFullYear();
-                    if (month < baseDate.getUTCMonth()) year += 1;
-                    return new Date(Date.UTC(year, month, day, hour, minute));
+                    // Start with baseYear
+                    let year = baseYear;
+                    let date = new Date(Date.UTC(year, month, day, hour, minute));
+                    // If this date is more than 180 days in the past, it's probably next year
+                    // (handles "10JAN" when base is December)
+                    const diffDays = (date.getTime() - Date.UTC(baseYear, 0, 1)) / 86400000; // days since Jan 1 of baseYear
+                    // Actually, better to compare against baseDate directly:
+                    // But we don't have baseDate here, only baseYear. We'll handle it in getNotamValidity.
+                    return { year, month, day, hour, minute };
                 };
 
                 const getNotamValidity = (text) => {
                     const match = text.match(/(\d{2}[A-Z]{3}\d{4})\s*[-/]\s*(\d{2}[A-Z]{3}\d{4})/i);
-                    if (match) {
-                        const start = parseNotamDateTime(match[1], flightDate);
-                        const end = parseNotamDateTime(match[2], flightDate);
-                        return { start, end };
+                    if (!match) return null;
+                    const startStr = match[1];
+                    const endStr = match[2];
+
+                    // Parse both with flight's year
+                    const startParsed = parseNotamDateTime(startStr, flightDate.getUTCFullYear());
+                    const endParsed = parseNotamDateTime(endStr, flightDate.getUTCFullYear());
+                    if (!startParsed || !endParsed) return null;
+
+                    let start = new Date(Date.UTC(startParsed.year, startParsed.month, startParsed.day, startParsed.hour, startParsed.minute));
+                    let end = new Date(Date.UTC(endParsed.year, endParsed.month, endParsed.day, endParsed.hour, endParsed.minute));
+
+                    // If end is before start, the end is in the next year
+                    if (end < start) {
+                        end.setUTCFullYear(end.getUTCFullYear() + 1);
                     }
-                    return null;
+
+                    // If after all that, the end is still before the flight date, the whole NOTAM is in the past
+                    // => shift both start and end forward by one year
+                    if (end < flightDate) {
+                        start.setUTCFullYear(start.getUTCFullYear() + 1);
+                        end.setUTCFullYear(end.getUTCFullYear() + 1);
+                    }
+
+                    return { start, end };
                 };
 
                 // Extract data
                 const notams = extractNOTAMs(fullText);
+                console.log('NOTAMs extracted:', notams.length, notams);
                 const weather = extractWeather(fullText);
 
                 // Store latest METAR for each airport (only first encountered per airport)
