@@ -8430,15 +8430,37 @@ function showAtisPopup() {
             </div>
 
             <div>
-                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">Visibility</label>
-                <input type="text" id="atis-vis" maxlength="10" placeholder="10KM"
-                       style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
-            </div>
+    <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Visibility</label>
+    <div style="margin-top: 2px;">
+        <input type="text" id="atis-vis" maxlength="10" placeholder="10KM" value="10"
+               style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+    </div>
+</div>
 
-            <div>
-                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">Cloud</label>
-                <input type="text" id="atis-cloud" maxlength="30" placeholder="FEW040"
-                       style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+<div>
+    <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Cloud</label>
+    <div style="margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px;">
+                        <input type="checkbox" id="cloud-few"> FEW
+                        <input type="text" id="cloud-few-alt" placeholder="040" maxlength="3" inputmode="numeric" pattern="[0-9]*"
+                            style="width: 42px; padding: 4px; border-radius: 4px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 13px; display: none;">
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px;">
+                        <input type="checkbox" id="cloud-sct"> SCT
+                        <input type="text" id="cloud-sct-alt" placeholder="040" maxlength="3" inputmode="numeric" pattern="[0-9]*"
+                            style="width: 42px; padding: 4px; border-radius: 4px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 13px; display: none;">
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px;">
+                        <input type="checkbox" id="cloud-bkn"> BKN
+                        <input type="text" id="cloud-bkn-alt" placeholder="040" maxlength="3" inputmode="numeric" pattern="[0-9]*"
+                            style="width: 42px; padding: 4px; border-radius: 4px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 13px; display: none;">
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 3px; font-size: 13px;">
+                        <input type="checkbox" id="cloud-ovc"> OVC
+                        <input type="text" id="cloud-ovc-alt" placeholder="040" maxlength="3" inputmode="numeric" pattern="[0-9]*"
+                            style="width: 42px; padding: 4px; border-radius: 4px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 13px; display: none;">
+                    </label>
+                </div>
             </div>
 
             <div>
@@ -8523,8 +8545,16 @@ function showAtisPopup() {
             if (ts) parts.push('TS');
             if (otherSig) parts.push(otherSig);
 
-            const cloud = document.getElementById('atis-cloud')?.value.trim();
-            if (cloud) parts.push(cloud);
+            // Cloud – only include if checkbox is checked and altitude is provided
+            const cloudTypes = ['FEW', 'SCT', 'BKN', 'OVC'];
+            cloudTypes.forEach(type => {
+                const cb = document.getElementById(`cloud-${type.toLowerCase()}`);
+                const altInput = document.getElementById(`cloud-${type.toLowerCase()}-alt`);
+                if (cb && cb.checked && altInput && altInput.value.trim() !== '') {
+                    const alt = altInput.value.trim().padStart(3, '0'); // ensure 3 digits (e.g., "040")
+                    parts.push(`${type}${alt}`);
+                }
+            });
 
             const temp = document.getElementById('atis-temp')?.value.trim();
             if (temp) parts.push(temp);
@@ -8560,7 +8590,6 @@ function showAtisPopup() {
             'atis-info',
             'atis-wind',
             'atis-vis',
-            'atis-cloud',
             'atis-temp',
             'atis-qnh'
         ];
@@ -8640,6 +8669,18 @@ function showAtisPopup() {
             toggle();
         }
 
+        // Cloud checkbox toggles – show/hide altitude input
+        ['few', 'sct', 'bkn', 'ovc'].forEach(type => {
+            const cb = document.getElementById(`cloud-${type}`);
+            const alt = document.getElementById(`cloud-${type}-alt`);
+            if (cb && alt) {
+                cb.addEventListener('change', () => {
+                    alt.style.display = cb.checked ? 'inline-block' : 'none';
+                    if (cb.checked) alt.focus(); // focus altitude input immediately
+                });
+            }
+        });
+
         // ----- Enter key to move to next field (unchanged) -----
         const allInputs = Array.from(document.querySelectorAll('#atis-info, #atis-wind, #atis-vis, #atis-cloud, #atis-temp, #atis-qnh, #atis-sigwx-other, #atis-remarks-other, #atis-rwy-cc'));
         allInputs.forEach((input, idx) => {
@@ -8660,7 +8701,7 @@ function showAtisPopup() {
     return modalPromise;
 }
 
-// Wire up the ATIS text field (typing mode only)
+// Wire up the ATIS and CLR text field (typing mode only)
 document.addEventListener('DOMContentLoaded', function() {
     const atisField = document.getElementById('front-atis');
     if (!atisField) return;
@@ -8673,8 +8714,233 @@ document.addEventListener('DOMContentLoaded', function() {
             showAtisPopup();
         }
     });
+
+    const atcField = document.getElementById('front-atc');
+    if (atcField) {
+        atcField.addEventListener('focus', function(e) {
+            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+            if (settings.atisInputMode !== 'writing') {   // same mode setting as ATIS
+                e.preventDefault();
+                atcField.blur();
+                showClearancePopup();
+            }
+        });
+    }
 });
 
+// ==========================================
+// CLEARANCE Structured Popup (compact + smart fields)
+// ==========================================
+
+function extractFirstWaypoint(routeStr) {
+    if (!routeStr) return '';
+    const tokens = routeStr.trim().split(/\s+/);
+    // Skip tokens that are:
+    // - exactly 4 uppercase letters (likely an ICAO airport)
+    // - start with '-' (speed/altitude group like -N0440F300)
+    // - contain digits only
+    // - are a known airway format (letter+digits, e.g., M75)
+    for (const token of tokens) {
+        const upper = token.toUpperCase();
+        // Skip airport codes (exactly 4 letters) if it's the first token
+        if (upper === token && /^[A-Z]{4}$/.test(upper)) continue;
+        // Skip speed/altitude groups
+        if (token.startsWith('-')) continue;
+        // Skip all-digit tokens
+        if (/^\d+$/.test(token)) continue;
+        // Skip airway identifiers (letter followed by digits)
+        if (/^[A-Z]\d+$/.test(upper)) continue;
+        // Accept anything that looks like a waypoint: 2-5 letters
+        if (/^[A-Z]{2,5}$/.test(upper)) return upper;
+    }
+    return '';
+}
+
+function showClearancePopup() {
+    const dest = (document.getElementById('view-dest')?.innerText || '').trim().toUpperCase();
+    const routeStr = (document.getElementById('view-dest-route')?.innerText || '').trim();
+    const firstWpt = extractFirstWaypoint(routeStr);
+
+    const bodyHTML = `
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px 15px;">
+
+            <!-- Cleared to -->
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Cleared to</label>
+                <div style="margin-top: 2px;">
+                    <input type="text" id="clr-dest" maxlength="4" value="${dest}"
+                           style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+                </div>
+            </div>
+
+            <!-- Via (FPLN route checkbox) -->
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Via</label>
+                <div style="margin-top: 2px; display: flex; align-items: center; height: 36px;">
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 14px;">
+                        <input type="checkbox" id="clr-fpln" checked> FPLN route
+                    </label>
+                </div>
+            </div>
+
+            <!-- SID -->
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">SID</label>
+                <div style="margin-top: 2px;">
+                    <input type="text" id="clr-sid" maxlength="10" value="${firstWpt}"
+                           style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+                </div>
+            </div>
+
+            <!-- Runway (NEW) -->
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Runway</label>
+                <div style="margin-top: 2px;">
+                    <input type="text" id="clr-rwy" maxlength="2" inputmode="numeric" pattern="[0-9]*" placeholder="04"
+                           style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+                </div>
+            </div>
+
+            <!-- Climb initially -->
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Climb initially</label>
+                <div style="margin-top: 2px;">
+                    <input type="text" id="clr-climb" maxlength="5" inputmode="numeric" pattern="[0-9]*" placeholder="5000"
+                           style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+                </div>
+            </div>
+
+            <!-- Squawk -->
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Squawk</label>
+                <div style="margin-top: 2px;">
+                    <input type="text" id="clr-squawk" maxlength="4" inputmode="numeric" pattern="[0-9]*" placeholder="1234"
+                           style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+                </div>
+            </div>
+
+            <!-- Remarks (full width) -->
+            <div style="grid-column: 1 / -1;">
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Remarks</label>
+                <div style="margin-top: 2px;">
+                    <input type="text" id="clr-remarks" maxlength="100" placeholder="Any additional instructions"
+                           style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+                </div>
+            </div>
+        </div>
+    `;
+
+    const modalPromise = createModal({
+        title: 'ATC Clearance',
+        icon: '📡',
+        type: 'info',
+        confirmText: 'Done',
+        cancelText: 'Cancel',
+        centered: false,
+        compact: true,
+        maxWidth: '600px',
+        bodyHTML: bodyHTML,
+        onConfirm: () => {
+            const parts = [];
+
+            const dest = document.getElementById('clr-dest')?.value.trim().toUpperCase();
+            if (dest) parts.push('Cleared to ' + dest);
+
+            if (document.getElementById('clr-fpln')?.checked) {
+                parts.push('via FPLN route');
+            }
+
+            const sid = document.getElementById('clr-sid')?.value.trim().toUpperCase();
+            if (sid) parts.push('SID ' + sid);
+
+            const rwy = document.getElementById('clr-rwy')?.value.trim();
+            if (rwy) parts.push('RWY ' + rwy);
+
+            const climb = document.getElementById('clr-climb')?.value.trim();
+            if (climb) parts.push('climb initially ' + climb + 'ft');
+
+            const squawk = document.getElementById('clr-squawk')?.value.trim();
+            if (squawk) parts.push('squawk ' + squawk);
+
+            const remarks = document.getElementById('clr-remarks')?.value.trim();
+            if (remarks) parts.push(remarks);
+
+            document.getElementById('front-atc').value = parts.join(', ');
+        }
+    });
+
+    // Dynamic behaviour
+    requestAnimationFrame(() => {
+        // Digits only for climb and squawk and runway
+        const climbInput = document.getElementById('clr-climb');
+        if (climbInput) {
+            climbInput.addEventListener('input', function() {
+                this.value = this.value.replace(/\D/g, '');
+            });
+        }
+        const squawkInput = document.getElementById('clr-squawk');
+        if (squawkInput) {
+            squawkInput.addEventListener('input', function() {
+                this.value = this.value.replace(/\D/g, '');
+            });
+        }
+        const rwyInput = document.getElementById('clr-rwy');
+        if (rwyInput) {
+            rwyInput.addEventListener('input', function() {
+                this.value = this.value.replace(/\D/g, '').slice(0,2);
+            });
+        }
+
+        // Auto‑advance field order (including new runway)
+        const fieldOrder = [
+            'clr-dest',
+            'clr-sid',
+            'clr-rwy',
+            'clr-climb',
+            'clr-squawk',
+            'clr-remarks'
+        ];
+        const allInputs = Array.from(document.querySelectorAll(
+            '#clr-dest, #clr-sid, #clr-rwy, #clr-climb, #clr-squawk, #clr-remarks'
+        ));
+
+        // Enter key
+        allInputs.forEach((input, idx) => {
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const next = allInputs[idx + 1];
+                    if (next) next.focus();
+                    else document.getElementById('modal-confirm')?.focus();
+                }
+            });
+        });
+
+        // Auto‑advance when maxlength reached
+        fieldOrder.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('input', function() {
+                const max = parseInt(this.getAttribute('maxlength'), 10);
+                if (max && this.value.length >= max) {
+                    const idx = fieldOrder.indexOf(id);
+                    const nextId = fieldOrder[idx + 1];
+                    if (nextId) {
+                        const next = document.getElementById(nextId);
+                        if (next) next.focus();
+                    } else {
+                        document.getElementById('modal-confirm')?.focus();
+                    }
+                }
+            });
+        });
+
+        // Focus first field
+        document.getElementById('clr-dest')?.focus();
+    });
+
+    return modalPromise;
+}
 
 // FUNCTIONS NOT USED ANYMORE
     // Shared function to restore OFP‑specific user data (waypoints + persistent inputs)
