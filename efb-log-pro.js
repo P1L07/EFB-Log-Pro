@@ -4258,13 +4258,16 @@
         icon = '📋',
         showVersion = null,
         listItems = null,
-        centered = true
+        bodyHTML = '',
+        centered = true,
+        compact = false,
+        maxWidth = null,
     }) {
         const dialog = document.createElement('div');
         dialog.style.cssText = `position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); display:flex; justify-content:center; align-items:center; z-index:10001; backdrop-filter:blur(5px); animation:fadeIn 0.3s ease;`;
 
         let contentHTML = `
-            <div style="background: var(--panel); border-radius: 20px; padding: 30px; max-width: 500px; width: 90%; border: 2px solid ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: left;">
+            <div style="background: var(--panel); border-radius: 20px; padding: ${compact ? '15px' : '30px'}; max-width: ${maxWidth || (compact ? '400px' : '500px')}; width: 90%; border: 2px solid ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: left;">
                 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
                     <span style="font-size: 40px;">${icon}</span>
                     <div>
@@ -4290,6 +4293,10 @@
             </div>`;
         }
 
+        if (bodyHTML) {
+            contentHTML += `<div style="margin-bottom: 25px;">${bodyHTML}</div>`;
+        }
+
         // Buttons
         contentHTML += `<div style="display: flex; gap: 15px; margin-top: 25px;">`;
         if (cancelText) {
@@ -4305,7 +4312,7 @@
             const confirmBtn = dialog.querySelector('#modal-confirm');
             const cancelBtn = dialog.querySelector('#modal-cancel');
 
-            confirmBtn.onclick = () => { dialog.remove(); if (onConfirm) onConfirm(); resolve(true); };
+            confirmBtn.onclick = () => { if (onConfirm) onConfirm(); dialog.remove(); resolve(true); };
             if (cancelBtn) {
                 cancelBtn.onclick = () => { dialog.remove(); if (onCancel) onCancel(); resolve(false); };
             }
@@ -8401,7 +8408,272 @@
         saveState();
     });
 
-    
+// ==========================================
+// ATIS Structured Popup (compact + smart fields)
+// ==========================================
+
+function showAtisPopup() {
+    const bodyHTML = `
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px 15px;">
+
+            <!-- Column 1 -->
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">Info Letter</label>
+                <input type="text" id="atis-info" maxlength="1" placeholder="A" 
+                       style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+            </div>
+
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">Wind (dir/spd/gust)</label>
+                <input type="tel" id="atis-wind" placeholder="240/5" maxlength="9"
+                    style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+            </div>
+
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">Visibility</label>
+                <input type="text" id="atis-vis" maxlength="10" placeholder="10KM"
+                       style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+            </div>
+
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">Cloud</label>
+                <input type="text" id="atis-cloud" maxlength="30" placeholder="FEW040"
+                       style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+            </div>
+
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">Temp/Dew</label>
+                <input type="tel" id="atis-temp" placeholder="15/10" maxlength="5"
+                    style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+            </div>
+
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">QNH (digits only)</label>
+                <input type="tel" id="atis-qnh" maxlength="4" placeholder="1013"
+                       style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+            </div>
+
+            <!-- RWY Condition (full width) -->
+            <div style="grid-column: 1 / -1;">
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim);">RWY Condition</label>
+                <select id="atis-rwy-cond" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px; margin-top: 2px;">
+                    <option value="DRY" selected>DRY</option>
+                    <option value="WET">WET</option>
+                    <option value="CONTAMINATED">CONTAMINATED</option>
+                </select>
+                <div id="atis-cc-wrapper" style="display: none; margin-top: 5px;">
+                    <input type="text" id="atis-rwy-cc" placeholder="5/5/5 100/100/100" maxlength="30"
+                           style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 14px;">
+                </div>
+            </div>
+
+            <!-- Sig WX & Remarks row (full width) -->
+            <div style="grid-column: 1 / -1; display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="font-size: 11px; font-weight: 600; color: var(--dim);">Sig WX</span>
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px;">
+                        <input type="checkbox" id="atis-nsc"> NSC
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px;">
+                        <input type="checkbox" id="atis-ts"> TS
+                    </label>
+                    <input type="text" id="atis-sigwx-other" placeholder="Other" maxlength="20"
+                           style="width: 80px; padding: 6px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 14px;">
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="font-size: 11px; font-weight: 600; color: var(--dim);">Remarks</span>
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px;">
+                        <input type="checkbox" id="atis-nosig"> NOSIG
+                    </label>
+                    <input type="text" id="atis-remarks-other" placeholder="Other" maxlength="50"
+                           style="width: 120px; padding: 6px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 14px;">
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Modal call – now with custom maxWidth
+    const modalPromise = createModal({
+        title: 'ATIS',
+        icon: '📡',
+        type: 'info',
+        confirmText: 'Done',
+        cancelText: 'Cancel',
+        centered: false,
+        compact: true,
+        maxWidth: '600px',   // ← wider popup
+        bodyHTML: bodyHTML,
+        onConfirm: () => {
+            const parts = [];
+
+            const info = document.getElementById('atis-info')?.value.trim().toUpperCase();
+            if (info) parts.push(info);
+
+            const wind = document.getElementById('atis-wind')?.value.trim();
+            if (wind) parts.push(wind);
+
+            const vis = document.getElementById('atis-vis')?.value.trim();
+            if (vis) parts.push(vis);
+
+            // Sig WX
+            const nsc = document.getElementById('atis-nsc')?.checked;
+            const ts = document.getElementById('atis-ts')?.checked;
+            const otherSig = document.getElementById('atis-sigwx-other')?.value.trim();
+            if (nsc) parts.push('NSC');
+            if (ts) parts.push('TS');
+            if (otherSig) parts.push(otherSig);
+
+            const cloud = document.getElementById('atis-cloud')?.value.trim();
+            if (cloud) parts.push(cloud);
+
+            const temp = document.getElementById('atis-temp')?.value.trim();
+            if (temp) parts.push(temp);
+
+            const qnhDigits = document.getElementById('atis-qnh')?.value.trim();
+            if (qnhDigits) parts.push('Q' + qnhDigits);
+
+            // RWY Cond
+            const rwyCond = document.getElementById('atis-rwy-cond')?.value;
+            if (rwyCond === 'DRY') {
+                parts.push('DRY');
+            } else {
+                const cc = document.getElementById('atis-rwy-cc')?.value.trim();
+                if (cc) parts.push(rwyCond + ' ' + cc);
+                else parts.push(rwyCond);
+            }
+
+            // Remarks
+            const nosig = document.getElementById('atis-nosig')?.checked;
+            const otherRem = document.getElementById('atis-remarks-other')?.value.trim();
+            if (nosig) parts.push('NOSIG');
+            if (otherRem) parts.push(otherRem);
+
+            document.getElementById('front-atis').value = parts.join(' ');
+        }
+    });
+
+
+    // After DOM insertion, set up dynamic behaviour
+    requestAnimationFrame(() => {
+        // Define the field order for auto-advance
+        const fieldOrder = [
+            'atis-info',
+            'atis-wind',
+            'atis-vis',
+            'atis-cloud',
+            'atis-temp',
+            'atis-qnh'
+        ];
+
+        // Helper to focus next field in the list
+        function focusNext(currentId) {
+            const idx = fieldOrder.indexOf(currentId);
+            if (idx !== -1 && idx < fieldOrder.length - 1) {
+                const nextField = document.getElementById(fieldOrder[idx + 1]);
+                if (nextField) nextField.focus();
+            } else {
+                // If no more text inputs, maybe focus Done button
+                const doneBtn = document.getElementById('modal-confirm');
+                if (doneBtn) doneBtn.focus();
+            }
+        }
+
+        // Auto-advance when a field is "full" (value length equals its maxlength)
+        fieldOrder.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('input', function() {
+                const max = parseInt(this.getAttribute('maxlength'), 10);
+                if (max && this.value.length >= max) {
+                    focusNext(id);
+                }
+            });
+        });
+
+        // Wind mask – correctly formats DDD/SS/GG
+        const windInput = document.getElementById('atis-wind');
+        if (windInput) {
+            windInput.addEventListener('input', function() {
+                let digits = this.value.replace(/[^\d]/g, '');
+                let formatted = '';
+                if (digits.length > 0) {
+                    formatted += digits.slice(0, 3); // direction
+                }
+                if (digits.length > 3) {
+                    formatted += '/' + digits.slice(3, 5); // speed (2 digits)
+                }
+                if (digits.length > 5) {
+                    formatted += '/' + digits.slice(5, 7); // gust (max 2 digits)
+                }
+                this.value = formatted;
+            });
+        }
+
+        // ----- Temp mask (unchanged) -----
+        const tempInput = document.getElementById('atis-temp');
+        if (tempInput) {
+            tempInput.addEventListener('input', function() {
+                let val = this.value.replace(/[^\d]/g, '');
+                if (val.length > 2) {
+                    val = val.slice(0, 2) + '/' + val.slice(2, 4);
+                }
+                this.value = val;
+            });
+        }
+
+        // ----- QNH digits only (unchanged) -----
+        const qnhInput = document.getElementById('atis-qnh');
+        if (qnhInput) {
+            qnhInput.addEventListener('input', function() {
+                this.value = this.value.replace(/\D/g, '');
+            });
+        }
+
+        // ----- RWY condition toggle (unchanged) -----
+        const rwyCondSelect = document.getElementById('atis-rwy-cond');
+        const ccWrapper = document.getElementById('atis-cc-wrapper');
+        if (rwyCondSelect && ccWrapper) {
+            const toggle = () => {
+                ccWrapper.style.display = rwyCondSelect.value !== 'DRY' ? 'block' : 'none';
+            };
+            rwyCondSelect.addEventListener('change', toggle);
+            toggle();
+        }
+
+        // ----- Enter key to move to next field (unchanged) -----
+        const allInputs = Array.from(document.querySelectorAll('#atis-info, #atis-wind, #atis-vis, #atis-cloud, #atis-temp, #atis-qnh, #atis-sigwx-other, #atis-remarks-other, #atis-rwy-cc'));
+        allInputs.forEach((input, idx) => {
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const next = allInputs[idx + 1];
+                    if (next) next.focus();
+                    else document.getElementById('modal-confirm')?.focus();
+                }
+            });
+        });
+
+        // Focus first field
+        document.getElementById('atis-info')?.focus();
+    });
+
+    return modalPromise;
+}
+
+// Wire up the ATIS text field (typing mode only)
+document.addEventListener('DOMContentLoaded', function() {
+    const atisField = document.getElementById('front-atis');
+    if (!atisField) return;
+
+    atisField.addEventListener('focus', function(e) {
+        const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+        if (settings.atisInputMode !== 'writing') {
+            e.preventDefault();
+            atisField.blur();
+            showAtisPopup();
+        }
+    });
+});
 
 
 // FUNCTIONS NOT USED ANYMORE
