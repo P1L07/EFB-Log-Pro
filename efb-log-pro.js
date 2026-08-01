@@ -6315,10 +6315,6 @@
             let FUEL_OFFSET = (standardRows - templateRows) * rowGap;
             let CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
             
-            if (templateRows === 3) {
-                CREW_OFFSET += rowGap; 
-            }
-
             // HEADERS
             const { width, height } = page.getSize();
             page.drawText("75/125", { x: width - 280, y: height - 40, size: 10, font: font, color: PDFLib.rgb(0,0,0) });
@@ -8376,6 +8372,31 @@
             }
         });
 
+        // Wire up the ATIS and CLR text field (typing mode only)
+        const atisField = document.getElementById('front-atis');
+        if (!atisField) return;
+
+        atisField.addEventListener('focus', function(e) {
+            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+            if (settings.atisInputMode !== 'writing') {
+                e.preventDefault();
+                atisField.blur();
+                showAtisPopup();
+            }
+        });
+
+        const atcField = document.getElementById('front-atc');
+        if (atcField) {
+            atcField.addEventListener('focus', function(e) {
+                const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+                if (settings.atisInputMode !== 'writing') {   // same mode setting as ATIS
+                    e.preventDefault();
+                    atcField.blur();
+                    showClearancePopup();
+                }
+            });
+        }
+
         // Activity tracking
         if (sessionStorage.getItem('efb_authenticated') === 'true') {
             setupActivityTracking();
@@ -8700,33 +8721,6 @@ function showAtisPopup() {
 
     return modalPromise;
 }
-
-// Wire up the ATIS and CLR text field (typing mode only)
-document.addEventListener('DOMContentLoaded', function() {
-    const atisField = document.getElementById('front-atis');
-    if (!atisField) return;
-
-    atisField.addEventListener('focus', function(e) {
-        const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-        if (settings.atisInputMode !== 'writing') {
-            e.preventDefault();
-            atisField.blur();
-            showAtisPopup();
-        }
-    });
-
-    const atcField = document.getElementById('front-atc');
-    if (atcField) {
-        atcField.addEventListener('focus', function(e) {
-            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-            if (settings.atisInputMode !== 'writing') {   // same mode setting as ATIS
-                e.preventDefault();
-                atcField.blur();
-                showClearancePopup();
-            }
-        });
-    }
-});
 
 // ==========================================
 // CLEARANCE Structured Popup (compact + smart fields)
