@@ -4920,54 +4920,40 @@
         try {
             // Get PDF quality setting
             const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-            const pdfQuality = settings.pdfQuality || '1.0'; // Keep as string
-            
-            // Fixed scale mapping based on quality setting (as strings to avoid float issues)
-            const qualityScales = {
-                '0.8': 0.8,   // Low quality = 80% scale (faster rendering)
-                '1.0': 1.0,   // Medium quality = 100% scale (standard)
-                '1.5': 1.5,   // High quality = 150% scale (better readability)
-                '2.0': 2.0    // Maximum quality = 200% scale (best for reading)
+            const pdfQuality = settings.pdfQuality || '1.0';
+
+            // Quality multipliers (relative to device pixel ratio)
+            const qualityMultipliers = {
+                '0.8': 1.0,   // Low = 1x device pixel ratio (standard sharpness)
+                '1.0': 1.5,   // Medium = 1.5x
+                '1.5': 2.0,   // High = 2x
+                '2.0': 3.0    // Maximum = 3x (very sharp, heavy memory)
             };
-            
-            // Get the fixed scale from quality setting
-            let fixedScale = qualityScales[pdfQuality] || 1.0;
-            
+            const multiplier = qualityMultipliers[pdfQuality] || 1.5;
+
+            // Base scale: device pixel ratio (ensures 1:1 mapping between canvas pixels and screen pixels)
+            const deviceScale = window.devicePixelRatio || 1;
+            let scale = deviceScale * multiplier;
+
+            // Safety cap: limit the maximum scale to avoid enormous canvases (e.g., 4x for 4K screens)
+            const MAX_SCALE = 5.0;
+            scale = Math.min(scale, MAX_SCALE);
+
+            // Also ensure it's at least 1.0 for basic readability
+            scale = Math.max(scale, 1.0);
+
             // Load PDF document
             const pdf = await pdfjsLib.getDocument(pdfBytes).promise;
             const totalPages = pdf.numPages;
-            
-            // Get first page for calculations
-            const firstPage = await pdf.getPage(1);
-            const firstViewport = firstPage.getViewport({ scale: 1 });
-            const pageWidth = firstViewport.width;
-            
-            // Hide fallback, show container BEFORE measuring container width
+
+            // Hide fallback, show container
             if (fallback) fallback.style.display = 'none';
             container.innerHTML = '';
             container.style.display = 'block';
-            
+
             // Wait a moment for container to be visible and have dimensions
             await new Promise(resolve => setTimeout(resolve, 100));
-            
-            // Calculate container width - use offsetWidth instead of clientWidth
-            let containerWidth = container.offsetWidth || container.clientWidth;
-            
-            // Ensure we have a valid width
-            if (!containerWidth || containerWidth <= 0) {
-                containerWidth = 800;
-            }
-            
-            // Calculate maximum scale that fits container (leave 20px padding)
-            const maxScaleForContainer = (containerWidth - 20) / pageWidth;
-            
-            // Use the smaller of fixed scale or container-fit scale
-            let scale = Math.min(fixedScale, maxScaleForContainer);
-            
-            // Always ensure minimum readable scale (100% for readability)
-            const MIN_SCALE = 1.0; // Changed from 0.8 to 1.0 for better readability
-            scale = Math.max(scale, MIN_SCALE);
-            
+
             // Create a loading progress indicator
             const progressDiv = document.createElement('div');
             progressDiv.style.cssText = `
@@ -4984,7 +4970,7 @@
             `;
             progressDiv.textContent = `Loading pages: 0/${totalPages}`;
             container.appendChild(progressDiv);
-            
+
             // Create a wrapper for all pages
             const pagesWrapper = document.createElement('div');
             pagesWrapper.style.cssText = `
@@ -4994,42 +4980,41 @@
                 gap: 10px;
             `;
             container.appendChild(pagesWrapper);
-            
+
             // Render pages sequentially with small delays to prevent UI freeze
             for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
                 try {
                     // Update progress
                     progressDiv.textContent = `Loading pages: ${pageNum}/${totalPages}`;
-                    
+
                     // Small delay for UI responsiveness (50ms between pages)
                     if (pageNum > 1) {
                         await new Promise(resolve => setTimeout(resolve, 50));
                     }
-                    
+
                     const page = await pdf.getPage(pageNum);
                     const viewport = page.getViewport({ scale: scale });
-                    
+
                     // Create canvas for this page
                     const canvas = document.createElement('canvas');
                     const context = canvas.getContext('2d');
-                    
-                    // Set canvas dimensions
+
+                    // Set canvas internal resolution
                     canvas.width = viewport.width;
                     canvas.height = viewport.height;
-                    
-                    // Apply CSS for responsive sizing
+
+                    // Apply CSS for responsive sizing – always fill width
                     canvas.style.cssText = `
-                        width: ${viewport.width}px;
-                        max-width: 100%;
+                        width: 100%;
                         height: auto;
-                        margin: 0 auto 20px auto;
+                        margin-bottom: 20px;
                         background: white;
                         border: 1px solid #ccc;
                         border-radius: 4px;
                         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
                         display: block;
                     `;
-                    
+
                     // Add page number label
                     const pageLabel = document.createElement('div');
                     pageLabel.style.cssText = `
@@ -5044,7 +5029,7 @@
                         display: inline-block;
                     `;
                     pageLabel.textContent = `Page ${pageNum}`;
-                    
+
                     // Create page container
                     const pageContainer = document.createElement('div');
                     pageContainer.style.cssText = `
@@ -5052,20 +5037,20 @@
                         margin-bottom: 20px;
                         width: 100%;
                     `;
-                    
+
                     pageContainer.appendChild(pageLabel);
                     pageContainer.appendChild(canvas);
                     pagesWrapper.appendChild(pageContainer);
-                    
-                    // Render the page
+
+                    // Render the page onto the canvas
                     await page.render({ 
                         canvasContext: context, 
                         viewport: viewport 
                     }).promise;
-                    
+
                 } catch (pageError) {
                     console.warn(`Error rendering page ${pageNum}:`, pageError);
-                    
+
                     // Add error placeholder for this page
                     const errorDiv = document.createElement('div');
                     errorDiv.style.cssText = `
@@ -5082,10 +5067,10 @@
                     pagesWrapper.appendChild(errorDiv);
                 }
             }
-            
+
             // Remove progress indicator
             progressDiv.remove();
-            
+
             // Add completion message with quality info
             const summary = document.createElement('div');
             summary.style.cssText = `
@@ -5096,26 +5081,25 @@
                 padding: 10px;
                 border-top: 1px solid #eee;
             `;
-            
+
             const qualityLabels = {
                 '0.8': 'Low (Fast Rendering)',
                 '1.0': 'Medium (Standard)',
                 '1.5': 'High (Better Readability)',
                 '2.0': 'Maximum (Best Quality)'
             };
-            
             const qualityLabel = qualityLabels[pdfQuality] || 'Medium (Standard)';
             summary.textContent = `Rendered ${totalPages} page${totalPages !== 1 ? 's' : ''} at ${qualityLabel} (${(scale * 100).toFixed(0)}% scale)`;
             pagesWrapper.appendChild(summary);
-            
+
         } catch (error) {
             console.error("Critical error rendering PDF:", error);
-            
+
             if (container) {
                 container.style.display = 'none';
                 container.innerHTML = '';
             }
-            
+
             if (fallback) {
                 fallback.style.display = 'flex';
                 fallback.innerHTML = `
@@ -6314,7 +6298,7 @@
             const rowGap = JOURNEY_CONFIG.rowGap; // 17
             let FUEL_OFFSET = (standardRows - templateRows) * rowGap;
             let CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
-            
+
             // HEADERS
             const { width, height } = page.getSize();
             page.drawText("75/125", { x: width - 280, y: height - 40, size: 10, font: font, color: PDFLib.rgb(0,0,0) });
