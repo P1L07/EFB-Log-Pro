@@ -6296,13 +6296,13 @@ window.downloadJourneyLog = async function(mode = 'download') {
         // 1. FULLY DYNAMIC TOP HEADERS (Date, Flight, Reg, Dep, Arr, STD, STA)
         // ====================================================================
         const dynamicHeaders = [
-            { idName: 'date', search: 'Date', shiftX: -5, keys: ['view-date', 'j-date'] },
-            { idName: 'flt', search: 'flight', shiftX: -3, keys: ['j-flt'] },
-            { idName: 'reg', search: 'Ac.Reg', shiftX: -3, keys: ['view-reg', 'j-reg'] },
-            { idName: 'dep', search: 'Dep', shiftX: -5, keys: ['view-dep', 'j-dep'] },
-            { idName: 'arr', search: 'Arr', shiftX: -5, keys: ['view-arr', 'j-arr'] },
-            { idName: 'std', search: 'STD', shiftX: -5, keys: ['j-std', 'view-std-text', 'view-std'] },
-            { idName: 'sta', search: 'STA', shiftX: -5, keys: ['j-sta', 'view-sta-text', 'view-sta'] }
+            { idName: 'date', search: 'Date', shiftX: -10, keys: ['j-date'] },
+            { idName: 'flt', search: 'flight', shiftX: -10, keys: ['j-flt'] },
+            { idName: 'reg', search: 'Ac.Reg', shiftX: -10, keys: ['j-reg'] },
+            { idName: 'dep', search: 'Dep', shiftX: -5, keys: ['j-dep'] },
+            { idName: 'arr', search: 'Arr', shiftX: -5, keys: ['j-arr'] },
+            { idName: 'std', search: 'STD', shiftX: -5, keys: ['j-std'] },
+            { idName: 'sta', search: 'STA', shiftX: -5, keys: ['j-sta'] }
         ];
 
         const headerDrop = 18; 
@@ -6357,12 +6357,20 @@ window.downloadJourneyLog = async function(mode = 'download') {
         // 2. FULLY DYNAMIC FLIGHT LOG & FUEL COLUMNS (using logColumnDefs)
         // ====================================================================
         const logColumnDefs = [
+            // Main
             { search: 'ATD',        keys: ['j-atd'],        shiftX: -5,  category: 'main' },
             { search: 'Off-Block',  keys: ['j-out'],        shiftX: -5,  category: 'main' },
             { search: 'TKOF',       keys: ['j-off'],        shiftX: -5,  category: 'main' },
             { search: 'TDWN',       keys: ['j-on'],         shiftX: -5,  category: 'main' },
             { search: 'Blk',        keys: ['j-in'],         shiftX: -5,  category: 'main' },
             { search: 'Flt',        keys: ['j-flight'],     shiftX: -5,  category: 'main' },
+            { search: 'NtBLK',      keys: ['j-night'],      shiftX: -5,  category: 'main' },
+            { search: 'TO',         keys: ['j-to'],         shiftX: -5,  category: 'main' },
+            { search: 'LDG',        keys: ['j-ldg'],        shiftX: -5,  category: 'main' },
+            { search: 'MA',         keys: ['j-ldg-type'],   shiftX: -5,  category: 'main' },
+            { search: 'FlAlt',      keys: ['j-flt-alt'],    shiftX: -5,  category: 'main' },
+            { search: 'DETAIL',     keys: ['j-ldg-detail'], shiftX: -5,  category: 'main' },
+            // Fuel
             { search: 'Init',       keys: ['j-init'],       shiftX: -5,  category: 'fuel' },
             { search: 'UplfW',      keys: ['j-uplift-w'],   shiftX: -5,  category: 'fuel' },
             { search: 'UplfV',      keys: ['j-uplift-vol'], shiftX: -5,  category: 'fuel' },
@@ -6370,14 +6378,24 @@ window.downloadJourneyLog = async function(mode = 'download') {
             { search: 'Act Ramp',   keys: ['j-act-ramp'],   shiftX: -5,  category: 'fuel' },
             { search: 'Stdn',       keys: ['j-shut'],       shiftX: -5,  category: 'fuel' },
             { search: 'Burn',       keys: ['j-burn'],       shiftX: -5,  category: 'fuel' },
-            // Add any other column you need – just match the text in your PDF exactly
+            { search: 'Fuel Disc',  keys: ['j-disc'],       shiftX: -5,  category: 'fuel' },
+            { search: 'Slip 1',     keys: ['j-slip'],       shiftX: -5,  category: 'fuel' },
+            { search: 'Slip 2',     keys: ['j-slip-2'],     shiftX: -5,  category: 'fuel' },
+            // Loadsheet
+            { search: 'ADL',     keys: ['j-adl'],     shiftX: -5,  category: 'fuel' },
+            { search: 'CHL',     keys: ['j-chl'],     shiftX: -5,  category: 'fuel' },
+            { search: 'INF',     keys: ['j-inf'],     shiftX: -5,  category: 'fuel' },
+            { search: 'Cargo',   keys: ['j-cargo'],     shiftX: -5,  category: 'fuel' },
+            { search: 'Mail',    keys: ['j-mail'],     shiftX: -5,  category: 'fuel' },
+            { search: 'BAG',    keys: ['j-bag'],     shiftX: -5,  category: 'fuel' },
+            { search: 'ZFW',    keys: ['j-zfw'],     shiftX: -5,  category: 'fuel' },
         ];
 
         const crewColumnDefs = [
             { search: 'DUTY',      key: 'j-duty-operating' },
             { search: 'Duty time',     key: 'j-duty-time' },
             { search: 'Night duty',   key: 'j-duty-night' },
-            { search: 'Alwd.time', key: 'j-duty-allowed' },
+            { search: 'Alwd. time', key: 'j-duty-allowed' },
         ];
 
         // --- Find crew column positions ---
