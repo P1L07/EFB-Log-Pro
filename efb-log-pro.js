@@ -34,7 +34,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'f57665c577cb038ffe801b67cb2c2e2759916173c6d1130ce4a88a7943ecc40a';
+    const EXPECTED_SW_HASH = 'bf43d1bbc6107fdc6fc1feb4cb554958f3b391d7d103e4df9744d1c88d768fe2';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -69,58 +69,8 @@
     };
     const JOURNEY_CONFIG = {
         fontSize: 10,
-        // Vertical positioning for the leg list
-        rowStartMain: 525, 
-        rowStartFuel: 420,
-        rowStartCrew: 350, 
         rowGap: 17, 
-        
-        // Signature Position for Journey Log
-        sig: { x: 570, y: 125, width: 200, height: 50 },
-
-        headers: {
-            // Empty to prevent drawing summary info
-        },
-
-        // Leg Columns -> Mapped to internal Data Keys (X Coordinates)
-        cols: {
-            'j-out': 315,      // Block Out
-            'j-in': 355,       // Block In
-            'j-off': 395,      // Takeoff
-            'j-on': 435,       // Landing
-            'j-block': 475,    // Block Time
-            'j-night': 515,   // Night Time 
-            'j-flight': 555,   // Flight Time
-            'j-to': 595,   // TO PF  
-            'j-ldg': 635,   // LDG PF
-            'j-ldg-type': 675,   // Manual/Automatic landing
-            'j-flt-alt': 710,   // Flight Altitude
-            'j-ldg-detail': 750,   // LDG Detail
-            'j-init': 36,     // Init Fuel
-            'j-uplift-w': 76, // Uplift Weight
-            'j-calc-ramp': 116, // Calculated Ramp
-            'j-act-ramp': 156, // Actual Ramp
-            'j-shut': 196, // Shutdown
-            'j-burn': 236,     // Trip Burn
-            'j-uplift-vol': 276, // Uplift Volume
-            'j-disc': 318,      // Discrepancy
-            'j-slip': 350,      // Fuel Slip
-            'j-slip-2': 410,      // Fuel Slip 2
-            'j-adl': 475,      // Loadsheet ADL
-            'j-chl': 515,      // Loadsheet CHL
-            'j-inf': 556,      // Loadsheet INF
-            'j-cargo': 595,      // Loadsheet Cargo
-            'j-mail': 635,      // Loadsheet Mail
-            'j-bag': 675,      // Loadsheet BAG
-            'j-zfw': 714,      // Loadsheet ZFW
-            'j-duty-operating': 205,      // Operating Crew
-            'j-duty-time': 245,      // Duty Time
-            'j-duty-night': 285,      // Duty Night
-            'j-duty-allowed': 325,      // Duty Allowed
-        },
-
-        // Which columns use the 'rowStartFuel' Y-offset
-        fuelKeys: ['j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 'j-burn', 'j-uplift-vol', 'j-disc', 'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw']
+        headers: {}
     };
     const TIME_X = 485, ATO_X = 485, FOB_X = 445, NOTES_X = 160;
     const V_LIFT = 2;       
@@ -145,6 +95,7 @@
     let journeyLogTemplateBytes = null;
     let waypoints = [], alternateWaypoints = [], dailyLegs = [];
     let fuelData = [];
+    let crewData = [];
     let blockFuelValue = 0;
     let dutyStartTime = null;
     let autoLockTimer = null;
@@ -1101,14 +1052,6 @@
         });
     }
 
-    /**
-     * Creates a debounced function that delays invoking `func` until after `wait` milliseconds
-     * have elapsed since the last time the debounced function was invoked.
-     * @param {Function} func - The function to debounce.
-     * @param {number} wait - Milliseconds to wait.
-     * @param {boolean} [immediate=false] - If true, trigger `func` on the leading edge instead of trailing.
-     * @returns {Function} Debounced function with a `cancel` method.
-     */
     function debounce(func, wait, immediate = false) {
         let timeout;
         const debounced = function(...args) {
@@ -1772,7 +1715,6 @@
             }
 
             if (ofpToActivate.finalized) {
-                showToast("Cannot activate a finalized OFP", 'error');
                 return;
             }
 
@@ -2006,6 +1948,17 @@
         try {
             parseResult = await parsePDFData(window.ofpPdfBytes, isAutoLoad);
             window.ofpFullText = parseResult.fullText;
+            window.ofpRequestNumber = parseResult.requestNumber;
+            if (window.ofpRequestNumber) {
+                const flightDateStr = (document.getElementById('view-date')?.innerText || '').trim();
+                const flightNumber = (document.getElementById('view-flt')?.innerText || '').replace(/^KC/i, '');
+                const depIcao = (document.getElementById('view-dep')?.innerText || '').trim().toUpperCase();
+                fetchFlightIdFromRoster(flightDateStr, flightNumber, depIcao).then(id => {
+                    if (id) window.currentExternalFlightId = id;
+                });
+            }
+            const btn = document.getElementById('btn-send-tripinfo');
+            if (btn) btn.style.display = 'block';
         } catch (error) {
             console.error('PDF parsing failed:', error);
             setOFPLoadedState(false);
@@ -2815,8 +2768,14 @@
                 safeText('view-eta-text', formatTime(etaRaw));
                 safeText('view-altn', altn);
                 
-                if (era) safeText('view-era-text', era);
-                if (altn2) safeText('view-altn2', altn2);
+                if (era) 
+                    safeText('view-era-text', era);
+                else
+                    safeText('view-era-text', '');
+                if (altn2) 
+                    safeText('view-altn2', altn2);
+                else
+                    safeText('view-altn2', '');
                 
                 // Sync to journey log
                 safeSet('j-flt', flt);
@@ -4339,7 +4298,7 @@
         // 2. There are no OFPs at all (hasAnyOFP === false)
         // 3. Not on Journey, Sectors, or Settings tab
         if (!isOFPLoaded && !hasAnyOFP && 
-            activeTabId !== 'journey' && activeTabId !== 'sectors' && activeTabId !== 'settings') {
+            activeTabId !== 'journey' && activeTabId !== 'sectors' && activeTabId !== 'settings' && activeTabId !== 'assigned') {
             overlay.classList.remove('hidden');
         } else {
             overlay.classList.add('hidden');
@@ -4723,6 +4682,10 @@
                 renderOFPMangerTable();
                 renderJourneyLogTable(); // preload journey logs but they stay hidden
             }, 100);
+        }
+
+        if (id === 'assigned') {
+            loadAssignedFlights();
         }
 
         // Refresh ATIS/ATC mode
@@ -5875,6 +5838,9 @@
             safeSet('j-init', '');
         }
 
+        safeSet('j-std', '');
+        safeSet('j-sta', '');
+
         // Reset Calculated Displays
         ['j-flight','j-block'].forEach(id => safeSet(id, '00:00'));
         ['j-calc-ramp','j-burn','j-disc'].forEach(id => safeSet(id, '0'));
@@ -5951,16 +5917,37 @@
             const e = el(id);
             if (!e) return "";
             return (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') 
-                    ? e.value : e.innerText;
+                    ? e.value : (e.innerText || e.textContent);
         };
 
-        ['j-flt','j-reg','j-dep','j-dest','j-altn','j-out','j-off','j-on','j-in','j-block','j-flight', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail', 'j-init','j-uplift-w', 'j-calc-ramp', 'j-act-ramp','j-shut','j-burn', 'j-uplift-vol', 'j-slip', 'j-slip-2', 'j-disc','j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw','j-date', 'j-std'].forEach(k => {
+        // --- EXPANDED KEYS LIST (Captures all form and view fields) ---
+        const keysToSave = [
+            'j-flt', 'j-reg', 'j-dep', 'j-dest', 'j-altn', 'j-out', 'j-off', 'j-on', 'j-in', 
+            'j-block', 'j-flight', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 
+            'j-ldg-detail', 'j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 
+            'j-burn', 'j-uplift-vol', 'j-slip', 'j-slip-2', 'j-disc', 'j-adl', 'j-chl', 
+            'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw', 'j-date', 'j-std', 'j-sta',
+            // View / Display Elements
+            'view-date', 'view-reg', 'view-dep', 'view-arr', 'view-std-text', 'view-sta-text'
+        ];
+
+        keysToSave.forEach(k => {
             d[k] = getValue(k);
         });
 
+        // Cross-map keys so both 'j-' and 'view-' references exist inside the saved object
+        d['view-date'] = d['view-date'] || d['j-date'];
+        d['view-reg'] = d['view-reg'] || d['j-reg'];
+        d['view-dep'] = d['view-dep'] || d['j-dep'];
+        d['view-arr'] = d['view-arr'] || d['j-dest'];
+        d['view-std-text'] = d['view-std-text'] || d['j-std'];
+        d['view-sta-text'] = d['view-sta-text'] || d['j-sta'];
+
+        d['j-date'] = d['j-date'] || d['view-date'];
+        d['j-arr'] = d['j-arr'] || d['view-arr'] || d['j-dest'];
+
         // Get the nightTime value from the j-night input
         const nightTime = d['j-night'] || "00:00";
-        
         d.nightTime = nightTime; 
         
         dailyLegs.push(d);
@@ -6203,6 +6190,40 @@
 // 9. Journey Log Download
 // ==========================================
 
+    // Loads the built-in template from the app's folder, bypassing cache
+    async function loadBuiltInTemplate() {
+        try {
+            // The '?v=' + timestamp forces the browser to fetch the newest file
+            const response = await fetch('./journey_log_template.pdf?v=' + new Date().getTime(), {
+                cache: 'no-store' // Prevents caching
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            return await response.arrayBuffer();
+        } catch (error) {
+            console.error("Failed to load built-in template:", error);
+            alert("Could not load the built-in Journey Log template. Ensure 'journey_log_template.pdf' is in the app folder.");
+            return null;
+        }
+    }
+
+    async function findTextInPDF(pdfBytes, searchText) {
+        const loadingTask = pdfjsLib.getDocument(pdfBytes);
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+        const textContent = await page.getTextContent();
+        
+        for (const item of textContent.items) {
+            if (item.str && item.str.toLowerCase().includes(searchText.toLowerCase())) {
+                return item.transform; // [scaleX, skewX, skewY, scaleY, x, y]
+            }
+        }
+        return null; // not found
+    }
+
     async function requestJourneyLogTemplate() {
         const confirmed = await createModal({
             title: 'Journey Log Template Required',
@@ -6250,21 +6271,7 @@
         });
     }
 
-    async function findTextInPDF(pdfBytes, searchText) {
-        const loadingTask = pdfjsLib.getDocument(pdfBytes);
-        const pdf = await loadingTask.promise;
-        const page = await pdf.getPage(1);
-        const textContent = await page.getTextContent();
-        
-        for (const item of textContent.items) {
-            if (item.str && item.str.toLowerCase().includes(searchText.toLowerCase())) {
-                return item.transform; // [scaleX, skewX, skewY, scaleY, x, y]
-            }
-        }
-        return null; // not found
-    }
-
-    window.downloadJourneyLog = async function(mode = 'download') {
+window.downloadJourneyLog = async function(mode = 'download') {
         try {
             await logSecurityEvent('JOURNEY_LOG_GENERATE', {
                 mode: mode,
@@ -6272,14 +6279,14 @@
                 timestamp: new Date().toISOString()
             });
             
-            // If no template is loaded, prompt user to upload one
+            // If no template is loaded, load the built-in one
             if (!journeyLogTemplateBytes || journeyLogTemplateBytes.byteLength === 0) {
-                const templateBuffer = await requestJourneyLogTemplate();
+                const templateBuffer = await loadBuiltInTemplate();
                 if (!templateBuffer) {
-                    isFinalizingJourneyLog = false;
-                    return; // user cancelled
+                    if (typeof isFinalizingJourneyLog !== 'undefined') isFinalizingJourneyLog = false;
+                    return; // user cancelled or failed to load
                 }
-                journeyLogTemplateBytes = templateBuffer; // Assign directly
+                journeyLogTemplateBytes = templateBuffer; 
             }
 
             if (dailyLegs.length === 0) return alert("No legs to print.");
@@ -6295,13 +6302,79 @@
             // DYNAMIC OFFSET CALCULATION
             const templateRows = parseInt(document.getElementById('j-template-rows')?.value || "4");
             const standardRows = 4;
-            const rowGap = JOURNEY_CONFIG.rowGap; // 17
+            const rowGap = JOURNEY_CONFIG.rowGap; 
+            const nameFontSize = Math.max(6, JOURNEY_CONFIG.fontSize - 3); 
+
             let FUEL_OFFSET = (standardRows - templateRows) * rowGap;
             let CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
 
-            // HEADERS
+            // --- POPULATE CREW NAMES DYNAMICALLY BEFORE DRAWING HEADERS ---
+            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+            const shouldHideAll = settings.hideAllDuty === true;
+            
+            if ((!window.crewData || window.crewData.length === 0) && !shouldHideAll) {
+                try {
+                    const token = await getValidSkyplanToken();
+                    if (token) {
+                        let extId = window.currentExternalFlightId;
+                        if (!extId) {
+                            const fltRaw = el('j-flt')?.value || '';
+                            const dateRaw = el('j-date')?.value || '';
+                            const depRaw = dailyLegs[0] ? dailyLegs[0]['j-dep'] : '';
+                            
+                            if (fltRaw && dateRaw && depRaw) {
+                                extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
+                                window.currentExternalFlightId = extId;
+                            }
+                        }
+                        
+                        if (extId) {
+                            const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ FlightIDs: [extId] })
+                            });
+                            if (resp.ok) {
+                                const data = await resp.json();
+                                const members = data.FlightsCrewMembers?.[0]?.CrewMembers || [];
+                                
+                                const flightDeck = members.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
+                                const cabinCrew = members.filter(m => !flightDeck.includes(m));
+                                window.crewData = [...flightDeck, ...cabinCrew];
+                            }
+                        }
+                    }
+                } catch(e) {
+                    console.error("Failed to fetch crew manifest for PDF printing:", e);
+                }
+            }
+            
+            const activeCrewList = window.crewData || [];
+            // --------------------------------------------------------------
+
+            // HEADERS (L/T & Captain Name)
             const { width, height } = page.getSize();
-            page.drawText("75/125", { x: width - 280, y: height - 40, size: 10, font: font, color: PDFLib.rgb(0,0,0) });
+            const catAnchor = await findTextInPDF(journeyLogTemplateBytes, "L/T");
+            if (catAnchor) {
+                const [sx, , , , catX, catY] = catAnchor;
+                page.drawText("75/125", { x: catX - 30, y: catY, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
+            }
+
+            let captainNameStr = localStorage.getItem('efb_captain_name') || "";
+            if (!captainNameStr && activeCrewList.length > 0) {
+                const cap = activeCrewList.find(m => m.Position === 'CP');
+                if (cap) captainNameStr = `${cap.FirstName || ''} ${cap.LastName || ''}`.trim().toUpperCase();
+            }
+
+            if (captainNameStr) {
+                const capAnchor = await findTextInPDF(journeyLogTemplateBytes, "Captain/KBC:");
+                if (capAnchor) {
+                    const [sx, , , , capX, capY] = capAnchor;
+                    page.drawText(captainNameStr, { x: capX + 30, y: capY, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
+                } else {
+                    page.drawText(captainNameStr, { x: width - 600, y: height - 40, size: 10, font: font, color: PDFLib.rgb(0,0,0) });
+                }
+            }
 
             const headers = JOURNEY_CONFIG.headers;
             Object.keys(headers).forEach(id => {
@@ -6310,40 +6383,179 @@
                 if(val && cfg) page.drawText(String(val).toUpperCase(), { x: cfg.x, y: cfg.y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
             });
 
-            // LEG DATA
+
+            // ====================================================================
+            // 1. FULLY DYNAMIC FIELDS (WITH RELATIVE STA ANCHORING)
+            // ====================================================================
+            const dynamicHeaders = [
+                { idName: 'date', search: 'Date', shiftX: -5, keys: ['view-date', 'j-date'] },
+                { idName: 'flt', search: 'flight', shiftX: -3, keys: ['j-flt'] },
+                { idName: 'reg', search: 'Ac.Reg', shiftX: -3, keys: ['view-reg', 'j-reg'] },
+                { idName: 'dep', search: 'Dep', shiftX: -5, keys: ['view-dep', 'j-dep'] },
+                { idName: 'arr', search: 'Arr', shiftX: -5, keys: ['view-arr', 'j-arr'] },
+                { idName: 'std', search: 'STD', shiftX: -5, keys: ['j-std', 'view-std-text', 'view-std'] }
+            ];
+
+            const headerDrop = 18; 
+            let stdAnchorX = null;
+            let stdAnchorY = null;
+
+            // 1. Process standard dynamic headers (Date, Flight, Reg, Dep, Arr, STD)
+            for (const header of dynamicHeaders) {
+                const textAnchor = await findTextInPDF(journeyLogTemplateBytes, header.search) || 
+                                   await findTextInPDF(journeyLogTemplateBytes, header.search.toUpperCase()) ||
+                                   await findTextInPDF(journeyLogTemplateBytes, header.search.charAt(0).toUpperCase() + header.search.slice(1));
+
+                if (textAnchor) {
+                    const [,,,, anchorX, anchorY] = textAnchor;
+
+                    // Save STD position so STA can anchor directly to it!
+                    if (header.idName === 'std') {
+                        stdAnchorX = anchorX;
+                        stdAnchorY = anchorY;
+                    }
+                    
+                    dailyLegs.forEach((leg, idx) => {
+                        if (idx >= templateRows) return;
+
+                        let val = undefined;
+                        for (const key of header.keys) {
+                            if (leg[key] !== undefined && leg[key] !== null && leg[key] !== "") {
+                                val = leg[key];
+                                break;
+                            }
+                        }
+
+                        if ((val === undefined || val === null || val === "") && idx === 0) {
+                            for (const key of header.keys) {
+                                const domEl = document.getElementById(key);
+                                if (domEl) {
+                                    val = domEl.value !== undefined ? domEl.value : (domEl.innerText || domEl.textContent);
+                                    if (val) break;
+                                }
+                            }
+                        }
+
+                        if (val !== undefined && val !== null && String(val).trim() !== "") {
+                            const printX = anchorX + header.shiftX;
+                            const printY = anchorY - headerDrop - (idx * JOURNEY_CONFIG.rowGap);
+                            
+                            page.drawText(String(val).trim().toUpperCase(), { 
+                                x: printX, 
+                                y: printY, 
+                                size: JOURNEY_CONFIG.fontSize, 
+                                font: font, 
+                                color: PDFLib.rgb(0,0,0) 
+                            });
+                        }
+                    });
+                }
+            }
+
+            // 2. Process STA by placing it offset to the right of STD (e.g. +35px)
+            // This prevents STA from matching "DATE" or "AIR ASTANA" logo at the top
+            const staKeys = ['j-sta', 'view-sta-text', 'view-sta'];
+            const staXOffset = 35; // Distance from STD to STA column
+
+            if (stdAnchorX && stdAnchorY) {
+                const printStaX = stdAnchorX + staXOffset;
+                
+                dailyLegs.forEach((leg, idx) => {
+                    if (idx >= templateRows) return;
+
+                    let val = undefined;
+                    for (const key of staKeys) {
+                        if (leg[key] !== undefined && leg[key] !== null && leg[key] !== "") {
+                            val = leg[key];
+                            break;
+                        }
+                    }
+
+                    if ((val === undefined || val === null || val === "") && idx === 0) {
+                        for (const key of staKeys) {
+                            const domEl = document.getElementById(key);
+                            if (domEl) {
+                                val = domEl.value !== undefined ? domEl.value : (domEl.innerText || domEl.textContent);
+                                if (val) break;
+                            }
+                        }
+                    }
+
+                    if (val !== undefined && val !== null && String(val).trim() !== "") {
+                        const printY = stdAnchorY - headerDrop - (idx * JOURNEY_CONFIG.rowGap);
+                        
+                        page.drawText(String(val).trim().toUpperCase(), { 
+                            x: printStaX, 
+                            y: printY, 
+                            size: JOURNEY_CONFIG.fontSize, 
+                            font: font, 
+                            color: PDFLib.rgb(0,0,0) 
+                        });
+                    }
+                });
+            }
+
+
+            // ====================================================================
+            // 2. FUEL & TIMES (Uses dynamic Y from 'ATD'/'Init', fixed X from cols)
+            // ====================================================================
+            let dynamicStartMain = JOURNEY_CONFIG.rowStartMain;
+            let dynamicStartFuel = JOURNEY_CONFIG.rowStartFuel + FUEL_OFFSET;
+
+            const mainAnchor = await findTextInPDF(journeyLogTemplateBytes, "ATD") || await findTextInPDF(journeyLogTemplateBytes, "TKOF");
+            if (mainAnchor) {
+                const [,,,, , mainY] = mainAnchor;
+                dynamicStartMain = mainY - headerDrop;
+            }
+
+            const initAnchor = await findTextInPDF(journeyLogTemplateBytes, "Init");
+            if (initAnchor) {
+                const [,,,, , initY] = initAnchor;
+                dynamicStartFuel = initY - headerDrop;
+            }
+
             const cols = JOURNEY_CONFIG.cols;
             const fuelKeys = JOURNEY_CONFIG.fuelKeys;
+            
+            const ignoreKeys = ['j-date', 'j-flt', 'view-reg', 'j-reg', 'view-dep', 'j-dep', 'view-arr', 'j-arr', 'j-std', 'j-sta'];
             
             dailyLegs.forEach((leg, idx) => {
                 if (idx >= templateRows) return; 
 
-                Object.keys(leg).forEach(key => {
-                    const colX = cols[key];
-                    if(colX) {
-                        let startRow = JOURNEY_CONFIG.rowStartMain;
-                        
-                        // APPLY STANDARD OFFSET TO FUEL/LOAD COLUMNS
-                        if (fuelKeys.includes(key)) {
-                            startRow = JOURNEY_CONFIG.rowStartFuel + FUEL_OFFSET; 
-                        }
+                Object.keys(cols).forEach(key => {
+                    if (ignoreKeys.includes(key)) return; 
 
-                        const rowY = startRow - (idx * JOURNEY_CONFIG.rowGap);
-                        const val = leg[key];
-                        if(val !== undefined && val !== null && val !== "") {
-                            page.drawText(String(val).toUpperCase(), { x: colX, y: rowY, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
+                    const colX = cols[key];
+                    let startRow = dynamicStartMain;
+                    
+                    if (fuelKeys.includes(key)) {
+                        startRow = dynamicStartFuel; 
+                    }
+
+                    const rowY = startRow - (idx * JOURNEY_CONFIG.rowGap);
+                    
+                    let val = leg[key];
+
+                    if ((val === undefined || val === null || val === "") && idx === 0) {
+                        const domEl = document.getElementById(key);
+                        if (domEl) {
+                            val = domEl.value !== undefined ? domEl.value : (domEl.innerText || domEl.textContent);
                         }
+                    }
+
+                    if (val !== undefined && val !== null && String(val).trim() !== "") {
+                        page.drawText(String(val).trim().toUpperCase(), { x: colX, y: rowY, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
                     }
                 });
             });
 
             // SIGNATURE
-            const sigAnchor = await findTextInPDF(journeyLogTemplateBytes, "Captain's Signature");// Find the text anchor
+            const sigAnchor = await findTextInPDF(journeyLogTemplateBytes, "Captain's Signature");
 
             if (sigAnchor) {
-                const [sx, , , , x, y] = sigAnchor; // destructure transform array
-                // sx is font size scale, we can ignore it for position
-                const sigX = x + 120; // place signature to the right of the text (adjust offset as needed)
-                const sigY = y - 15;  // small vertical align correction
+                const [sx, , , , x, y] = sigAnchor; 
+                const sigX = x + 120; 
+                const sigY = y - 15;  
 
                 if (pads.main.pad && !pads.main.pad.isEmpty()) {
                     try {
@@ -6363,9 +6575,7 @@
                 console.warn("'Captain's Signature' text not found in template");
             }
 
-            // CREW DUTY DATA
-            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-            const shouldHideAll = settings.hideAllDuty === true;
+            // CREW DUTY & NAME DATA
             const crewStart = 333 + CREW_OFFSET;
             const crewGap = 17;    
             
@@ -6390,7 +6600,7 @@
                 return minsToTime(diff);
             };
 
-            // DRAW DUTY ROWS
+            // DRAW CREW ROWS (DUTY + NAMES)
             for(let i = 0; i < totalRows; i++) {
                 if (shouldHideAll) {
                     continue; // Skip
@@ -6402,13 +6612,30 @@
                 const myFDP = getFDP(myStart);
                 const myNightDuty = getNightDutyForCrew(myStart);
 
+                // Print Crew Data: ID, Position, Name
+                const member = activeCrewList[i];
+                if (member && cols['j-duty-operating']) {
+                    const opX = cols['j-duty-operating'];
+                    
+                    const empId = String(member.EmployeeID || '').toUpperCase();
+                    const pos = String(member.Position || '').toUpperCase();
+                    const fullName = `${member.FirstName || ''} ${member.LastName || ''}`.trim().toUpperCase();
+
+                    const nameX = opX - 115;
+                    const posX = opX - 135; 
+                    const idX = opX - 175;
+
+                    page.drawText(empId, { x: idX, y: y, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
+                    page.drawText(pos, { x: posX, y: y, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
+                    page.drawText(fullName, { x: nameX, y: y, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
+                }
+
                 if(cols['j-duty-operating']) 
                     page.drawText("OP", { x: cols['j-duty-operating'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
 
                 if(myFDP && cols['j-duty-time']) 
                     page.drawText(myFDP, { x: cols['j-duty-time'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
 
-                // Always draw night duty, even if "00:00"
                 if(cols['j-duty-night']) {
                     page.drawText(myNightDuty, { x: cols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
                 }
@@ -6431,7 +6658,6 @@
                 downloadBlob(out, filename);
             }
             
-            // Ask user to finalize or keep data
             const userChoice = await showConfirmDialog(
                 'Journey Log Generated',
                 '<div style="text-align:center;">Save this log and start a new day?<br>Click <strong>Save Log</strong> to store it permanently and clear leg data.<br>Click <strong>Keep Data</strong> to make changes and generate again.</div>',
@@ -6442,16 +6668,10 @@
             );
 
             if (userChoice) {
-                // Save to IndexedDB...
                 const blob = new Blob([out], { type: 'application/pdf' });
                 await saveJourneyLog(blob, { flight: flt, date, legCount: dailyLegs.length });
-                showToast('Journey log saved', 'success');
+                if (typeof showToast !== 'undefined') showToast('Journey log saved', 'success');
 
-                // Clear template from memory and IndexedDB
-                journeyLogTemplateBytes = null;
-                await deleteJourneyTemplateFromDB();
-
-                // Clear leg data and reset UI
                 await performDataReset(false, false);
             }
 
@@ -8135,9 +8355,20 @@
 
     function loadSettings() {
         try {
+            // 1. DO TOKENS FIRST (So they are safe from any UI crashes below)
+            const tokenInput = document.getElementById('skyplan_token');
+            if (tokenInput) {
+                tokenInput.value = localStorage.getItem('skyplan_token') || '';
+            }
+
+            const refreshInput = document.getElementById('skyplan_refresh_token');
+            if (refreshInput) {
+                refreshInput.value = localStorage.getItem('skyplan_refresh_token') || '';
+            }
+
+            // 2. Load the rest of the settings
             const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
             
-            // Apply settings to UI
             if (settings.autoLockTime) {
                 const autoLockSelect = document.getElementById('auto-lock-time');
                 if (autoLockSelect) autoLockSelect.value = settings.autoLockTime;
@@ -8148,32 +8379,29 @@
                 if (pdfQualitySelect) pdfQualitySelect.value = settings.pdfQuality;
             }
 
-            // Hide FC Duty Checkbox
             const hideFCDutyBox = document.getElementById('hide-all-duty');
             if (hideFCDutyBox) {
                 hideFCDutyBox.checked = settings.hideFCDuty === true; 
             }
 
-            // Auto-activate next OFP
             const autoActivateCheckbox = document.getElementById('auto-activate-next');
             if (autoActivateCheckbox) {
-                autoActivateCheckbox.checked = settings.autoActivateNext !== false; // default true
+                autoActivateCheckbox.checked = settings.autoActivateNext !== false;
             }
 
-            // Writing or Typing ATIS/ATC
             const modeSelect = document.getElementById('atis-input-mode');
             if (modeSelect) {
                 modeSelect.value = settings.atisInputMode || 'typing';
-                applyInputMode(settings.atisInputMode || 'typing');
+                if (typeof applyInputMode === 'function') {
+                    applyInputMode(settings.atisInputMode || 'typing');
+                }
             }
                 
-            // Set app version
             const versionEl = document.getElementById('settings-version');
-            if (versionEl) {
+            if (versionEl && typeof APP_VERSION !== 'undefined') {
                 versionEl.textContent = `v${APP_VERSION}`;
             }
             
-            // Set last updated date
             const updatedEl = document.getElementById('settings-updated');
             if (updatedEl) {
                 updatedEl.textContent = new Date().toLocaleDateString();
@@ -8185,7 +8413,6 @@
     }
 
     function saveSettings() {
-
         const settings = {
             autoLockTime: document.getElementById('auto-lock-time')?.value || '15',
             pdfQuality: document.getElementById('pdf-quality')?.value || '2.0',
@@ -8207,6 +8434,43 @@
         }
 
         localStorage.setItem('efb_settings', JSON.stringify(settings));
+
+        // ==========================================
+        // TOKEN SAVING LOGIC
+        // ==========================================
+        const tokenInput = document.getElementById('skyplan_token');
+        const refreshInput = document.getElementById('skyplan_refresh_token');
+
+        if (tokenInput) {
+            const newToken = tokenInput.value.trim();
+            if (newToken) {
+                localStorage.setItem('skyplan_token', newToken);
+                
+                // Automatically extract and save the user's username
+                try {
+                    const decoded = decodeJWT(newToken);
+                    if (decoded && decoded.preferred_username) {
+                        localStorage.setItem('efb_user', decoded.preferred_username);
+                    }
+                } catch (err) {
+                    console.warn("Could not extract username from token.");
+                }
+            } else {
+                localStorage.removeItem('skyplan_token');
+                localStorage.removeItem('efb_user');
+            }
+        }
+
+        if (refreshInput) {
+            const newRefreshToken = refreshInput.value.trim();
+            if (newRefreshToken) {
+                localStorage.setItem('skyplan_refresh_token', newRefreshToken);
+            } else {
+                localStorage.removeItem('skyplan_refresh_token');
+            }
+        }
+        // ==========================================
+
         if (sessionStorage.getItem('efb_authenticated') === 'true') {
             resetAutoLockTimer();
         }
@@ -8340,6 +8604,51 @@
             }
         });
 
+        // Token elements
+        const tokenInput = document.getElementById('input-token');
+        const refreshTokenInput = document.getElementById('refresh-token');
+
+        if (tokenInput) {
+            tokenInput.value = localStorage.getItem('skyplan_token') || '';
+
+            tokenInput.addEventListener('input', (e) => {
+                const newToken = e.target.value.trim();
+                
+                if (newToken) {
+                    localStorage.setItem('skyplan_token', newToken);
+                    
+                    // Automatically extract and save the user's username!
+                    try {
+                        const decoded = decodeJWT(newToken);
+                        if (decoded && decoded.preferred_username) {
+                            localStorage.setItem('efb_user', decoded.preferred_username);
+                            console.log("Logged in user:", decoded.preferred_username);
+                        }
+                    } catch (err) {
+                        console.warn("Could not extract username from token.");
+                    }
+                    
+                } else {
+                    localStorage.removeItem('skyplan_token');
+                    localStorage.removeItem('efb_user'); // Clear username on logout
+                }
+            });
+        }
+
+        // Add the listener for the Refresh Token
+        if (refreshTokenInput) {
+            refreshTokenInput.value = localStorage.getItem('skyplan_refresh_token') || '';
+
+            refreshTokenInput.addEventListener('input', (e) => {
+                const newRefreshToken = e.target.value.trim();
+                if (newRefreshToken) {
+                    localStorage.setItem('skyplan_refresh_token', newRefreshToken);
+                } else {
+                    localStorage.removeItem('skyplan_refresh_token');
+                }
+            });
+        }
+
         document.getElementById('notam-filter')?.addEventListener('input', function() {
             const filterText = this.value.toLowerCase().trim();
             if (!window.notamFullAlerts) return;
@@ -8358,16 +8667,16 @@
 
         // Wire up the ATIS and CLR text field (typing mode only)
         const atisField = document.getElementById('front-atis');
-        if (!atisField) return;
-
-        atisField.addEventListener('focus', function(e) {
-            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-            if (settings.atisInputMode !== 'writing') {
-                e.preventDefault();
-                atisField.blur();
-                showAtisPopup();
-            }
-        });
+        if (atisField) {   // ← only attach ATIS listener if element exists
+            atisField.addEventListener('focus', function(e) {
+                const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+                if (settings.atisInputMode !== 'writing') {
+                    e.preventDefault();
+                    atisField.blur();
+                    showAtisPopup();
+                }
+            });
+        }
 
         const atcField = document.getElementById('front-atc');
         if (atcField) {
@@ -8379,6 +8688,11 @@
                     showClearancePopup();
                 }
             });
+        }
+
+        const btn = document.getElementById('btn-send-tripinfo');
+        if (btn) {
+            btn.addEventListener('click', sendTripInfo);
         }
 
         // Activity tracking
@@ -8408,6 +8722,7 @@
             resizePad('atc');
         }
     });
+
 
     window.addEventListener('pagehide', () => {
         saveState();
@@ -8918,6 +9233,752 @@ function showClearancePopup() {
     });
 
     return modalPromise;
+}
+
+// ==========================================
+// Trip Info
+// ==========================================
+
+function parseSkyplanCrew(apiResponse) {
+  const flightData = apiResponse?.FlightsCrewMembers?.[0];
+
+  if (!flightData || !Array.isArray(flightData.CrewMembers)) {
+    return {
+      flightId: null,
+      captain: null,
+      flightDeck: [],
+      cabinCrew: [],
+      allCrew: []
+    };
+  }
+
+  const crewMembers = flightData.CrewMembers;
+
+  // Format individual member objects
+  const formattedMembers = crewMembers.map(member => ({
+    employeeId: member.EmployeeID,
+    firstName: member.FirstName,
+    lastName: member.LastName,
+    fullName: `${member.FirstName} ${member.LastName}`.trim(),
+    position: member.Position,
+    phoneNumber: member.PhoneNumber,
+    dateOfBirth: member.DateOfBirth ? member.DateOfBirth.split('T')[0] : null
+  }));
+
+  // Role categorization
+  const flightDeckPositions = ['CP', 'FO'];
+
+  const captain = formattedMembers.find(m => m.position === 'CP') || null;
+  const flightDeck = formattedMembers.filter(m => flightDeckPositions.includes(m.position));
+  const cabinCrew = formattedMembers.filter(m => !flightDeckPositions.includes(m.position));
+
+  return {
+    flightId: flightData.FlightID,
+    pilotCount: flightData.PilotCount,
+    totalCrewCount: flightData.CrewCount,
+    captain: captain ? {
+      name: captain.fullName,
+      employeeId: captain.employeeId,
+      phone: captain.phoneNumber
+    } : null,
+    flightDeck,
+    cabinCrew,
+    allCrew: formattedMembers
+  };
+}
+
+function convertTripTime(timeStr) {
+    if (!timeStr || timeStr === '-') return '';
+    // Expect "HH.MM"
+    const [h, m] = timeStr.split('.');
+    return (h || '00').padStart(2,'0') + (m || '00').padStart(2,'0');
+}
+
+async function fetchFlightIdFromRoster(flightDateStr, flightNumberRaw, depIcaoRaw) {
+    console.log('--- [Roster Check] START ---');
+    console.log(`1. Raw Inputs -> Date: "${flightDateStr}", Flight: "${flightNumberRaw}", Dep: "${depIcaoRaw}"`);
+
+    const token = await getValidSkyplanToken();
+    if (!token) {
+        console.error('❌ No token found in localStorage.');
+        return null;
+    }
+    console.log('2. Token found in storage (starts with):', token.substring(0, 15) + '...');
+
+    let employeeId = '15183';
+    try {
+        const employee = decodeJWT(token);
+        employeeId = employee.employeeid || '15183';
+        console.log(`3. Decoded JWT -> EmployeeID: ${employeeId}`);
+    } catch (e) {
+        console.warn('⚠️ Failed to decode JWT, defaulting to employee 15183', e);
+    }
+
+    // Clean inputs
+    const flightNumber = String(parseInt(flightNumberRaw.replace(/\D/g, ''), 10)); 
+    const depIcao = depIcaoRaw.replace(/[^A-Z]/ig, '').toUpperCase(); 
+    console.log(`4. Cleaned Inputs -> FlightNumber: "${flightNumber}", DepStation: "${depIcao}"`);
+
+    // Date Parsing
+    let flightDate;
+    if (flightDateStr.includes('-')) {
+        flightDate = flightDateStr;
+    } else {
+        const parts = (flightDateStr || '').split(/[\/\.]/);
+        const day = (parts[0] || '01').trim();
+        const month = (parts[1] || '01').trim();
+        let year = (parts[2] || '2026').trim();
+        if (year.length === 2) year = `20${year}`; 
+        flightDate = `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`;
+    }
+    console.log(`5. Parsed Base Date: "${flightDate}"`);
+
+    const baseDate = new Date(flightDate);
+    if (isNaN(baseDate.getTime())) {
+        console.error("❌ Date parsing failed completely.");
+        return null;
+    }
+
+    // Date Window
+    const fromDate = new Date(baseDate);
+    fromDate.setDate(fromDate.getDate() - 1);
+    const toDate = new Date(baseDate);
+    toDate.setDate(toDate.getDate() + 1); 
+
+    const payload = {
+        EmployeeID: employeeId,
+        From: fromDate.toISOString().slice(0,10),
+        To: toDate.toISOString().slice(0,10)
+    };
+    console.log('6. Sending API Payload:', payload);
+    
+    try {
+        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/crew-roster-flights-details', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        console.log(`7. API Response Status: ${resp.status} ${resp.statusText}`);
+        
+        if (!resp.ok) {
+            if (resp.status === 401) {
+                console.error('❌ 401 Unauthorized - Your Skyplan token has expired or is invalid.');
+                showToast('Skyplan Token Expired. Please update in settings.', 'error');
+            }
+            const errText = await resp.text();
+            console.error(`❌ Error Response Body:`, errText);
+            throw new Error(`Status ${resp.status}`);
+        }
+        
+        const data = await resp.json();
+        const flights = data.Flights || [];
+        console.log(`8. Roster Fetch Success! Found ${flights.length} flights in the window.`);
+
+        // Dump what flights it actually sees to the console
+        if (flights.length > 0) {
+            console.log('9. Available flights from API:');
+            flights.forEach(f => {
+                console.log(`   -> ${f.CarrierCode}${f.FlightNumber} | Dep: ${f.DepartureStationIcaoCode}/${f.DepartureStationCode} | Date: ${f.StdLt}`);
+            });
+        }
+
+        const match = flights.find(f => {
+            const apiFltNum = f.FlightNumber.toString();
+            const apiIcao = (f.DepartureStationIcaoCode || '').toUpperCase();
+            const apiIata = (f.DepartureStationCode || '').toUpperCase();
+            
+            const isMatch = ['KC', 'FS'].includes(f.CarrierCode) && 
+                            apiFltNum === flightNumber && 
+                            (apiIcao === depIcao || apiIata === depIcao);
+            
+            return isMatch;
+        });
+
+        if (match) {
+            console.log(`10. ✅ MATCH FOUND! Assigned ExternalFlightID: ${match.ID}`);
+            console.log('--- [Roster Check] END ---');
+            return match.ID;
+        } else {
+            console.warn(`10. ⚠️ NO MATCH. Could not find Flight ${flightNumber} departing from ${depIcao} in the array above.`);
+            console.log('--- [Roster Check] END ---');
+            return null;
+        }
+
+    } catch (e) {
+        console.error('❌ [Roster Check] Failed entirely:', e);
+        return null;
+    }
+}
+
+async function fetchCrewInfo(flightId, token) {
+    try {
+        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ FlightIDs: [flightId] })
+        });
+
+        if (!resp.ok) throw new Error(`Status ${resp.status}`);
+
+        const data = await resp.json();
+        const flightData = data.FlightsCrewMembers?.[0];
+
+        if (!flightData || !Array.isArray(flightData.CrewMembers)) {
+            // No crew data – clear the cache and return safe defaults
+            window.crewData = [];
+            return null;
+        }
+
+        const members = flightData.CrewMembers;
+
+        // ── Identify flight deck positions (all other positions are cabin crew) ──
+        const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
+        const flightDeck = members.filter(m => flightDeckPositions.includes(m.Position));
+        const cabinCrew = members.filter(m => !flightDeckPositions.includes(m.Position));
+
+        // ── Cache the ordered crew list globally for Journey Log ──
+        window.crewData = [
+            ...flightDeck.map(m => ({
+                FirstName: m.FirstName,
+                LastName: m.LastName,
+                Position: m.Position
+            })),
+            ...cabinCrew.map(m => ({
+                FirstName: m.FirstName,
+                LastName: m.LastName,
+                Position: m.Position
+            }))
+        ];
+
+        // ── Captain name ──
+        const captain = members.find(m => m.Position === 'CP');
+        const captainName = captain
+            ? `${captain.FirstName} ${captain.LastName}`.trim()
+            : '';
+
+        // ── Counts (with fallback to API-provided PilotCount / CrewCount) ──
+        const fcCount = flightDeck.length > 0
+            ? flightDeck.length
+            : (flightData.PilotCount || 2);
+
+        const ccCount = cabinCrew.length > 0
+            ? cabinCrew.length
+            : Math.max(0, (flightData.CrewCount || 6) - (flightData.PilotCount || 2));
+
+        return {
+            captainName,
+            fcCount,
+            ccCount
+        };
+    } catch (e) {
+        console.error('[Crew Fetch] Failed:', e);
+        window.crewData = [];   // ensure it's empty on error
+        return null;
+    }
+}
+
+async function sendTripInfo() {
+    const token = await getValidSkyplanToken();
+    if (!token) {
+        showToast('Missing Skyplan token. Set it via console.', 'error');
+        return;
+    }
+
+    const flightDateStr = (document.getElementById('view-date')?.innerText || '').trim();
+    const flightNumberRaw = (document.getElementById('view-flt')?.innerText || '').trim();
+    const flightNumber = flightNumberRaw.replace(/^KC/i, '').replace(/^AYN/i, ''); 
+    const depIcao = (document.getElementById('view-dep')?.innerText || '').trim();
+
+    let externalFlightId = window.currentExternalFlightId;
+
+    if (!externalFlightId) {
+        showToast('Fetching flight ID from roster…', 'info');
+        externalFlightId = await fetchFlightIdFromRoster(flightDateStr, flightNumber, depIcao);
+        
+        if (!externalFlightId) {
+            showToast('Could not find flight in roster.', 'error');
+            return;
+        }
+        window.currentExternalFlightId = externalFlightId;
+    }
+
+    showToast('Fetching crew manifest…', 'info');
+    const crewInfo = await fetchCrewInfo(externalFlightId, token);
+
+    const mtow = parseInt(document.getElementById('view-mtow')?.innerText) || 0;
+    const mlw  = parseInt(document.getElementById('view-mlw')?.innerText) || 0;
+
+    const activeFuelData = window.fuelData || (typeof fuelData !== 'undefined' ? fuelData : []);
+    const tripItem = activeFuelData.find(i => i.name === 'TRIP');
+    const tripTimeRaw = tripItem ? tripItem.time : '';
+    const tripTime = tripTimeRaw ? tripTimeRaw.replace('.', ':') : '00:00';
+
+    // Robust extraction for view-pic-block (handles both inputs and text blocks)
+    const picBlockElem = document.getElementById('view-pic-block');
+    let picBlockVal = NaN;
+    if (picBlockElem) {
+        const rawText = picBlockElem.value !== undefined ? picBlockElem.value : picBlockElem.innerText;
+        picBlockVal = parseInt(rawText.replace(/\D/g, ''), 10);
+    }
+    const rampFuel = !isNaN(picBlockVal) && picBlockVal > 0 ? picBlockVal : (window.blockFuelValue || (typeof blockFuelValue !== 'undefined' ? blockFuelValue : 0));
+
+    const taxiItem = activeFuelData.find(i => i.name === 'TAXI');
+    const taxiFuel = taxiItem ? parseInt(taxiItem.fuel) || 0 : 0;
+    const tripFuel = tripItem ? parseInt(tripItem.fuel) || 0 : 0;
+    const takeOffFuel = rampFuel - taxiFuel;
+
+    const ofpRequest = window.ofpRequestNumber || (typeof ofpRequestNumber !== 'undefined' ? ofpRequestNumber : '');
+    
+    let fcCount = parseInt(document.getElementById('j-fc-count')?.value) || 2;
+    let ccCount = parseInt(document.getElementById('j-cc-count')?.value) || 4;
+    let defaultCaptain = localStorage.getItem('efb_captain_name') || '';
+
+    if (crewInfo) {
+        if (crewInfo.captainName) defaultCaptain = crewInfo.captainName;
+        if (crewInfo.fcCount) {
+            fcCount = crewInfo.fcCount;
+            const fcInput = document.getElementById('j-fc-count');
+            if (fcInput) fcInput.value = fcCount;
+        }
+        if (crewInfo.ccCount >= 0) {
+            ccCount = crewInfo.ccCount;
+            const ccInput = document.getElementById('j-cc-count');
+            if (ccInput) ccInput.value = ccCount;
+        }
+    }
+
+    const bodyHTML = `
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px 15px;">
+            <div style="grid-column: 1 / -1;">
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Captain Name</label>
+                <input type="text" id="sp-capt" value="${defaultCaptain}" placeholder="JOHN DOE"
+                       style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">MTOW (kg)</label>
+                <input type="number" id="sp-mtow" value="${mtow}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">MLW (kg)</label>
+                <input type="number" id="sp-mlw" value="${mlw}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Ramp Fuel (kg)</label>
+                <input type="number" id="sp-ramp" value="${rampFuel}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Taxi Fuel (kg)</label>
+                <input type="number" id="sp-taxi" value="${taxiFuel}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">TakeOff Fuel (kg)</label>
+                <input type="number" id="sp-tof" value="${takeOffFuel}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Trip Fuel (kg)</label>
+                <input type="number" id="sp-tripfuel" value="${tripFuel}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Trip Time</label>
+                <input type="text" id="sp-triptime" value="${tripTime}" placeholder="HH:MM" maxlength="5" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">OFP Request</label>
+                <input type="text" id="sp-ofp" value="${ofpRequest}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Flight Crew</label>
+                <input type="number" id="sp-fc" value="${fcCount}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+            <div>
+                <label style="font-size: 11px; font-weight: 600; color: var(--dim); display: block;">Cabin Crew</label>
+                <input type="number" id="sp-cc" value="${ccCount}" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 16px;">
+            </div>
+        </div>
+    `;
+
+    createModal({
+        title: 'Trip Info',
+        icon: '✈️',
+        type: 'info',
+        confirmText: 'Confirm',
+        cancelText: 'Cancel',
+        centered: false,
+        compact: true,
+        maxWidth: '600px',
+        bodyHTML: bodyHTML,
+        onConfirm: async () => {
+            const finalCapt = document.getElementById('sp-capt')?.value.trim().toUpperCase() || '';
+            const finalMTOW = parseInt(document.getElementById('sp-mtow')?.value) || 0;
+            const finalMLW = parseInt(document.getElementById('sp-mlw')?.value) || 0;
+            const finalRamp = parseInt(document.getElementById('sp-ramp')?.value) || 0;
+            const finalTaxi = parseInt(document.getElementById('sp-taxi')?.value) || 0;
+            const finalTOF = parseInt(document.getElementById('sp-tof')?.value) || 0;
+            const finalTripF = parseInt(document.getElementById('sp-tripfuel')?.value) || 0;
+            const finalTime = document.getElementById('sp-triptime')?.value.trim() || '00:00';
+            const finalOFP = document.getElementById('sp-ofp')?.value.trim() || '';
+            const finalFC = parseInt(document.getElementById('sp-fc')?.value) || 2;
+            const finalCC = parseInt(document.getElementById('sp-cc')?.value) || 4;
+
+            if (finalCapt) localStorage.setItem('efb_captain_name', finalCapt);
+
+            const payload = {
+                ExternalFlightID: externalFlightId,
+                CaptainFullName: finalCapt,
+                MaximumTakeOffWeightKg: finalMTOW,
+                MaximumLandingWeightKg: finalMLW,
+                TripTimeDuration: finalTime,
+                RampFuelKg: finalRamp,
+                TaxiFuelKg: finalTaxi,
+                TakeOffFuelKg: finalTOF,
+                TripFuelKg: finalTripF,
+                OperationalFlightPlanRequestNumber: finalOFP,
+                DeadheadQuantity: "0/0",
+                CrewQuantity: `${finalFC}/${finalCC}`,
+                CaptainCrewQuantity: finalFC,
+                OtherCrewQuantity: finalCC,
+                CaptainDeadheadQuantity: 0,
+                OtherDeadheadQuantity: 0,
+                CreatedBy: (() => {
+                    let user = localStorage.getItem('efb_user');
+                    if (!user) {
+                        try {
+                            const decoded = decodeJWT(token);
+                            user = decoded.preferred_username;
+                        } catch(e) {}
+                    }
+                    return user || 'unknown_user';
+                })(),
+                CreatedDateTime: new Date().toISOString(),
+                Base64SignImage: ''
+            };
+
+            showToast('Sending data to Skyplan...', 'info');
+
+            try {
+                const response = await fetch('https://kcskyplanapi.airastana.com/api/v1/trip-info', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (response.ok) {
+                    showToast('Fuel data sent to Skyplan ✅', 'success');
+                } else {
+                    const errText = await response.text();
+                    throw new Error(`Server error ${response.status}: ${errText}`);
+                }
+            } catch (error) {
+                console.error('Skyplan upload failed:', error);
+                showToast('Failed to send: ' + error.message, 'error');
+            }
+        }
+    });
+
+    requestAnimationFrame(() => {
+        const rampInput = document.getElementById('sp-ramp');
+        const taxiInput = document.getElementById('sp-taxi');
+        const tofInput = document.getElementById('sp-tof');
+
+        const updateTOF = () => {
+            const r = parseInt(rampInput.value) || 0;
+            const t = parseInt(taxiInput.value) || 0;
+            tofInput.value = r - t;
+        };
+
+        if (rampInput && taxiInput && tofInput) {
+            rampInput.addEventListener('input', updateTOF);
+            taxiInput.addEventListener('input', updateTOF);
+        }
+    });
+}
+
+function decodeJWT(token) {
+    try {
+        let payload = token.split('.')[1];
+        // 3. Fix Base64 decoding (Make it URL-safe and pad it correctly)
+        payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+        const pad = payload.length % 4;
+        if (pad) {
+            payload += new Array(5 - pad).join('=');
+        }
+        return JSON.parse(atob(payload));
+    } catch (e) {
+        console.error('Failed to decode JWT:', e);
+        return {};
+    }
+}
+
+
+function getDepartureICAO(routeStr) {
+    const tokens = routeStr.trim().split(/\s+/);
+    for (const token of tokens) {
+        if (/^[A-Z]{4}$/.test(token)) return token;
+    }
+    return '';
+}
+
+// ==========================================
+// Server connection
+// ==========================================
+
+window.getValidSkyplanToken = async function() {
+    let token = localStorage.getItem('skyplan_token');
+    let refreshToken = localStorage.getItem('skyplan_refresh_token');
+
+    if (!token) return null;
+
+    const decoded = decodeJWT(token);
+    if (!decoded || typeof decoded.exp !== 'number') {
+        // Could not decode or no expiry – assume token is still valid, do not refresh
+        return token;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    if (decoded.exp > now + 300) {
+        return token;  // still valid
+    }
+
+    // Only now do we know for certain it’s expired
+
+    // --- TOKEN IS EXPIRED ---
+    if (!refreshToken) {
+        console.warn("Access token expired and no refresh token found in settings.");
+        if (typeof showToast === 'function') showToast("Skyplan token expired. Please update settings.", "error");
+        return null; 
+    }
+
+    try {
+        console.log("Access token expired. Auto-refreshing in background...");
+        
+        // Call the Keycloak token endpoint
+        const response = await fetch('https://id.airastana.com/realms/air-astana/protocol/openid-connect/token', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            // Note: client_id 'app-sky-plan-web' is extracted directly from your token's 'azp' field
+            body: new URLSearchParams({
+                'grant_type': 'refresh_token',
+                'client_id': 'app-sky-plan-web',
+                'refresh_token': refreshToken
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Save the new tokens!
+            token = data.access_token;
+            localStorage.setItem('skyplan_token', token);
+            
+            if (data.refresh_token) {
+                localStorage.setItem('skyplan_refresh_token', data.refresh_token);
+                // Also update the UI input box if settings are currently open
+                const refreshInput = document.getElementById('skyplan_refresh_token');
+                if (refreshInput) refreshInput.value = data.refresh_token;
+            }
+            
+            console.log("Token refreshed successfully!");
+            return token;
+        } else {
+            console.error("Failed to refresh token. It may have expired. Code:", response.status);
+            if (typeof showToast === 'function') showToast("Session expired completely. Please get new tokens.", "error");
+            return null;
+        }
+    } catch (e) {
+        console.error("Network error while trying to refresh token:", e);
+        return token; // Return old token as a last resort, though it will likely fail
+    }
+};
+
+window.loadAssignedFlights = async function() {
+    const container = document.getElementById('assigned-flights-container');
+    if (!container) return;
+
+    const token = await getValidSkyplanToken();
+    if (!token) {
+        container.innerHTML = '<div style="color: #ff6b6b; text-align: center; padding: 40px; font-family: sans-serif;">⚠️ No Skyplan token found. Please add it in Settings.</div>';
+        return;
+    }
+
+    // Show loading state
+    container.innerHTML = '<div style="color: white; text-align: center; padding: 40px; font-family: sans-serif;">⏳ Syncing with Skyplan...</div>';
+
+    try {
+        // 1. Get Employee ID from token
+        let employeeId = '15183';
+        try {
+            const employee = decodeJWT(token);
+            employeeId = employee.employeeid || '15183';
+        } catch (e) {
+            console.warn('Failed to decode JWT for employee ID, using default.');
+        }
+
+        // 2. Set Time Window (-3 to +3 days)
+        const today = new Date();
+        const fromDate = new Date(today);
+        fromDate.setDate(today.getDate() - 3);
+        const toDate = new Date(today);
+        toDate.setDate(today.getDate() + 3);
+
+        const payload = {
+            EmployeeID: employeeId,
+            From: fromDate.toISOString().slice(0, 10),
+            To: toDate.toISOString().slice(0, 10)
+        };
+
+        // 3. Fetch Roster
+        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/crew-roster-flights-details', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!resp.ok) {
+            if (resp.status === 401) throw new Error("Token expired. Please update it in settings.");
+            throw new Error(`API Error: ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        let flights = data.Flights || [];
+
+        // 4. Filter and Sort
+        // Keep only actual flights (ignores ground duties) and sort chronologically
+        flights = flights.filter(f => ['KC', 'AYN', 'FS'].includes(f.CarrierCode));
+        flights.sort((a, b) => new Date(a.StdLt) - new Date(b.StdLt));
+
+        if (flights.length === 0) {
+            container.innerHTML = '<div style="color: white; text-align: center; padding: 40px; font-family: sans-serif;">No assigned flights found in the next 3 days.</div>';
+            return;
+        }
+
+        // 5. Build the UI Table
+        let html = `
+            <table style="width: 100%; border-collapse: collapse; color: white; font-family: sans-serif; text-align: left;">
+                <thead style="background: #202124; position: sticky; top: 0;">
+                    <tr>
+                        <th style="padding: 15px; border-bottom: 1px solid #525659;">Date</th>
+                        <th style="padding: 15px; border-bottom: 1px solid #525659;">Flight</th>
+                        <th style="padding: 15px; border-bottom: 1px solid #525659;">Routing</th>
+                        <th style="padding: 15px; border-bottom: 1px solid #525659;">STD (LT)</th>
+                        <th style="padding: 15px; border-bottom: 1px solid #525659; text-align: right;">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        flights.forEach(f => {
+            const dateStr = f.StdLt ? f.StdLt.split('T')[0] : 'Unknown';
+            const timeStr = f.StdLt ? f.StdLt.split('T')[1].substring(0, 5) : '--:--';
+            const flightNum = `${f.CarrierCode}${f.FlightNumber}`;
+            const routing = `${f.DepartureStationIcaoCode || f.DepartureStationCode} ➔ ${f.ArrivalStationIcaoCode || f.ArrivalStationCode}`;
+
+            html += `
+                <tr class="assigned-flight-row">
+                    <td style="padding: 15px; color: var(--text);">${dateStr}</td>
+                    <td style="padding: 15px; font-weight: bold; color: var(--accent); font-size: 16px;">${flightNum}</td>
+                    <td style="padding: 15px; letter-spacing: 1px; color: var(--text);">${routing}</td>
+                    <td style="padding: 15px; font-family: monospace; font-size: 15px; color: var(--text);">${timeStr}</td>
+                    <td style="padding: 15px; text-align: right;">
+                        <button onclick="importOFPFromSkyplan('${f.ID}')" 
+                                class="btn-refresh">
+                            Activate OFP
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+
+    } catch (e) {
+        console.error("Schedule fetch failed:", e);
+        container.innerHTML = `<div style="color: #ff6b6b; text-align: center; padding: 40px; font-family: sans-serif;">Error: ${e.message}</div>`;
+    }
+};
+
+window.importOFPFromSkyplan = async function(flightId) {
+    try {
+        const token = await getValidSkyplanToken();
+        if (!token) {
+            return alert("No Skyplan token found. Please add it in settings.");
+        }
+
+        if (typeof showToast === 'function') showToast("Downloading OFP from Skyplan...", "info");
+
+        // 1. Fetch the OFP JSON from Skyplan
+        const url = `https://kcskyplanapi.airastana.com/api/v1/flights/${flightId}/ofp`;
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        
+        const data = await response.json();
+        
+        if (!data.FileContent) {
+            throw new Error("No PDF content found for this flight.");
+        }
+
+        // 2. Decode the Base64 string into raw binary PDF data
+        const binaryString = atob(data.FileContent);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // 3. Create a standard File object
+        const fileName = data.FileName || `OFP_${flightId}.pdf`;
+        const file = new File([bytes], fileName, { type: 'application/pdf' });
+
+        if (typeof showToast === 'function') showToast("OFP Downloaded! Extracting data...", "success");
+
+        // 4. Send it directly to your existing pipeline
+        if (typeof runAnalysis === 'function') {
+            
+            // This parses the PDF and saves it to IndexedDB
+            await runAnalysis(file, false);
+            
+            // 5. Find the newly created OFP in the database and ACTIVATE it cleanly!
+            if (typeof getCachedOFPs === 'function' && typeof activateOFP === 'function') {
+                const allOFPs = await getCachedOFPs(true); // Force refresh cache
+                
+                if (allOFPs && allOFPs.length > 0) {
+                    // Sort by ID to get the highest/newest one
+                    allOFPs.sort((a, b) => b.id - a.id);
+                    const newestOFP = allOFPs[0];
+                    
+                    // Call your exact activation function! 
+                    // switchTab = true is built-in, so it handles the redirect perfectly.
+                    await activateOFP(newestOFP.id, true); 
+                }
+            }
+
+        } else {
+            console.warn("runAnalysis function not found in the global scope!");
+            alert("Error: Core PDF analyzer is missing.");
+        }
+
+    } catch (error) {
+        console.error("Failed to import OFP:", error);
+        alert("Error syncing OFP: " + error.message);
+    }
 }
 
 // FUNCTIONS NOT USED ANYMORE

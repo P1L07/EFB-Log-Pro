@@ -38,6 +38,11 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (e) => {
+  // Ignore POST requests and external APIs so they bypass the service worker!
+  if (e.request.method !== 'GET' || e.request.url.includes('airastana.com')) {
+      return; 
+  }
+  
   const url = new URL(e.request.url);
 
   // STRATEGY 1: Network First (For HTML and Main JS)
