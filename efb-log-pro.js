@@ -4302,13 +4302,13 @@
         updateEmptyStates();
     }
 
-    window.goToSectorsAndActivate = function() {
-        const sectorsBtn = document.querySelector('.nav-btn[data-tab="sectors"], .nav-btn[onclick*="sectors"]');
-        if (sectorsBtn) {
+    window.goToAssignedAndActivate = function() {
+        const assignedBtn = document.querySelector('.nav-btn[data-tab="assigned"], .nav-btn[onclick*="assigned"]');
+        if (assignedBtn) {
             if (typeof window.showTab === 'function') {
-                window.showTab('sectors', sectorsBtn);
+                window.showTab('assigned', assignedBtn);
             } else {
-                sectorsBtn.click();
+                assignedBtn.click();
             }
         }
     };
@@ -4724,8 +4724,7 @@
                     <span style="font-size: 80px; display: block; margin-bottom: 20px; line-height: 1;">📋</span>
                     <h2 style="color: var(--text); margin: 0 0 10px; font-size: 28px;">No Active OFP</h2>
                     <p style="color: var(--dim); margin: 0 0 30px; font-size: 16px; line-height: 1.6;">
-                        You have stored OFPs but none are currently active.<br>
-                        Please activate one from the OFP Manager.
+                        Please activate one from the My Flights tab.
                     </p>
                     <button onclick="goToSectorsAndActivate()" style="
                         background: var(--accent);
