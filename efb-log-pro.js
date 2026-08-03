@@ -103,6 +103,9 @@
         atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null, reasonLabel: null 
     };
     let dbPromise = null;
+    let depAlertsByAirport = {};
+    let destAlertsByAirport = {};
+    let altnAlertsByAirport = {};
 
 // ==========================================
 // 2. UTILITY SECURITY AND UPDATE
@@ -3260,12 +3263,12 @@ function parsePageOne(lines) {
             return;
         }
 
-        // Parse flight date (format "06/02/26")
+        // Parse flight date (format "DD/MM/YY")
         const [day, month, year] = flightDateStr.split('/').map(Number);
         const flightDate = new Date(Date.UTC(2000 + year, month - 1, day));
         const parseTime = (timeStr) => {
-            const [h, m] = timeStr.split(':').map(Number);
-            return h * 60 + m;
+            const [h, m] = (timeStr || '').split(':').map(Number);
+            return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
         };
         const etdMinutes = parseTime(etdStr);
         const etaMinutes = parseTime(etaStr);
@@ -3285,7 +3288,7 @@ function parsePageOne(lines) {
                 Math.floor(startMin / 60), startMin % 60);
             let end = Date.UTC(flightDate.getUTCFullYear(), flightDate.getUTCMonth(), flightDate.getUTCDate(),
                 Math.floor(endMin / 60), endMin % 60);
-            if (endMin >= 1440) end += 86400000; // next day
+            if (endMin >= 1440) end += 86400000;
             return { start, end };
         };
 
@@ -3310,23 +3313,15 @@ function parsePageOne(lines) {
                 const parseNotamDateTime = (str, baseYear) => {
                     const match = str.match(/(\d{2})([A-Z]{3})(\d{2})(\d{2})/i);
                     if (!match) return null;
-                    const day = parseInt(match[1], 10);
+                    const d = parseInt(match[1], 10);
                     const monthStr = match[2].toUpperCase();
                     const hour = parseInt(match[3], 10);
                     const minute = parseInt(match[4], 10);
                     const months = { JAN:0, FEB:1, MAR:2, APR:3, MAY:4, JUN:5, JUL:6, AUG:7, SEP:8, OCT:9, NOV:10, DEC:11 };
-                    const month = months[monthStr];
-                    if (month === undefined) return null;
+                    const m = months[monthStr];
+                    if (m === undefined) return null;
 
-                    // Start with baseYear
-                    let year = baseYear;
-                    let date = new Date(Date.UTC(year, month, day, hour, minute));
-                    // If this date is more than 180 days in the past, it's probably next year
-                    // (handles "10JAN" when base is December)
-                    const diffDays = (date.getTime() - Date.UTC(baseYear, 0, 1)) / 86400000; // days since Jan 1 of baseYear
-                    // Actually, better to compare against baseDate directly:
-                    // But we don't have baseDate here, only baseYear. We'll handle it in getNotamValidity.
-                    return { year, month, day, hour, minute };
+                    return { year: baseYear, month: m, day: d, hour, minute };
                 };
 
                 const getNotamValidity = (text) => {
@@ -3335,7 +3330,6 @@ function parsePageOne(lines) {
                     const startStr = match[1];
                     const endStr = match[2];
 
-                    // Parse both with flight's year
                     const startParsed = parseNotamDateTime(startStr, flightDate.getUTCFullYear());
                     const endParsed = parseNotamDateTime(endStr, flightDate.getUTCFullYear());
                     if (!startParsed || !endParsed) return null;
@@ -3343,13 +3337,10 @@ function parsePageOne(lines) {
                     let start = new Date(Date.UTC(startParsed.year, startParsed.month, startParsed.day, startParsed.hour, startParsed.minute));
                     let end = new Date(Date.UTC(endParsed.year, endParsed.month, endParsed.day, endParsed.hour, endParsed.minute));
 
-                    // If end is before start, the end is in the next year
                     if (end < start) {
                         end.setUTCFullYear(end.getUTCFullYear() + 1);
                     }
 
-                    // If after all that, the end is still before the flight date, the whole NOTAM is in the past
-                    // => shift both start and end forward by one year
                     if (end < flightDate) {
                         start.setUTCFullYear(start.getUTCFullYear() + 1);
                         end.setUTCFullYear(end.getUTCFullYear() + 1);
@@ -3358,12 +3349,11 @@ function parsePageOne(lines) {
                     return { start, end };
                 };
 
-                // Extract data
-                const notams = extractNOTAMs(fullText);
-                console.log('NOTAMs extracted:', notams.length, notams);
-                const weather = extractWeather(fullText);
+                // Extract NOTAMs and Weather
+                const notams = typeof extractNOTAMs === 'function' ? extractNOTAMs(fullText) : [];
+                const weather = typeof extractWeather === 'function' ? extractWeather(fullText) : [];
 
-                // Store latest METAR for each airport (only first encountered per airport)
+                // Store latest METAR for each airport
                 const airportMetars = {};
                 weather.forEach(report => {
                     const upper = report.toUpperCase();
@@ -3372,7 +3362,6 @@ function parsePageOne(lines) {
                         if (match) {
                             const apt = match[1].toUpperCase();
                             if (!airportMetars[apt]) {
-                                // Keep full report, we'll strip the prefix later
                                 airportMetars[apt] = report;
                             }
                         }
@@ -3391,42 +3380,27 @@ function parsePageOne(lines) {
                         destMetar = report;
                     }
                 });
-                window.currentWeather = {
-                    dep: depMetar,
-                    dest: destMetar
-                };
+                window.currentWeather = { dep: depMetar, dest: destMetar };
 
-                // Extract runway info for all airports (format: "UAAA ALA RWY05L 4500M RWY05R 4400M ...")
+                // Extract runway info safely for all airports (Fixes un-scoped regex leaks)
                 const airportRunways = {};
-                const runwayRegex = /([A-Z]{4})\s+[A-Z]{3}\s+((?:RWY\d{2}[LRC]?\s+\d+M\s*)+)/gi;
-                let match;
-                while ((match = runwayRegex.exec(fullText)) !== null) {
-                    const apt = match[1].toUpperCase();
-                    const runwayText = match[2].trim().replace(/\s+/g, ' ');
+                const runwayRegex = /([A-Z]{4})(?:\s+[A-Z]{3})?\s+((?:RWY\d{2}[LRC]?\s+\d+M\s*)+)/gi;
+                let rwyMatch;
+                while ((rwyMatch = runwayRegex.exec(fullText)) !== null) {
+                    const apt = rwyMatch[1].toUpperCase();
+                    const runwayText = rwyMatch[2].trim().replace(/\s+/g, ' ');
                     airportRunways[apt] = runwayText;
                 }
                 window.airportRunways = airportRunways;
 
-                // Generate alerts (no time filtering yet)
-                let alerts = runRulesOnText(notams, weather);
+                // Generate alerts
+                let alerts = typeof runRulesOnText === 'function' ? runRulesOnText(notams, weather) : [];
                 if (!alerts) alerts = [];
 
-                const filteredAlertsBeforeTime = alerts.filter(alert => {
-                    if (alert.type && alert.type.includes('NOTAM')) {
-                        const upper = alert.message.toUpperCase();
-                    }
-                    return true;
-                });
-                console.log(`Alerts after irrelevant filter: ${filteredAlertsBeforeTime.length}`);
-
-                // Helper to parse weather validity (TAF, METAR, SPECI)
+                // Helper to parse weather validity
                 const parseWeatherValidity = (report, baseDate) => {
-                    // TAF pattern: "TAF UAKK 100503Z 1006/1106 ..."
                     let match = report.match(/TAF(?:\s+AMD)?\s+[A-Z]{4}\s+(\d{2})(\d{2})(\d{2})Z\s+(\d{2})(\d{2})\/(\d{2})(\d{2})/i);
                     if (match) {
-                        const obsDay = parseInt(match[1], 10);
-                        const obsHour = parseInt(match[2], 10);
-                        const obsMin = parseInt(match[3], 10);
                         const startDay = parseInt(match[4], 10);
                         const startHour = parseInt(match[5], 10);
                         const endDay = parseInt(match[6], 10);
@@ -3437,7 +3411,6 @@ function parsePageOne(lines) {
                         if (end < baseDate) end.setUTCMonth(end.getUTCMonth() + 1);
                         return { start, end };
                     }
-                    // METAR/SPECI pattern: "SPECI UAOO 100547Z ..."
                     match = report.match(/(?:METAR|SPECI)\s+[A-Z]{4}\s+(\d{2})(\d{2})(\d{2})Z/i);
                     if (match) {
                         const day = parseInt(match[1], 10);
@@ -3451,9 +3424,9 @@ function parsePageOne(lines) {
                     return null;
                 };
 
-                // Apply time filtering to the already irrelevant‑filtered alerts
+                // Apply time filtering
                 const filteredAlerts = [];
-                filteredAlertsBeforeTime.forEach(alert => {
+                alerts.forEach(alert => {
                     const airport = alert.airport ? alert.airport.toUpperCase() : '';
                     let include = true;
                     let validity = null;
@@ -3480,32 +3453,15 @@ function parsePageOne(lines) {
                             windowEnd = otherWindow.end;
                         }
 
-                        // DEBUG for specific NOTAM (place it here, after windowStart/End are defined)
-                        if (alert.message && alert.message.includes('SW0158/26')) {
-                            console.log('=== SW0158/26 DEBUG ===');
-                            console.log('Airport:', airport);
-                            console.log('Raw message:', alert.message);
-                            console.log('Parsed validity:', validity ? { start: validity.start.toISOString(), end: validity.end.toISOString() } : null);
-                            console.log('Window for this airport:', { start: new Date(windowStart).toISOString(), end: new Date(windowEnd).toISOString() });
-                            console.log('Overlap condition:', !(endTime < windowStart || startTime > windowEnd));
-                        }
-
                         if (endTime < windowStart || startTime > windowEnd) {
                             include = false;
                         }
                     }
                     if (include) filteredAlerts.push(alert);
                 });
-                console.log(`Alerts after time filtering: ${filteredAlerts.length}`);
 
                 // Fallback if all filtered out
-                let finalAlerts;
-                if (filteredAlerts.length === 0 && alerts.length > 0) {
-                    console.warn('Time filtering removed all alerts. Showing unfiltered list.');
-                    finalAlerts = alerts;
-                } else {
-                    finalAlerts = filteredAlerts;
-                }
+                const finalAlerts = (filteredAlerts.length === 0 && alerts.length > 0) ? alerts : filteredAlerts;
 
                 // Track airports with alerts
                 const airportsWithAlerts = new Set();
@@ -3516,30 +3472,15 @@ function parsePageOne(lines) {
                 });
 
                 // Add placeholders for key airports with no alerts
-                if (depAirport && !airportsWithAlerts.has(depAirport)) {
-                    finalAlerts.push({
-                        severity: 'info',
-                        type: 'INFO',
-                        airport: depAirport,
-                        message: 'No relevant WX/NOTAM to report.'
-                    });
-                }
-                if (destAirport && !airportsWithAlerts.has(destAirport)) {
-                    finalAlerts.push({
-                        severity: 'info',
-                        type: 'INFO',
-                        airport: destAirport,
-                        message: 'No relevant WX/NOTAM to report.'
-                    });
-                }
-                uniqueAlternates.forEach(alt => {
-                    if (alt && !airportsWithAlerts.has(alt) && alt !== depAirport && alt !== destAirport) {
+                [depAirport, destAirport, ...uniqueAlternates].forEach(apt => {
+                    if (apt && !airportsWithAlerts.has(apt)) {
                         finalAlerts.push({
                             severity: 'info',
                             type: 'INFO',
-                            airport: alt,
+                            airport: apt,
                             message: 'No relevant WX/NOTAM to report.'
                         });
+                        airportsWithAlerts.add(apt);
                     }
                 });
 
@@ -3566,11 +3507,12 @@ function parsePageOne(lines) {
                     return (a.type || '').localeCompare(b.type || '');
                 });
 
-                console.log('Final alerts count:', finalAlerts.length);
                 window.notamFullAlerts = finalAlerts.slice();
 
-                // Render
-                renderNotamsWXTable(finalAlerts);
+                // Render table safely
+                if (typeof renderNotamsWXTable === 'function') {
+                    renderNotamsWXTable(finalAlerts);
+                }
 
             } catch (error) {
                 console.error('Analysis error:', error);
@@ -4044,120 +3986,59 @@ function parsePageOne(lines) {
         const container = document.getElementById('notam-results');
         if (!container) return;
 
-        const getCleanStr = id => (document.getElementById(id)?.textContent || '').trim().toUpperCase();
-        
-        const depAirport = getCleanStr('view-dep');
-        const destAirport = getCleanStr('view-dest');
-        
-        // High-speed unique filtering
-        const uniqueAlternates = [...new Set([
-            getCleanStr('view-altn'), getCleanStr('view-altn2'), getCleanStr('view-era-text')
-        ].filter(code => code && /^[A-Z]{4}$/.test(code)))];
+        const runwaysMap = window.airportRunways || {};
 
-        const metars = window.airportMetars || {};
-        const getCleanMetar = apt => apt && metars[apt] ? metars[apt].replace(/^METAR\s+[A-Z]{4}\s+/, '') : null;
+        if (!alerts || alerts.length === 0) {
+            container.innerHTML = `
+                <div class="airport-block">
+                    <div class="alert-item info">
+                        <span class="alert-message">No weather or NOTAM alerts to report.</span>
+                    </div>
+                </div>`;
+            return;
+        }
 
-        const depAlerts = [], destAlerts = [], altAlerts = {}, otherAlerts = [];
-
-        // O(n) Routing
+        // Group alerts by airport to match your .airport-block CSS layout
+        const grouped = {};
         alerts.forEach(alert => {
-            const airport = alert.airport ? String(alert.airport).trim().toUpperCase() : '';
-            if (!airport || !/^[A-Z]{4}$/.test(airport)) {
-                otherAlerts.push(alert);
-            } else if (airport === depAirport) {
-                depAlerts.push(alert);
-            } else if (airport === destAirport) {
-                destAlerts.push(alert);
-            } else if (uniqueAlternates.includes(airport)) {
-                if (!altAlerts[airport]) altAlerts[airport] = [];
-                altAlerts[airport].push(alert);
-            } else {
-                otherAlerts.push(alert);
-            }
+            const apt = (alert.airport || 'UNKNOWN').toUpperCase();
+            if (!grouped[apt]) grouped[apt] = [];
+            grouped[apt].push(alert);
         });
 
-        // Fast severity map
-        const severityOrder = { 'critical': 0, 'warning': 1, 'info': 2 };
-        const sortAlerts = (a, b) => (severityOrder[(a.severity || '').toLowerCase()] ?? 3) - (severityOrder[(b.severity || '').toLowerCase()] ?? 3);
-        
-        // (Next part of the NOTAM engine will resume here)
+        let html = '';
 
-        // Helper to render a single airport's block (runways, METAR, alerts)
-        const renderAirportBlock = (apt, alertsArray) => {
-        if (!apt) return '';
-            alertsArray.sort(sortAlerts);
-            let html = `<div class="airport-block">`;
-            
-            // Airport code (large, prominent)
-            html += `<div class="airport-code">${apt}</div>`;
-            
-            // METAR second
-            const metar = getCleanMetar(apt);
-            if (metar) {
-                html += `<div class="metar-info">${metar}</div>`;
-            }
-            
-            // Runways third
-            if (runways[apt]) {
-                html += `<div class="runway-info">${runways[apt]}</div>`;
-            }
-            
-            // Alerts last
-            if (alertsArray.length > 0) {
-                html += '<div class="alerts-list">';
-                alertsArray.forEach(alert => {
-                    const cleanType = alert.type.includes(':') ? alert.type.split(':')[1].trim() : alert.type;
-                    html += `
-                        <div class="alert-item ${alert.severity}">
-                            <span class="alert-type">${cleanType}</span>
-                            <span class="alert-message">${alert.message}</span>
-                        </div>
-                    `;
-                });
-                html += '</div>';
-            }
-            html += `</div>`;
-            return html;
-        };
+        for (const [apt, aptAlerts] of Object.entries(grouped)) {
+            const runway = runwaysMap[apt] || '';
 
-        let finalHtml = '';
+            html += `
+                <div class="airport-block">
+                    <div class="airport-header">
+                        <span class="airport-code">${apt}</span>
+                        ${runway ? `<span class="runway-info">${runway}</span>` : ''}
+                    </div>
+                    <div class="alerts-list">
+            `;
 
-        // Departure
-        if (depAirport) {
-            finalHtml += `<h3 class="section-title">Departure Airport</h3>`;
-            finalHtml += renderAirportBlock(depAirport, depAlertsByAirport[depAirport] || []);
-        }
-
-        // Destination
-        if (destAirport) {
-            finalHtml += `<h3 class="section-title">Destination Airport</h3>`;
-            finalHtml += renderAirportBlock(destAirport, destAlertsByAirport[destAirport] || []);
-        }
-
-        // Alternates
-        if (uniqueAlternates.length > 0) {
-            finalHtml += `<h3 class="section-title">Alternate Airports</h3>`;
-            uniqueAlternates.forEach(apt => {
-                finalHtml += renderAirportBlock(apt, altAlertsByAirport[apt] || []);
+            aptAlerts.forEach(alert => {
+                // Ensures severity matches .alert-item.critical, .alert-item.warning, or .alert-item.info
+                const severity = (alert.severity || 'info').toLowerCase();
+                
+                html += `
+                    <div class="alert-item ${severity}">
+                        <div class="alert-type">${alert.type || 'NOTAM'}</div>
+                        <div class="alert-message">${alert.message}</div>
+                    </div>
+                `;
             });
+
+            html += `
+                    </div>
+                </div>
+            `;
         }
 
-        // Other Airports (group all remaining alerts)
-        if (otherAlerts.length > 0) {
-            finalHtml += `<h3 class="section-title">Other Airports</h3>`;
-            // Group other alerts by airport for consistency
-            const otherByAirport = {};
-            otherAlerts.forEach(alert => {
-                const apt = alert.airport ? alert.airport.toString().trim().toUpperCase() : 'Unknown';
-                if (!otherByAirport[apt]) otherByAirport[apt] = [];
-                otherByAirport[apt].push(alert);
-            });
-            Object.keys(otherByAirport).sort().forEach(apt => {
-                finalHtml += renderAirportBlock(apt, otherByAirport[apt]);
-            });
-        }
-
-        container.innerHTML = finalHtml || '<div class="info">No data.</div>';
+        container.innerHTML = html;
     }
 
     // Debounced search filtering to prevent UI lag while typing
