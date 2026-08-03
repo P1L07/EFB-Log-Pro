@@ -1046,6 +1046,45 @@
         });
     }
 
+// ==========================================
+// 3. INITIALIZATION
+// ==========================================
+    // Fast ID selector
+    const el = (id) => document.getElementById(id);
+
+    // Fast, reflow-free text setter
+    function safeText(id, val) { 
+        const e = el(id); 
+        // Use textContent instead of innerText to prevent expensive CSS layout recalculations
+        if (e) e.textContent = val || ''; 
+    }
+
+    // Smart input/text setter
+    function safeSet(id, val) { 
+        const e = el(id); 
+        if (!e) return;
+        
+        if (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') {
+            e.value = val || '';
+        } else {
+            e.textContent = val || ''; 
+        }
+    }
+
+    // High-speed string sanitization (avoids DOM creation and memory leaks)
+    function sanitizeHTML(str) {
+        if (!str) return '';
+        const escapeMap = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        };
+        return String(str).replace(/[&<>"']/g, match => escapeMap[match]);
+    }
+
+    // Standard high-performance debounce
     function debounce(func, wait, immediate = false) {
         let timeout;
         const debounced = function(...args) {
@@ -1066,92 +1105,37 @@
         return debounced;
     }
 
-    // SET COLUMN VALUES
-    const el = (id) => document.getElementById(id);
-    function safeSet(id, val) { 
-        const e = el(id); 
-        if(!e) return;
-        
-        // 1. If it's an input field, set .value
-        if (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') {
-            e.value = val || '';
-        } 
-        // 2. If it's a div/span/label, set .innerText
-        else {
-            e.innerText = val || ''; 
-        }
-    }
-    
-    function safeText(id, val) { 
-        const e = el(id); 
-        if(e) e.innerText = val || ''; 
-    }
-
-    function sanitizeHTML(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
-
-// ==========================================
-// 3. INITIALIZATION
-// ==========================================
-
     window.onload = async function() {
-        // Show authentication first
         const authenticated = await setupAuthentication();
         
         if (!authenticated) {
-            // Block access if not authenticated
             document.body.innerHTML = `
-                <div style="
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    background: var(--background);
-                    color: var(--text);
-                    text-align: center;
-                    padding: 20px;
-                ">
+                <div style="display:flex; justify-content:center; align-items:center; height:100vh; background:var(--background); color:var(--text); text-align:center; padding:20px;">
                     <div>
                         <h1>🔒 Access Denied</h1>
                         <p>Authentication required to use EFB Log Pro</p>
-                        <button onclick="location.reload()" style="
-                            margin-top: 20px;
-                            padding: 10px 20px;
-                            background: var(--accent);
-                            color: white;
-                            border: none;
-                            border-radius: 5px;
-                            cursor: pointer;
-                        ">
-                            Try Again
-                        </button>
+                        <button onclick="location.reload()" style="margin-top:20px; padding:10px 20px; background:var(--accent); color:white; border:none; border-radius:5px; cursor:pointer;">Try Again</button>
                     </div>
-                </div>
-            `;
+                </div>`;
             return;
         }
-        // Use requestIdleCallback for non-critical initialization
+
+        const bootSequence = async () => {
+            await initializeApp();
+            setTimeout(initializeSettings, 2000);
+        };
+
         if ('requestIdleCallback' in window) {
-            requestIdleCallback(async () => {
-                await initializeApp();
-                setTimeout(initializeSettings, 2000);
-            });
+            requestIdleCallback(bootSequence);
         } else {
-            setTimeout(async () => {
-                await initializeApp();
-                setTimeout(initializeSettings, 2000);
-            }, 1000);
+            setTimeout(bootSequence, 1000);
         }
     };
 
-    window.clearAtisCanvas = () => clearPad('atis');
-    window.clearAtcCanvas = () => clearPad('atc');
-    window.clearSignature = () => clearPad('main');
+    window.clearAtisCanvas = () => typeof clearPad === 'function' && clearPad('atis');
+    window.clearAtcCanvas = () => typeof clearPad === 'function' && clearPad('atc');
+    window.clearSignature = () => typeof clearPad === 'function' && clearPad('main');
 
-    // Upload multiple OFPs sequentially with progress indicator
     async function uploadMultipleOFPs(files) {
         const modal = document.getElementById('upload-progress-modal');
         const progressBar = document.getElementById('upload-progress-bar');
@@ -1159,7 +1143,8 @@
         const progressDetail = document.getElementById('upload-progress-detail');
         const closeBtn = document.getElementById('upload-progress-close');
 
-        // Reset and show modal
+        if (!modal) return;
+
         progressDetail.innerHTML = '';
         progressBar.style.width = '0%';
         progressText.textContent = `Processing 0 of ${files.length}...`;
@@ -1174,19 +1159,15 @@
             const fileInfo = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
             progressText.textContent = `Processing ${i + 1} of ${files.length}: ${file.name}`;
             
-            // Add log entry
             const logEntry = document.createElement('div');
-            logEntry.style.padding = '4px 0';
-            logEntry.style.borderBottom = '1px solid var(--border)';
+            logEntry.style.cssText = 'padding: 4px 0; border-bottom: 1px solid var(--border);';
             logEntry.innerHTML = `⏳ ${fileInfo} – uploading...`;
             progressDetail.appendChild(logEntry);
             progressDetail.scrollTop = progressDetail.scrollHeight;
 
             try {
-                // Call the existing runAnalysis with the file
+                // IMPORTANT: Pass { isBatch: true } so runAnalysis doesn't auto-activate
                 await runAnalysis(file, false, { isBatch: true });
-                
-                // Update log on success
                 logEntry.innerHTML = `✅ ${fileInfo} – success`;
                 successCount++;
             } catch (error) {
@@ -1195,100 +1176,76 @@
                 failCount++;
             }
 
-            // Update progress bar
-            const percent = ((i + 1) / files.length) * 100;
-            progressBar.style.width = `${percent}%`;
+            progressBar.style.width = `${((i + 1) / files.length) * 100}%`;
         }
 
-        // Final summary
         progressText.textContent = `Completed: ${successCount} succeeded, ${failCount} failed`;
         closeBtn.style.display = 'block';
-        
-        // Refresh OFP Manager table if visible
-        if (document.getElementById('section-sectors')?.classList.contains('active')) {
-            await renderOFPMangerTable();
-        }
+        closeBtn.onclick = () => modal.style.display = 'none';
 
-        // Close button handler
-        closeBtn.onclick = () => {
-            modal.style.display = 'none';
-        };
-
-        // After the loop
+        // Refresh cache and jump to file manager
         await getCachedOFPs(true);
+        if (typeof renderOFPMangerTable === 'function') await renderOFPMangerTable();
+        
         const sectorsBtn = document.querySelector('.nav-btn[data-tab="sectors"], .nav-btn[onclick*="sectors"]');
         if (sectorsBtn) {
-            if (typeof window.showTab === 'function') {
-                window.showTab('sectors', sectorsBtn);
-            } else {
-                sectorsBtn.click();
-            }
+            typeof window.showTab === 'function' ? window.showTab('sectors', sectorsBtn) : sectorsBtn.click();
         }
 
-        updateUploadButtonVisibility();
-        await updateEmptyStates();
-
+        if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
+        if (typeof updateEmptyStates === 'function') await updateEmptyStates();
     }
 
     async function validateOFP(file) {
         try {
-            // 1. BASIC CHECKS
             if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
-                alert('Invalid file type. Please upload a PDF file.');
-                return false;
+                throw new Error('Invalid file type. Please upload a PDF file.');
             }
-            
             if (file.size > 10 * 1024 * 1024) {
-                alert('File too large. Maximum size is 10MB.');
-                return false;
+                throw new Error('File too large. Maximum size is 10MB.');
             }
-            
             if (file.size < 100) {
-                alert('File too small to be a valid PDF.');
-                return false;
+                throw new Error('File too small to be a valid PDF.');
             }
-            
-            // 2. HEADER CHECKS
+
+            // HEADER CHECK (%PDF-)
             const headerBuffer = await file.slice(0, 5).arrayBuffer();
             const header = new Uint8Array(headerBuffer);
-            const pdfHeader = new TextEncoder().encode('%PDF-');
+            const pdfHeader = [37, 80, 68, 70, 45]; // ASCII for %PDF-
             
             for (let i = 0; i < 4; i++) {
-                if (header[i] !== pdfHeader[i]) {
-                    alert('Invalid file signature. Not a PDF.');
-                    return false;
-                }
+                if (header[i] !== pdfHeader[i]) throw new Error('Invalid file signature. Not a PDF.');
             }
-            
-            // 3. CONTENT VALIDATION
+
+            // CONTENT VALIDATION
             const arrayBuffer = await file.arrayBuffer();
-            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-            const pdf = await loadingTask.promise;
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
             
-            if (pdf.numPages < 1) {
-                alert('PDF has no pages.');
-                return false;
-            }
+            if (pdf.numPages < 1) throw new Error('PDF has no pages.');
 
+            // Use our high-speed line extractor
             const page = await pdf.getPage(1);
-            const textContent = await page.getTextContent();
-            const pageText = textContent.items.map(item => item.str).join(' ').toUpperCase();
+            const lines = typeof getLinesFromPDFPage === 'function' 
+                            ? await getLinesFromPDFPage(page) 
+                            : [(await page.getTextContent()).items.map(i => i.str).join(' ')];
+                            
+            const pageText = lines.join(' ').toUpperCase();
 
-            if (!pageText.includes('OPERATIONAL FLIGHT PLAN')) {
-                alert('This does not look like an Operational Flight Plan.');
-                return false;
+            // Broadened validation for Skyplan variants
+            if (!pageText.includes('OPERATIONAL FLIGHT PLAN') && !pageText.includes('OFP')) {
+                throw new Error('This does not look like an Operational Flight Plan.');
             }
             
-            return true; 
+            return true;
 
         } catch (e) {
             console.error("PDF Validation Error:", e);
-            alert('Error validating OFP: ' + e.message);
+            alert(`Validation Error: ${e.message}`);
             return false;
         }
     }
 
-    // One‑time migration of legacy localStorage state
+    // One-time migration of legacy localStorage state (Parallelized)
     async function migrateLegacyState() {
         const MIGRATION_KEY = 'efb_state_migration_v2';
         if (localStorage.getItem(MIGRATION_KEY) === 'done') return;
@@ -1299,350 +1256,207 @@
             { key: 'efb_log_state_plain', encrypted: false }
         ];
 
-        for (const { key, encrypted } of storages) {
+        // Process all storage migrations concurrently for speed
+        await Promise.all(storages.map(async ({ key, encrypted }) => {
             const raw = localStorage.getItem(key);
-            if (!raw) continue;
+            if (!raw) return;
 
             try {
                 let state;
                 if (encrypted) {
-                    try {
-                        state = await decryptData(raw);
-                    } catch {
-                        continue; // skip if can't decrypt
-                    }
+                    state = await decryptData(raw).catch(() => null);
                 } else {
                     state = JSON.parse(raw);
                 }
+                
+                if (!state) return;
 
-                // Remove obsolete fields
-                let modified = false;
-                if (state.routeStructure !== undefined) {
+                if (state.routeStructure !== undefined || state.waypointUserValues !== undefined) {
                     delete state.routeStructure;
-                    modified = true;
-                }
-                if (state.waypointUserValues !== undefined) {
                     delete state.waypointUserValues;
-                    modified = true;
-                }
-
-                if (modified) {
-                    if (encrypted) {
-                        const encryptedNew = await encryptData(state);
-                        localStorage.setItem(key, encryptedNew);
-                    } else {
-                        localStorage.setItem(key, JSON.stringify(state));
-                    }
+                    
+                    const toSave = encrypted ? await encryptData(state) : JSON.stringify(state);
+                    localStorage.setItem(key, toSave);
                 }
             } catch (e) {
                 console.warn(`Failed to migrate ${key}:`, e);
             }
-        }
+        }));
 
         localStorage.setItem(MIGRATION_KEY, 'done');
     }
 
+    // High-speed Database cleanup utility
+    async function cleanupOrphanedOrders() {
+        try {
+            const db = await getDB();
+            if (!db.objectStoreNames.contains('ofp_orders') || !db.objectStoreNames.contains('ofps')) return;
+            
+            const tx = db.transaction(["ofps", "ofp_orders"], "readwrite");
+            const ofpsStore = tx.objectStore("ofps");
+            const ordersStore = tx.objectStore("ofp_orders");
+            
+            // Get ALL valid IDs instantly (No heavy PDF data fetching)
+            const validIds = new Set(await new Promise(res => {
+                const req = ofpsStore.getAllKeys();
+                req.onsuccess = () => res(req.result);
+            }));
+
+            // Get all orders
+            const orders = await new Promise(res => {
+                const req = ordersStore.getAll();
+                req.onsuccess = () => res(req.result);
+            });
+            
+            if (Array.isArray(orders)) {
+                orders.forEach(order => {
+                    if (!validIds.has(order.id)) ordersStore.delete(order.id);
+                });
+            }
+            
+            await new Promise(res => { tx.oncomplete = res; });
+        } catch (e) {
+            console.warn('Order cleanup failed', e);
+        }
+    }
+
     async function initializeApp() {
-        // Debugging if IndexedDB is working
-        const hasPdf = await checkPdfInDB();
-        // PDF.js worker setup
+        // 1. PDF.js Worker Setup
         if (typeof pdfjsLib !== 'undefined') {
-            // Set worker source synchronously – no need to wait for script load
             pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
-            // Optional: still load with integrity for future use, but workerSrc is already set
-            const WORKER_HASH = 'sha384-cdzss87ZwpiG252tPQexupMwS1W1lTzzgy/UlNUHXW6h8aaJpBizRQk9j8Vj3zw9';
             const workerScript = document.createElement('script');
             workerScript.src = './pdf.worker.min.js';
-            workerScript.integrity = WORKER_HASH;
+            workerScript.integrity = 'sha384-cdzss87ZwpiG252tPQexupMwS1W1lTzzgy/UlNUHXW6h8aaJpBizRQk9j8Vj3zw9';
             workerScript.crossOrigin = 'anonymous';
             document.head.appendChild(workerScript);
         }
 
+        // 2. Setup Inputs and Delegates
         addTimeInputMasks();
+        if (typeof setupWaypointDelegation === 'function') setupWaypointDelegation();
 
-        // OFP Upload
-        const ofpFileInput = el('ofp-file-in');
-        if (ofpFileInput) {
-            ofpFileInput.onchange = async function(e) {
+        // 3. Streamlined File Upload Handler
+        const fileInput = document.getElementById('ofp-file-in');
+        if (fileInput) {
+            fileInput.onchange = async (e) => {
                 const files = Array.from(e.target.files);
                 if (files.length === 0) return;
                 
+                setOFPLoadedState(true);
+                
                 if (files.length === 1) {
-                    // Single file – use original flow
                     await runAnalysis(files[0], false);
-                } else {
-                    // Multiple files – use batch upload
+                } else if (typeof uploadMultipleOFPs === 'function') {
                     await uploadMultipleOFPs(files);
                 }
-                // Clear the input so same files can be uploaded again
-                e.target.value = '';
+                
+                e.target.value = ''; // Reset input
             };
         }
         
-        // Restore journey log template from IndexedDB if available
-        try {
-            const templateBlob = await loadJourneyTemplateFromDB();
-            if (templateBlob) {
-                journeyLogTemplateBytes = await templateBlob.arrayBuffer();
-            } else {
-            }
-        } catch (e) {
-            alert('Failed to load journey template from DB', e);
-            // If corrupted, delete it
-            await deleteJourneyTemplateFromDB().catch(() => {});
-        }
+        // 4. Efficient Event Binding for Real-Time Calculations
+        const bindGroup = (ids, handler) => {
+            ids.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', handler);
+            });
+        };
+
+        bindGroup(['j-out','j-off','j-on','j-in'], debounce(calculateTripTimeForJourneyLog, 300));
+        bindGroup(['j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 'j-burn', 'j-uplift-vol', 'j-disc', 'j-slip', 'j-slip-2'], debounce(calculateFuelForJourneyLog, 300));
         
-        // REAL-TIME CALCULATION LISTENERS (debounced)
-        ['j-out','j-off','j-on','j-in'].forEach(id => {
-            const e = el(id);
-            if (e) e.addEventListener('input', debounce(calculateTripTimeForJourneyLog, 300))
-        });
-            
-        ['j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 'j-burn', 'j-uplift-vol', 'j-disc', 'j-slip', 'j-slip-2'].forEach(id => {
-            const e = el(id);
-            if (e) e.addEventListener('input', debounce(calculateFuelForJourneyLog, 300));
-        });
-
-        ['j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw'].forEach(id => {
-            const e = el(id);
-        });
-
-        const ofpAtdInput = el('ofp-atd-in');
-        if (ofpAtdInput) {
-            // Use debouncedFullRecalc instead of a custom debounce
+        const ofpAtdInput = document.getElementById('ofp-atd-in');
+        if (ofpAtdInput && typeof debouncedFullRecalc === 'function') {
             ofpAtdInput.addEventListener('input', debouncedFullRecalc);
         }
             
-        const extraKgInput = el('front-extra-kg');
+        const extraKgInput = document.getElementById('front-extra-kg');
         if (extraKgInput) {
             extraKgInput.addEventListener('input', debounce(() => {
-                calculatePICBlock();
-                updateFlightLogTablesIncremental();
+                if (typeof calculatePICBlock === 'function') calculatePICBlock();
+                if (typeof updateFlightLogTablesIncremental === 'function') updateFlightLogTablesIncremental();
             }, 300));
         }
 
-        // OFFLINE AUTO‑LOAD LOGIC
+        // 5. Load Journey Template
         try {
-            const activeOFP = await getActiveOFPFromDB();
-            if (activeOFP && activeOFP.data) {
-                setOFPLoadedState(true);
-                window.ofpPdfBytes = await activeOFP.data.arrayBuffer();
-                window.originalFileName = activeOFP.fileName || "Logged_OFP.pdf";
-
-                // Parse the OFP (populates waypoints, alternateWaypoints, etc.)
-                await runAnalysis(activeOFP.data, true);
-
-                // Load user data from separate store
-                const userData = await loadOFPUserData(activeOFP.id);
-                if (userData) {
-                    // Restore waypoint inputs
-                    if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
-                        userData.userWaypoints.forEach((data, i) => {
-                            if (i < waypoints.length) {
-                                if (data.ato) safeSet(`o-a-${i}`, data.ato);
-                                if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                                if (data.notes) safeSet(`o-n-${i}`, data.notes);
-                                if (data.agl) safeSet(`o-agl-${i}`, data.agl);
-                            }
-                        });
-                        runFlightLogCalculations();
-                        syncLastWaypoint();
-                    }
-
-                    // Restore persistent text inputs (excluding drawings)
-                    if (userData.userInputs && typeof userData.userInputs === 'object') {
-                        Object.keys(userData.userInputs).forEach(id => {
-                            const val = userData.userInputs[id];
-                            // Skip drawings – they will be handled by restorePadDrawing
-                            if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') return;
-                            if (val !== undefined && val !== null) {
-                                safeSet(id, val);
-                            }
-                        });
-                    }
-
-                }
-
-                // Restore other non‑OFP state (dailyLegs, dutyStartTime, etc.) from localStorage
-                await loadState();
-
+            const templateBlob = typeof loadJourneyTemplateFromDB === 'function' ? await loadJourneyTemplateFromDB() : null;
+            if (templateBlob) journeyLogTemplateBytes = await templateBlob.arrayBuffer();
+        } catch (e) {
+            if (typeof deleteJourneyTemplateFromDB === 'function') await deleteJourneyTemplateFromDB().catch(() => {});
+        }
+        
+        // 6. OFFLINE AUTO-LOAD LOGIC (Massively simplified)
+        try {
+            const activeId = localStorage.getItem('activeOFPId');
+            if (activeId) {
+                // Let the robust activateOFP function do all the heavy lifting!
+                await activateOFP(activeId, false).catch(e => {
+                    console.warn("Failed to auto-activate OFP on startup:", e);
+                    localStorage.removeItem('activeOFPId');
+                    setOFPLoadedState(false);
+                });
             } else {
-                // Fallback to old single‑OFP store and migrate
-                const savedPdfBlob = await loadPdfFromDB();
-                if (savedPdfBlob && savedPdfBlob.size > 0) {
-                    // ... (migration code) ...
-                } else {
-                    loadState();
+                // Fallback for legacy single-store data
+                const legacyBlob = typeof loadPdfFromDB === 'function' ? await loadPdfFromDB().catch(() => null) : null;
+                if (!legacyBlob || legacyBlob.size === 0) {
                     setOFPLoadedState(false);
                 }
             }
+            // Load user persistent state (duty times, dark mode, etc)
+            if (typeof loadState === 'function') await loadState();
         } catch (e) {
-            console.error("Auto‑load error:", e);
-            loadState();
+            console.error("Auto-load error:", e);
+            if (typeof loadState === 'function') await loadState();
             setOFPLoadedState(false);
         }
 
+        // 7. Background Cleanup & UI Routing
         await migrateLegacyState();
+        await cleanupOrphanedOrders();
 
-        // Clean up orphaned order entries (if any)
-        try {
-            const db = await getDB();
-            if (db.objectStoreNames.contains('ofp_orders') && db.objectStoreNames.contains('ofps')) {
-                const tx = db.transaction(["ofps", "ofp_orders"], "readwrite");
-                const ofpsStore = tx.objectStore("ofps");
-                const ordersStore = tx.objectStore("ofp_orders");
-                
-                // Get all orders
-                const orders = await new Promise((resolve, reject) => {
-                    const req = ordersStore.getAll();
-                    req.onsuccess = () => resolve(req.result);
-                    req.onerror = (e) => reject(e);
-                });
-                
-                if (!Array.isArray(orders)) {
-                    console.warn('Orders is not an array, skipping cleanup');
-                    return;
-                }
-                
-                for (let order of orders) {
-                    const ofp = await new Promise((resolve) => {
-                        const req = ofpsStore.get(order.id);
-                        req.onsuccess = () => resolve(req.result);
-                    });
-                    if (!ofp) {
-                        ordersStore.delete(order.id);
-                    }
-                }
-                
-                await new Promise((resolve) => {
-                    tx.oncomplete = resolve;
-                });
-            }
-        } catch (e) {
-            console.warn('Order cleanup failed', e);
-        }
-
-        // Check for Active OFP and set Sectors tab active
         const allOFPs = await getCachedOFPs();
         if (allOFPs.length > 0 && !localStorage.getItem('activeOFPId')) {
-            setOFPLoadedState(false);  // Ensure no OFP is loaded
-            // Switch to Sectors tab
+            setOFPLoadedState(false);
             const sectorsBtn = document.querySelector('.nav-btn[data-tab="sectors"], .nav-btn[onclick*="sectors"]');
-            if (sectorsBtn) {
-                sectorsBtn.click();  // This will call the existing tab switching logic
-            }
+            if (sectorsBtn) sectorsBtn.click();
         }
 
-        // Add event listener for file input change
-        const fileInput = document.getElementById('ofp-file-in');
-        if (fileInput) {
-            fileInput.addEventListener('change', function() {
-                setOFPLoadedState(true);
-            });
-        }
-        
-        // Initial floating button update
-        updateFloatingButtonVisibility();
-        setupWaypointDelegation()
+        if (typeof updateFloatingButtonVisibility === 'function') updateFloatingButtonVisibility();
     }
 
     async function getOFPById(id) {
         const db = await getDB();
         return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofps", "readonly");
-            const store = tx.objectStore("ofps");
-            const request = store.get(Number(id));
-            request.onsuccess = () => {
-                const ofp = request.result;
-                if (!ofp) {
-                    reject(new Error(`OFP with id ${id} not found`));
-                } else {
-                    resolve(ofp);
-                }
-            };
+            const request = db.transaction("ofps", "readonly").objectStore("ofps").get(Number(id));
+            request.onsuccess = () => request.result ? resolve(request.result) : reject(new Error(`OFP ${id} not found`));
             request.onerror = (e) => reject(e.target.error);
         });
     }
 
-    function clearOFPInputs() {
-        // 1. Clear all persistent user inputs (Flight Summary & Weights)
-        PERSISTENT_INPUT_IDS.forEach(id => safeSet(id, ''));
-            
-        // 2. Clear Time / ATD Input
-        safeSet('ofp-atd-in', '');
-            
-        // 3. Reset internal calculated variables
-        waypoints = []; 
-        alternateWaypoints = []; 
-        fuelData = []; 
-        blockFuelValue = 0;
-            
-        // 4. Clear the UI tables immediately
-        const tables = ['ofp-tbody', 'altn-tbody', 'fuel-tbody'];
-        tables.forEach(id => {
-            const tb = el(id);
-            if(tb) tb.innerHTML = '';
-        });
-        
-        // 5. Reset 'Flight Summary' & 'Weights & Fuel' Tab Text placeholders
-        ['view-min-block', 'view-pic-block', 'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 'view-dow', 'view-tow', 'view-lw', 'view-zfw'].forEach(id => safeText(id, '-'));
-        ['view-flt', 'view-reg', 'view-date','view-std-text', 'view-sta-text', 'view-dep', 'view-dest', 'view-altn', 'view-altn2', 'view-dest-route', 'view-altn-route', 'view-ci','view-etd-text', 'view-eta-text', 'view-era','view-crz-wind-temp', 'view-seats-stn-jmp'].forEach(id => safeText(id, '-'));
-        
-
-        if (pads.atis.pad) {
-            pads.atis.pad.clear();
-        }
-        if (pads.atc.pad) {
-            pads.atc.pad.clear();
-        }
-        
-        // Reset DOM caches to prevent stale references
-        waypointATOCache = [];
-        alternateATOCache = [];
-        waypointFuelCache = [];
-        takeoffFuelInput = null;
-
-        // Reset the incremental update cache to force a full redraw next time
-        waypointTableCache = { waypoints: [], alternateWaypoints: [], lastUpdate: 0 };
-    }
-
     window.deleteOFP = async function(id) {
-        const confirmed = await showConfirmDialog(
-            'Delete OFP',
-            'Are you sure you want to delete this OFP? This action cannot be undone.',
-            'Delete',
-            'Cancel',
-            'error'
-        );
+        const confirmed = await showConfirmDialog('Delete OFP', 'Are you sure you want to delete this OFP?', 'Delete', 'Cancel', 'error');
         if (!confirmed) return;
         
         try {
-            const activeId = localStorage.getItem('activeOFPId');
-            const wasActive = (activeId && Number(activeId) === id);
-            
             await deleteOFPFromDB(id);
-            await getCachedOFPs(true);
+            // Fetch cached list ONCE instead of multiple times
+            const remainingOFPs = await getCachedOFPs(true); 
             
-            if (wasActive) {
-                // Remove active ID from storage
+            if (localStorage.getItem('activeOFPId') === String(id)) {
                 localStorage.removeItem('activeOFPId');
                 
-                // Try to find the most recent remaining OFP and activate it
-                const remainingOFPs = await getCachedOFPs();
-                if (remainingOFPs.length > 0) {
-                    const newest = remainingOFPs[0]; // already sorted by uploadTime desc
-                    await activateOFP(newest.id);
-                } else {
-                    // No OFPs left – clear app state
+                if (remainingOFPs.length == 0) {
                     setOFPLoadedState(false);
                     clearOFPInputs();
                     window.ofpPdfBytes = null;
                 }
             }
+            
             await renumberOFPOrders();
             await renderOFPMangerTable();
             showToast("OFP deleted", 'success');
-            updateUploadButtonVisibility();
+            if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
         } catch (error) {
             console.error("Error deleting OFP:", error);
             showToast("Failed to delete OFP", 'error');
@@ -1650,18 +1464,14 @@
     };
 
     window.clearAllOFPs = async function() {
-        const confirmed = await showConfirmDialog(
-            'Clear All OFPs',
-            'This will delete ALL stored OFPs. Continue?',
-            'Clear All',
-            'Cancel',
-            'error'
-        );
+        const confirmed = await showConfirmDialog('Clear All OFPs', 'This will delete ALL stored OFPs. Continue?', 'Clear All', 'Cancel', 'error');
         if (!confirmed) return;
+        
         try {
             await clearAllOFPsFromDB();
             await getCachedOFPs(true);
             setOFPLoadedState(false);
+            localStorage.removeItem('activeOFPId'); // Ensure active ID is wiped
             clearOFPInputs();
             await renderOFPMangerTable();
             showToast("All OFPs cleared", 'success');
@@ -1672,139 +1482,88 @@
     };
 
     window.activateOFP = async function(id, switchTab = true) {
-        if (isActivating) {
-            showToast('Activation in progress, please wait...', 'info');
-            return;
-        }
+        if (isActivating) return showToast('Activation in progress', 'info');
         isActivating = true;
 
         try {
             const numericId = Number(id);
             if (isNaN(numericId)) throw new Error('Invalid OFP ID');
 
-            // Refresh cache
-            await getCachedOFPs(true);
-
-            // Retrieve the OFP with retries
-            let ofpToActivate = null;
-            const maxRetries = 3;
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    ofpToActivate = await getOFPById(numericId);
-                    break;
-                } catch (err) {
-                    console.warn(`Attempt ${attempt} failed: ${err.message}`);
-                    if (attempt === maxRetries) {
-                        const allOFPs = await getCachedOFPs();
-                        const found = allOFPs.find(o => o.id === numericId);
-                        if (found) {
-                            ofpToActivate = found;
-                            break;
-                        } else {
-                            throw new Error(`OFP with id ${numericId} not found after ${maxRetries} attempts`);
-                        }
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                }
-            }
-
-            if (ofpToActivate.finalized) {
-                return;
-            }
-
-            // Set active ID in localStorage only
-            localStorage.setItem('activeOFPId', numericId);
-
-            // Retrieve the full active OFP with retries
+            // Single unified retry loop to grab the full OFP data
             let ofp = null;
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                ofp = await getOFPById(numericId);
-                if (ofp && ofp.data) {
-                    break;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    ofp = await getOFPById(numericId);
+                    if (ofp && ofp.data) break;
+                } catch (err) {
+                    if (attempt === 3) throw new Error(`OFP ${numericId} data not found after 3 attempts`);
                 }
-                if (attempt === maxRetries) {
-                    throw new Error('Failed to load OFP data after multiple attempts');
-                }
-                alert(`Active OFP not ready, retry ${attempt} in 200ms...`);
-                await new Promise(resolve => setTimeout(resolve, 200));
+                await new Promise(r => setTimeout(r, 200));
             }
 
-            // Clear UI
-            if (typeof clearOFPInputs === 'function') clearOFPInputs();
+            if (ofp.finalized) return; // Ignore locked OFPs
 
+            // Lock in active state and prep UI
+            localStorage.setItem('activeOFPId', numericId);
+            if (typeof clearOFPInputs === 'function') clearOFPInputs();
             setOFPLoadedState(true);
+
             window.ofpPdfBytes = await ofp.data.arrayBuffer();
             window.originalFileName = ofp.fileName || "Logged_OFP.pdf";
-
+            
+            // Run analysis to rebuild the base PDF parameters
             await runAnalysis(ofp.data, true);
 
-            // Load user data from new store
-            const userData = await loadOFPUserData(numericId);
-            if (userData) {
-                // Restore waypoints
-                if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
-                    userData.userWaypoints.forEach((data, i) => {
-                        if (i < waypoints.length) {
-                            if (data.ato) safeSet(`o-a-${i}`, data.ato);
-                            if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                            if (data.notes) safeSet(`o-n-${i}`, data.notes);
-                            if (data.agl) safeSet(`o-agl-${i}`, data.agl);
-                        }
-                    });
-                    runFlightLogCalculations();
-                    syncLastWaypoint();
-                }
+            // Fetch user inputs (handles new database store AND legacy fallback)
+            const userData = await loadOFPUserData(numericId) || {};
+            const waypointsToRestore = userData.userWaypoints || ofp.userWaypoints || [];
+            const inputsToRestore = userData.userInputs || ofp.userInputs || {};
 
-                // Restore inputs and drawings
-                if (userData.userInputs && typeof userData.userInputs === 'object') {
-                    Object.keys(userData.userInputs).forEach(id => {
-                        const val = userData.userInputs[id];
-                        if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') {
-                            // Handle later after pads are ready
-                        } else {
-                            safeSet(id, val);
-                        }
-                    });
-                    // Restore drawings after a short delay (pads may not be ready)
-                    setTimeout(() => {
-                        if (userData.userInputs.signature && pads.main.pad) {
-                            pads.main.pad.fromDataURL(userData.userInputs.signature);
-                        }
-                        if (userData.userInputs['front-atis-drawing'] && pads.atis.pad) {
-                            pads.atis.pad.fromDataURL(userData.userInputs['front-atis-drawing']);
-                        }
-                        if (userData.userInputs['front-atc-drawing'] && pads.atc.pad) {
-                            pads.atc.pad.fromDataURL(userData.userInputs['front-atc-drawing']);
-                        }
-                    }, 200);
-                }
+            // 1. Restore Waypoint Logs
+            if (waypointsToRestore.length > 0 && typeof waypoints !== 'undefined') {
+                waypointsToRestore.forEach((data, i) => {
+                    if (i < waypoints.length) {
+                        if (data.ato) safeSet(`o-a-${i}`, data.ato);
+                        if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
+                        if (data.notes) safeSet(`o-n-${i}`, data.notes);
+                        if (data.agl) safeSet(`o-agl-${i}`, data.agl);
+                    }
+                });
+                if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+                if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
             }
 
-            // MIGRATION: If the OFP still has old userWaypoints/userInputs in the main record, move them to new store and remove from main
+            // 2. Restore Standard Inputs
+            if (Object.keys(inputsToRestore).length > 0) {
+                const drawings = ['signature', 'front-atis-drawing', 'front-atc-drawing'];
+                Object.keys(inputsToRestore).forEach(inputId => {
+                    if (!drawings.includes(inputId)) safeSet(inputId, inputsToRestore[inputId]);
+                });
+
+                // 3. Restore Drawings (Needs brief delay for Canvas to render)
+                setTimeout(() => {
+                    if (inputsToRestore.signature && pads?.main?.pad) pads.main.pad.fromDataURL(inputsToRestore.signature);
+                    if (inputsToRestore['front-atis-drawing'] && pads?.atis?.pad) pads.atis.pad.fromDataURL(inputsToRestore['front-atis-drawing']);
+                    if (inputsToRestore['front-atc-drawing'] && pads?.atc?.pad) pads.atc.pad.fromDataURL(inputsToRestore['front-atc-drawing']);
+                }, 200);
+            }
+
+            // MIGRATION CLEAR-OUT: Move legacy data to the new DB format and wipe it from the main object
             if (ofp.userWaypoints || ofp.userInputs) {
-                const oldWaypoints = ofp.userWaypoints || [];
-                const oldInputs = ofp.userInputs || {};
-                await saveOFPUserData(numericId, oldWaypoints, oldInputs);
-                // Remove from main record
+                await saveOFPUserData(numericId, waypointsToRestore, inputsToRestore);
                 await updateOFP(numericId, { userWaypoints: undefined, userInputs: undefined });
             }
 
+            // Final UI Switch
             await renderOFPMangerTable();
-
             if (switchTab) {
                 const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
-                if (summaryBtn) {
-                    if (typeof window.showTab === 'function') {
-                        window.showTab('summary', summaryBtn);
-                    } else {
-                        summaryBtn.click();
-                    }
-                }
+                if (summaryBtn) (typeof window.showTab === 'function') ? window.showTab('summary', summaryBtn) : summaryBtn.click();
             }
 
-            showToast(`Activated: ${ofp.flight || 'OFP'}`, 'success');
-            updateUploadButtonVisibility();
-            await updateEmptyStates();
+            showToast(`Activated: ${ofp.flight}`, 'success');
+            if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
+            if (typeof updateEmptyStates === 'function') await updateEmptyStates();
 
         } catch (error) {
             showToast(`Failed to activate OFP: ${error.message}`, 'error');
@@ -1813,96 +1572,1106 @@
         }
     };
 
-    // Shared manual upload preparation
     async function prepareForManualUpload() {
         if (typeof clearOFPInputs === 'function') clearOFPInputs();
         const legForm = document.getElementById('leg-input-form');
         if (legForm) legForm.style.display = 'block';
     }
 
-    // Handle replacement of an existing OFP
     async function handleReplacement(existingOFP, blob, metadata, previouslyActiveId, isBatch) {
-        const wasActive = existingOFP.isActive; // This field is no longer used but may exist in old records
-        const originalOrder = existingOFP.order;
-        const replacedId = existingOFP.id;
+        const wasActive = existingOFP.isActive || false;
+        const isActiveState = isBatch ? false : wasActive; // Batches never activate
 
-        const updatedData = {
+        await updateOFP(existingOFP.id, {
             data: blob,
             fileName: blob.name || "Logged_OFP.pdf",
             uploadTime: new Date().toISOString(),
-            flight: metadata.flight,
-            date: metadata.date,
-            departure: metadata.departure,
-            destination: metadata.destination,
-            tripTime: metadata.tripTime,
-            maxSR: metadata.maxSR,
-            requestNumber: metadata.requestNumber,
+            ...metadata,
             finalized: false,
             loggedPdfData: null,
-            order: originalOrder
-        };
+            isActive: isActiveState,
+            order: existingOFP.order
+        });
 
-        if (isBatch) {
-            // Batch mode: never activate the replacement, and if it was active, clear active ID.
-            updatedData.isActive = false;
-            await updateOFP(replacedId, updatedData);
-            if (wasActive) {
-                localStorage.removeItem('activeOFPId');
-            }
-            showToast(`OFP updated: ${metadata.flight} (inactive)`, 'success');
-            setOFPLoadedState(false);
-        } else {
-            // Normal (single) upload: preserve active state
-            updatedData.isActive = wasActive;
-            await updateOFP(replacedId, updatedData);
-            if (wasActive) {
-                setOFPLoadedState(true);
-                showToast(`OFP updated: ${metadata.flight} (active)`, 'success');
-            } else {
-                setOFPLoadedState(false);
-                showToast(`OFP updated: ${metadata.flight} (inactive)`, 'success');
-            }
-        }
-
+        if (isBatch && wasActive) localStorage.removeItem('activeOFPId');
         await getCachedOFPs(true);
 
-        // After a single replacement, if the replaced OFP was not active, restore the previously active one.
-        if (!wasActive && !isBatch && previouslyActiveId && previouslyActiveId !== String(replacedId)) {
+        // If a single file upload bumped out an inactive file, re-activate the real active file.
+        if (!wasActive && !isBatch && previouslyActiveId && previouslyActiveId !== String(existingOFP.id)) {
             await activateOFP(previouslyActiveId, false);
         }
+
+        setOFPLoadedState(isActiveState);
+        showToast(`OFP updated: ${metadata.flight} ${isActiveState ? '(active)' : '(inactive)'}`, 'success');
     }
 
-    // Handle brand‑new OFP
     async function handleNewOFP(blob, metadata, isBatch) {
         const currentActiveId = localStorage.getItem('activeOFPId');
-        // In batch mode, never auto‑activate, even if no active OFP exists.
-        const shouldActivate = !currentActiveId && !isBatch;
+        const shouldActivate = !currentActiveId && !isBatch; // Only auto-activate if nothing else is active AND it's not a batch
 
-        const ofpId = await saveOFPToDB(blob, metadata, shouldActivate);
+        await saveOFPToDB(blob, metadata, shouldActivate);
         await getCachedOFPs(true);
 
+        setOFPLoadedState(shouldActivate);
+        
         if (shouldActivate) {
-            setOFPLoadedState(true);
             showToast(`OFP saved & activated: ${metadata.flight}`, 'success');
         } else {
-            setOFPLoadedState(false);
-            if (currentActiveId) {
-                await activateOFP(currentActiveId, false);
-                showToast(`OFP saved (inactive): ${metadata.flight}`, 'success');
+            // Restore previous active if it wasn't a batch upload
+            if (currentActiveId && !isBatch) await activateOFP(currentActiveId, false);
+            showToast(`OFP saved ${currentActiveId ? '(inactive)' : ''}: ${metadata.flight}`, 'success');
+        }
+    }
+
+    function clearOFPInputs() {
+        if (typeof PERSISTENT_INPUT_IDS !== 'undefined') {
+            PERSISTENT_INPUT_IDS.forEach(id => safeSet(id, ''));
+        }
+        safeSet('ofp-atd-in', '');
+
+        waypoints = []; 
+        alternateWaypoints = []; 
+        fuelData = []; 
+        blockFuelValue = 0;
+            
+        // Reset Tables
+        ['ofp-tbody', 'altn-tbody', 'fuel-tbody'].forEach(id => {
+            const tb = document.getElementById(id);
+            if(tb) tb.innerHTML = '';
+        });
+        
+        // Reset Text Displays (-)
+        ['view-min-block', 'view-pic-block', 'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 'view-dow', 'view-tow', 'view-lw', 'view-zfw', 'view-flt', 'view-reg', 'view-date', 'view-std-text', 'view-sta-text', 'view-dep', 'view-dest', 'view-altn', 'view-altn2', 'view-dest-route', 'view-altn-route', 'view-ci', 'view-etd-text', 'view-eta-text', 'view-era', 'view-crz-wind-temp', 'view-seats-stn-jmp'].forEach(id => safeText(id, '-'));
+
+        if (pads?.atis?.pad) pads.atis.pad.clear();
+        if (pads?.atc?.pad) pads.atc.pad.clear();
+        
+        waypointATOCache = [];
+        alternateATOCache = [];
+        waypointFuelCache = [];
+        takeoffFuelInput = null;
+        waypointTableCache = { waypoints: [], alternateWaypoints: [], lastUpdate: 0 };
+    }
+
+// ==========================================
+// 4. VALIDATIONS
+// ==========================================
+    
+    window.validateOFPInputs = function() {
+        const flt = el('j-flt')?.value;
+        const date = el('j-date')?.value;
+        const alt1 = el('front-altm1')?.value;
+        const summaryOK = !!flt && !!date && !!alt1;
+        const fuelOK = (blockFuelValue > 0);
+
+        let flightLogOK = false;
+        const atoInputs = document.querySelectorAll('[id^="o-a-"]');
+        for (let input of atoInputs) {
+            if (input.value && input.value.trim() !== '') {
+                flightLogOK = true;
+                break;
+            }
+        }
+
+        let journeyOK = false;
+        const currentFlight = el('j-flt')?.value || el('view-flt')?.innerText;
+        // Verify that the journey table specifically contains this flight AND has valid out/in times
+        if (currentFlight && dailyLegs && dailyLegs.length > 0) {
+            journeyOK = dailyLegs.some(leg => 
+                leg['j-flt'] === currentFlight && leg['j-out'] && leg['j-in']
+            );
+        }
+
+        const signatureOK = pads.main.pad && !pads.main.pad.isEmpty();
+
+        const checks = [
+            { label: "Flight Summary", valid: summaryOK },
+            { label: "Fuel", valid: fuelOK },
+            { label: "Flight Log", valid: flightLogOK },
+            { label: "Journey Log (current flight)", valid: journeyOK },
+            { label: "Signature", valid: signatureOK }
+        ];
+
+        const list = el('validation-list');
+        if (list) {
+            list.innerHTML = checks.map(c => 
+                `<div class="checklist-item">
+                    <span>${sanitizeHTML(c.label)}</span>
+                    <span class="${c.valid ? 'status-ok' : 'status-fail'}">${c.valid ? '✔' : '✖'}</span>
+                </div>`
+            ).join('');
+            
+            const valid = checks.every(c => c.valid);
+            const sendBtn = el('btn-send-ofp');
+            if (sendBtn) {
+                sendBtn.disabled = !valid;
+            }
+        }
+    };
+
+    window.validateAltimeter = function(el) {
+        // Allows negative signs and up to 4 digits cleanly
+        const match = el.value.match(/^-?\d{0,4}/);
+        if (match) el.value = match[0];
+    };
+
+    function validateTimeInputs(timeStr, fieldName = '') {
+        if (!timeStr) return { valid: true, value: '' };
+        
+        const isTimeField = /(Time|ATD|ATO|STD|STA|DUTY|FDP|out|off|on|in)/i.test(fieldName);
+        
+        if (!isTimeField) return { valid: true, value: timeStr };
+        
+        let cleanTime = timeStr.replace(/[^0-9:]/g, '');
+        
+        // Auto-insert colon for exactly 4 digits
+        if (cleanTime.length === 4 && !cleanTime.includes(':')) {
+            cleanTime = cleanTime.substring(0, 2) + ':' + cleanTime.substring(2, 4);
+        }
+        
+        // Final sanity check before parsing
+        const timeRegex = /^(\d{1,2}):([0-5]\d)$/;
+        const match = cleanTime.match(timeRegex);
+        
+        if (!match) {
+            throw new Error(`Invalid time format${fieldName ? ' for ' + fieldName : ''}. Use HH:MM`);
+        }
+        
+        const hours = parseInt(match[1], 10);
+        const minutes = parseInt(match[2], 10);
+        
+        // Ensure standard clock times (STD/STA/ATD/ATO) stay under 24
+        const isClockTime = /(STD|STA|ATD|ATO|out|off|on|in)/i.test(fieldName);
+        if (isClockTime && hours >= 24) {
+            throw new Error(`${fieldName} time must be between 00:00 and 23:59`);
+        }
+        
+        // Ensure cumulative duty times stay realistic
+        const isDutyTime = /(DUTY|FDP)/i.test(fieldName);
+        if (isDutyTime && hours > 48) {
+            throw new Error(`${fieldName} cannot exceed 48 hours`);
+        }
+        
+        // Re-pad the string nicely (e.g., "5:30" becomes "05:30")
+        return { 
+            valid: true, 
+            value: `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}` 
+        };
+    }
+
+    function addTimeInputMasks() {
+        const timeElements = new Set();
+        
+        document.querySelectorAll('input[type="time"]').forEach(el => timeElements.add(el));
+        
+        ['j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc', 'j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-std'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) timeElements.add(el);
+        });
+        
+        for (let i = 0; i < 20; i++) {
+            ['o-a-', 'a-a-'].forEach(prefix => {
+                const el = document.getElementById(`${prefix}${i}`);
+                if (el) timeElements.add(el);
+            });
+        }
+        
+        timeElements.forEach(input => {
+            if (!input.placeholder) input.placeholder = 'HH:MM';
+            
+            // Allow numeric keyboards to trigger natively on mobile
+            input.pattern = '[0-9]*'; 
+            input.inputMode = 'numeric';
+            
+            input.addEventListener('input', function(e) {
+                // Ignore formatting if user is explicitly deleting characters
+                if (e.inputType === 'deleteContentBackward') return;
+                
+                let value = e.target.value.replace(/[^0-9]/g, '');
+                
+                if (value.length > 4) value = value.substring(0, 4);
+                if (value.length > 2) value = value.substring(0, 2) + ':' + value.substring(2);
+                
+                e.target.value = value;
+            });
+        });
+    }
+
+    function handleWaypointInput(e) {
+        const target = e.target;
+        const id = target.id;
+        if (!id) return;
+
+        if (id.startsWith('o-a-') || id.startsWith('a-a-')) {
+            const [prefix, , idx] = id.split('-');
+            const index = parseInt(idx, 10);
+            const isTO = (index === 0 && prefix === 'o');
+            
+            if (isTO) {
+                try {
+                    const validated = validateTimeInputs(target.value, 'Takeoff Time');
+                    target.value = validated.value;
+                    updateTakeoffTime(validated.value);
+                    debouncedFullRecalc();
+                } catch (error) {
+                    alert(error.message);
+                    target.value = '';
+                }
             } else {
-                showToast(`OFP saved: ${metadata.flight}`, 'success');
+                debouncedSyncLastWaypoint();
+            }
+            debouncedSave();
+        }
+        else if (id.startsWith('o-f-') || id.startsWith('a-f-')) {
+            const [prefix, , idx] = id.split('-');
+            const index = parseInt(idx, 10);
+            const isTO = (index === 0 && prefix === 'o');
+            
+            if (isTO) runFlightLogCalculations();
+            
+            debouncedSyncLastWaypoint();
+            debouncedSave();
+        }
+        else if (id.startsWith('o-n-') || id.startsWith('a-n-')) {
+            debouncedSave();
+        }
+        else if (id.startsWith('o-agl-') || id.startsWith('a-agl-')) {
+            debouncedUpdateCruiseLevel();
+            debouncedSave();
+        }
+    }
+
+    function handleWaypointChange(e) {
+        const target = e.target;
+        const id = target.id;
+        if (!id) return;
+
+        if (id.startsWith('o-a-') || id.startsWith('a-a-')) {
+            try {
+                // Ensure fieldName is passed so the validation knows to check the hours!
+                const validated = validateTimeInputs(target.value, 'ATO');
+                target.value = validated.value;
+            } catch (error) {
+                alert(error.message);
+                target.value = '';
             }
         }
     }
+
+    function setupWaypointDelegation() {
+        // Grouping listeners onto the shared parent tables
+        ['ofp-tbody', 'altn-tbody'].forEach(id => {
+            const tbody = document.getElementById(id);
+            if (tbody) {
+                tbody.addEventListener('input', handleWaypointInput);
+                tbody.addEventListener('change', handleWaypointChange);
+            }
+        });
+    }
+
+// ==========================================
+// 5. DATA EXTRACTION FROM OFP
+// ==========================================
+    
+    async function getLinesFromPDFPage(page) {
+        const content = await page.getTextContent();
+        const items = content.items;
+        
+        // Group items by their vertical Y coordinate
+        const linesObj = {};
+        items.forEach(item => {
+            const y = Math.round(item.transform[5]); 
+            if (!linesObj[y]) linesObj[y] = [];
+            linesObj[y].push(item);
+        });
+
+        // Sort Y coordinates top to bottom
+        const yCoords = Object.keys(linesObj).sort((a, b) => b - a);
+
+        // Sort items left-to-right and join into clean string lines
+        return yCoords.map(y => {
+            const lineItems = linesObj[y].sort((a, b) => a.transform[4] - b.transform[4]);
+            return lineItems.map(item => item.str).join(' ').replace(/\s+/g, ' ').trim();
+        });
+    }
+
+    function extractFuelData(lines) {
+        fuelData = []; blockFuelValue = 0;
+        
+        lines.forEach(line => {
+            if (line.startsWith('ALTN ')) {
+                const m = line.match(/ALTN\s+([A-Z]{3,4})\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "ALTN", time: m[2], fuel: m[3], remarks: m[1] });
+            } 
+            else if (line.startsWith('FINAL RESERVE')) {
+                const m = line.match(/FINAL RESERVE\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "FINAL RESERVE", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('MIN DIVERSION')) {
+                const m = line.match(/MIN DIVERSION\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "MIN DIVERSION", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('CONTINGENCY')) {
+                const m = line.match(/CONTINGENCY\s+(?:(\d+%\s*(?:ERA)?|5M)\s+)?([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "CONTINGENCY", time: m[2], fuel: m[3], remarks: m[1] || "" });
+            } 
+            else if (line.startsWith('MIN ADDITIONAL')) {
+                const m = line.match(/MIN ADDITIONAL\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "MIN ADDITIONAL", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('TOTAL RESERVE')) {
+                const m = line.match(/TOTAL RESERVE\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "TOTAL RESERVE", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('TRIP')) {
+                const m = line.match(/TRIP\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "TRIP", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('ENDURANCE')) {
+                const m = line.match(/ENDURANCE\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "ENDURANCE", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('TAXI')) {
+                const m = line.match(/TAXI\s+(\d+)/);
+                if (m) fuelData.push({ name: "TAXI", time: "-", fuel: m[1], remarks: "" });
+            } 
+            else if (line.startsWith('EXTRA')) {
+                const m = line.match(/EXTRA\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "EXTRA", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('TANKERING')) {
+                const m = line.match(/TANKERING\s+([\d.]+)\s+(\d+)/);
+                if (m) fuelData.push({ name: "TANKERING", time: m[1], fuel: m[2], remarks: "" });
+            } 
+            else if (line.startsWith('BLOCK FUEL')) {
+                const m = line.match(/BLOCK FUEL\s+([\d.]+)\s+(\d+)/);
+                if (m) {
+                    fuelData.push({ name: "BLOCK FUEL", time: m[1], fuel: m[2], remarks: "" });
+                    blockFuelValue = parseInt(m[2]);
+                }
+            } 
+            else if (line.startsWith('MINIMUM BLOCK')) {
+                const m = line.match(/MINIMUM BLOCK\s+(\d+)/);
+                if (m) safeText('view-min-block', m[1] + " kg");
+            }
+        });
+    }
+
+    function extractWeights(lines) {
+        // Find the specific line that holds the weights
+        const weightLine = lines.find(l => l.includes('MTOW') && l.includes('MZFW'));
+        if (!weightLine) return;
+
+        const weightFields = {
+            'view-mtow': 'MTOW', 'view-mlw': 'MLW', 'view-mzfw': 'MZFW',
+            'view-mpld': 'MPLD', 'view-fcap': 'FCAP', 'view-dow': 'DOW',
+            'view-tow': 'TOW', 'view-lw': 'LW', 'view-zfw': 'ZFW', 'view-pld': 'PLD'
+        };
+
+        Object.keys(weightFields).forEach(id => {
+            const regex = new RegExp("\\b" + weightFields[id] + "\\s+(\\d+)", "i");
+            const match = weightLine.match(regex);
+            if (match) safeText(id, match[1]);
+        });
+    }
+
+    function extractRoutes(lines) {
+        let destRoute = '-', altnRoute = '-', altn2Route = '-';
+        let currentSection = null;
+        let currentText = [];
+
+        for (let line of lines) {
+            if (line.startsWith('DEST ROUTE')) {
+                currentSection = 'dest';
+                currentText = [line.replace(/DEST\s+ROUTE[:\s]*/i, '')];
+                continue;
+            }
+            if (line.match(/^ALTN1?\s+ROUTE/i)) {
+                if (currentSection === 'dest') destRoute = currentText.join(' ').trim();
+                currentSection = 'altn1';
+                currentText = [line.replace(/^ALTN1?\s+ROUTE[:\s]*/i, '')];
+                continue;
+            }
+            if (line.startsWith('ALTN2 ROUTE')) {
+                if (currentSection === 'dest') destRoute = currentText.join(' ').trim();
+                if (currentSection === 'altn1') altnRoute = currentText.join(' ').trim();
+                currentSection = 'altn2';
+                currentText = [line.replace(/ALTN2\s+ROUTE[:\s]*/i, '')];
+                continue;
+            }
+            // Stop parsing routes if we hit FUEL or ALTN stats
+            if (line.startsWith('FUEL') || (line.startsWith('ALTN') && !line.includes('ROUTE'))) {
+                if (currentSection === 'dest') destRoute = currentText.join(' ').trim();
+                if (currentSection === 'altn1') altnRoute = currentText.join(' ').trim();
+                if (currentSection === 'altn2') altn2Route = currentText.join(' ').trim();
+                break;
+            }
+            
+            // Append multiline routes
+            if (currentSection) currentText.push(line);
+        }
+
+        safeText('view-dest-route', destRoute || '-');
+        safeText('view-altn-route', altnRoute || '-');
+        safeText('view-altn2-route', altn2Route || '-');
+    }
+
+    function extractAdditionalFlightInfo(lines) {
+        let row1Text = "-", row2Text = "-", maxSR = "";
+        
+        const row1Line = lines.find(l => l.includes('CRZ WIND') && l.includes('AVG TEMP'));
+        if (row1Line) {
+            const match = row1Line.match(/CRZ WIND\s+(.*?)\s+AVG TEMP\s+(.*?)\s+ISA DEV\s+(.*?)\s+LOWEST TEMP\s+(.*?)\s+MAX SR\s+(\d+)/i);
+            if (match) {
+                maxSR = match[5];
+                row1Text = `CRZ WIND ${match[1]} AVG TEMP ${match[2]} ISA DEV ${match[3]} LOWEST TEMP ${match[4]} MAX SR ${match[5]}`;
+            }
+        }
+        
+        const row2Line = lines.find(l => l.includes('IDLE/PERF') && l.includes('SEATS'));
+        if (row2Line) {
+            const match = row2Line.match(/IDLE\/PERF\s+(.*?)\s+SEATS\s+(.*?)\s+STN\s+(.*?)\s+JMP\s+(\d+)/i);
+            if (match) {
+                row2Text = `IDLE/PERF ${match[1]} SEATS ${match[2]} STN ${match[3]} JMP ${match[4]}`;
+            } else {
+                row2Text = row2Line; // Fallback to raw line
+            }
+        }
+        
+        safeText('view-crz-wind-temp', row1Text);
+        safeText('view-seats-stn-jmp', row2Text);
+        
+        return { row1: row1Text, row2: row2Text, maxSR: maxSR };
+    }
+
+    function extractMetadataFromUI() {
+        let tripTime = '';
+        
+        // Try getting trip time from fuelData array first
+        const tripEntry = fuelData.find(item => item.name === "TRIP");
+        if (tripEntry && tripEntry.time) {
+            tripTime = tripEntry.time.replace('.', ':');
+        } else {
+            // Fallback to DOM only if array is empty
+            const tripRow = Array.from(document.querySelectorAll('#fuel-tbody tr'))
+                                 .find(row => row.cells[0]?.innerText === 'TRIP');
+            if (tripRow) tripTime = tripRow.cells[1].innerText;
+        }
+
+        // Clean DOM extraction for the rest
+        const crzEl = document.getElementById('view-crz-wind-temp');
+        const maxSR = (crzEl?.innerText || '').match(/MAX SR\s+(\d{1,2})/i)?.[1] || '';
+
+        return {
+            flight: document.getElementById('view-flt')?.innerText || 'N/A',
+            date: document.getElementById('view-date')?.innerText || 'N/A',
+            dep: document.getElementById('view-dep')?.innerText || 'N/A',
+            dest: document.getElementById('view-dest')?.innerText || 'N/A',
+            tripTime,
+            maxSR
+        };
+    }
+
+    function extractMainPageCoordinates(items) {
+        // Optimized to stop checking once it finds a match for a specific item
+        items.forEach(item => {
+            const raw = item.str.toUpperCase();
+            if (raw.includes('ALTM1')) frontCoords.altm1 = item;
+            else if (raw.includes('ALTM2')) frontCoords.altm2 = item;
+            else if (raw.includes('ATIS')) frontCoords.atis = item;
+            else if (raw.includes('CLRNC')) frontCoords.atcLabel = item;
+            else if (raw.includes('STBY')) frontCoords.stby = item;
+            else if (raw.includes('PIC') && raw.includes('BLOCK')) frontCoords.picBlockLabel = item;
+            else if (raw.includes('REASON')) frontCoords.reasonLabel = item;
+        });
+    }
+
+    function processWaypointsList() {
+        const dest = document.getElementById('view-dest')?.innerText || "ZZZZ";
+        let splitIndex = -1;
+
+        // Attempt 1: Split at Destination Name
+        splitIndex = waypoints.findIndex(wp => wp.name === dest);
+        if (splitIndex !== -1) splitIndex += 1; // Include the dest waypoint
+
+        // Attempt 2: Mathematical / Phase fallback
+        if (splitIndex === -1) {
+            for (let i = 1; i < waypoints.length; i++) {
+                const fuelDrop = waypoints[i-1].fob - waypoints[i].fob;
+                // If fuel drops dramatically, or we hit Top Of Descent
+                if ((fuelDrop > 1000 && fuelDrop > (waypoints[i-1].fob * 0.1))) {
+                    splitIndex = i; break;
+                }
+                if (waypoints[i].name.includes('TOD') || waypoints[i].name.includes('DES')) {
+                    splitIndex = i + 1; break;
+                }
+            }
+        }
+
+        // Apply the split
+        if (splitIndex > 0 && splitIndex < waypoints.length) {
+            alternateWaypoints = waypoints.slice(splitIndex);
+            waypoints = waypoints.slice(0, splitIndex);
+        } else {
+            alternateWaypoints = [];
+        }
+    }
+
+    function extractRequestNumber(textOrLines) {
+        // Accepts either our new array format or legacy strings
+        const lines = Array.isArray(textOrLines) ? textOrLines : textOrLines.split('\n');
+        
+        // Find the line holding the request, then extract it instantly
+        const reqLine = lines.find(line => /REQUEST\s*#\s*\d+/i.test(line));
+        if (reqLine) {
+            const match = reqLine.match(/REQUEST\s*#\s*(\d+)/i);
+            return match ? match[1] : '';
+        }
+        return '';
+    }
+
+    function extractNOTAMs(fullText) {
+        // Convert to array if passed as legacy string
+        const lines = Array.isArray(fullText) ? fullText : fullText.split('\n');
+        const notams = [];
+        let currentNotam = null;
+
+        // Triggers to start/stop saving a NOTAM block
+        const notamStartRegex = /^(?:-\s*)?([A-Z]{4})\s+([A-Z]{1,2}\d{4}\/\d{2})|^NOTAM\s*([A-Z]{4})\s+([A-Z]{1,2}\d{4}\/\d{2})/i;
+        const stopMarkers = ['ARRIVAL:', 'OTHER:', 'DEPARTURE:', '---', 'PAGE', 'FLY ARYSTAN BRIEF', 'AIR ASTANA BRIEF', 'FIR:', 'REGION:', 'NOT CLASSIFIED', 'FIRE AND RESCUE'];
+
+        lines.forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return;
+            const upper = trimmed.toUpperCase();
+
+            // 1. Did we hit a stop marker? Dump the buffer and stop tracking.
+            if (stopMarkers.some(m => upper.startsWith(m))) {
+                if (currentNotam) { notams.push(currentNotam.join('\n')); currentNotam = null; }
+                return;
+            }
+
+            // 2. Did we find the start of a new NOTAM? Save the old one and start a new buffer.
+            if (notamStartRegex.test(trimmed)) {
+                if (currentNotam) notams.push(currentNotam.join('\n'));
+                currentNotam = [trimmed];
+            } 
+            // 3. Are we currently inside a NOTAM? Keep saving lines to the buffer.
+            else if (currentNotam) {
+                currentNotam.push(trimmed);
+            }
+        });
+        
+        // Push the final one in the buffer
+        if (currentNotam) notams.push(currentNotam.join('\n'));
+
+        // Filter valid NOTAMs based on strict aviation keywords
+        const keywords = ['RWY', 'TWY', 'CLSD', 'U/S', 'NOT AVBL', 'WIP', 'FIRE', 'BIRD', 'BA', 'ICE', 'SNOW', 'SLUSH', 'ILS', 'VOR', 'NDB', 'DME', 'RNAV', 'GPS', 'RNP', 'APU', 'DE-ICING', 'STAND', 'ACFT', 'RWYCC', 'FROST', 'POOR', 'MEDIUM', 'NIL'];
+        
+        return notams.filter(n => {
+            const up = n.toUpperCase();
+            return n.length > 20 && keywords.some(kw => up.includes(kw));
+        });
+    }
+
+    function extractWeather(fullText) {
+        // Convert to array if passed as legacy string
+        const lines = Array.isArray(fullText) ? fullText : fullText.split('\n');
+        const weather = [];
+        let currentWx = null;
+
+        const wxStartRegex = /^(METAR|SPECI|TAF(?:\s+AMD)?)\s+([A-Z]{4})\b/i;
+        const stopMarkers = ['OTHER:', 'DEPARTURE:', 'ARRIVAL:', '---', 'AIR ASTANA BRIEF', 'PAGE', 'NO AIRMET', 'NO PIREP', 'AIRMET', 'PIREP', 'FIR:', 'REGION:', 'NO TAF'];
+
+        lines.forEach(line => {
+            const trimmed = line.trim();
+            if (!trimmed) return;
+            const upper = trimmed.toUpperCase();
+
+            // Stop markers or explicit "NO TAF" declarations
+            if (stopMarkers.some(m => upper.startsWith(m)) || upper.includes('NO TAF')) {
+                if (currentWx) { weather.push(currentWx.join('\n')); currentWx = null; }
+                return;
+            }
+
+            if (wxStartRegex.test(trimmed)) {
+                if (currentWx) weather.push(currentWx.join('\n'));
+                currentWx = [trimmed];
+            } else if (currentWx) {
+                currentWx.push(trimmed);
+            }
+        });
+
+        if (currentWx) weather.push(currentWx.join('\n'));
+
+        // Drop any that are too short to be real weather
+        return weather.filter(w => w.length > 20);
+    }
+
+    function cleanNOTAMText(text) {
+        // Condense the 3 legacy regex passes into 1 smart sweep
+        const match = text.match(/NOTAM\s*([A-Z]{4})/i) || 
+                      text.match(/^[-–—\s]*([A-Z]{4})\b/) || 
+                      text.match(/([A-Z]{4})$/);
+                      
+        if (match) {
+            const airport = match[1].toUpperCase();
+            // Dynamically rip the airport code out of the text, regardless of where it is
+            const regexToRemove = new RegExp(`(?:NOTAM\\s*|^[-–—\\s]*|\\s*)${airport}(?:\\b|$)`, 'i');
+            const cleaned = text.replace(regexToRemove, '').trim();
+            return { airport, text: cleaned };
+        }
+        
+        return { airport: 'Unknown', text };
+    }
+
+// ==========================================
+// 5. CALCULATION LOGIC
+// ==========================================
+    
+    window.runFlightLogCalculations = function() {
+        const atd = el('ofp-atd-in')?.value || el('o-a-0')?.value || el('j-off')?.value;
+        
+        // 1. Find Taxi Fuel efficiently
+        let taxiFuel = 200;
+        if (typeof fuelData !== 'undefined' && Array.isArray(fuelData)) {
+            const taxiEntry = fuelData.find(item => item.name === "TAXI");
+            if (taxiEntry && taxiEntry.fuel) taxiFuel = parseInt(taxiEntry.fuel) || 200;
+        }
+
+        // 2. Find the latest ATO using our cache (no DOM lookups)
+        let lastAtoMins = -1;
+        let lastAtoIndex = -1;
+        for (let i = waypoints.length - 1; i >= 0; i--) {
+            const atoValue = waypointATOCache[i]?.value;
+            if (atoValue) {
+                const [h, m] = atoValue.split(':').map(Number);
+                lastAtoMins = h * 60 + m;
+                lastAtoIndex = i;
+                break;
+            }
+        }
+
+        // 3. Determine start fuel
+        const pdfTakeoffFuel = waypoints[0]?.baseFuel ?? parseInt(waypoints[0]?.fob) ?? 0;
+        const picBlockEl = el('view-pic-block');
+        const picBlock = parseInt(picBlockEl?.value || picBlockEl?.textContent) || blockFuelValue || 0;
+        
+        const currentStartFuel = (takeoffFuelInput && takeoffFuelInput.value) 
+            ? parseInt(takeoffFuelInput.value) || 0
+            : (picBlock - taxiFuel);
+
+        const delta = currentStartFuel - pdfTakeoffFuel;
+
+        // 4. Update Waypoints Calculation
+        waypoints.forEach((wp, index) => {
+            if (wp.baseFuel === undefined) wp.baseFuel = parseInt(wp.fob) || 0;
+            if (wp.baseFuel > 0) wp.fuel = wp.baseFuel + delta;
+
+            if (index === 0 && wp.name === "TAKEOFF") {
+                wp.eto = atd ? atd.replace(':', '') : "";
+            } 
+            else if (lastAtoIndex !== -1 && index > lastAtoIndex) {
+                // Ripple Calculation
+                const newEtoMins = lastAtoMins + (wp.totalMins - waypoints[lastAtoIndex].totalMins);
+                const h = Math.floor((newEtoMins / 60) % 24).toString().padStart(2, '0');
+                const m = Math.floor(newEtoMins % 60).toString().padStart(2, '0');
+                wp.eto = h + m;
+            } 
+            else if (atd) {
+                // Standard Calculation
+                const [h, m] = atd.split(':').map(Number);
+                const targetMins = (h * 60 + m) + wp.totalMins;
+                const hh = Math.floor((targetMins / 60) % 24).toString().padStart(2, '0');
+                const mm = Math.floor(targetMins % 60).toString().padStart(2, '0');
+                wp.eto = hh + mm;
+            } else {
+                wp.eto = "";
+            }
+        });
+
+        if (typeof updateAlternateETOs === 'function') updateAlternateETOs();
+        if (typeof updateFlightLogTablesIncremental === 'function') updateFlightLogTablesIncremental();
+        if (typeof updateAlternateTableIncremental === 'function') updateAlternateTableIncremental();
+        
+        if (typeof waypointTableCache !== 'undefined') waypointTableCache.lastUpdate = Date.now();
+    };
+
+    function calculatePICBlock() {
+        const extraInput = el('front-extra-kg');
+        const extra = parseInt(extraInput?.value) || 0;
+        
+        if (blockFuelValue > 0 || extra > 0) {
+            safeSet('view-pic-block', (blockFuelValue + extra));
+        } else {
+            safeSet('view-pic-block', '');
+        }
+    }
+
+    window.calculateExtraFromTotal = function() {
+        const totalInput = el('view-pic-block');
+        const extraInput = el('front-extra-kg');
+        
+        if (typeof blockFuelValue === 'undefined' || blockFuelValue === 0) return;
+        
+        const picTotal = parseInt(totalInput?.value) || 0;
+        
+        // Update the extra input field directly
+        if (extraInput) extraInput.value = (picTotal - blockFuelValue) || '';
+        
+        runFlightLogCalculations();
+    };
+
+    async function getOFPCount() {
+        const db = await getDB();
+        if (!db.objectStoreNames.contains('ofps')) return 0;
+        return new Promise((resolve, reject) => {
+            const req = db.transaction('ofps', 'readonly').objectStore('ofps').count();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+    }
+
+    function minsToTime(m) {
+        // Normalizes negative minutes seamlessly
+        const total = m < 0 ? m + (1440 * Math.ceil(Math.abs(m) / 1440)) : m;
+        
+        const days = Math.floor(total / 1440);
+        const rm = total % 1440;
+        const h = Math.floor(rm / 60).toString().padStart(2, '0');
+        const min = (rm % 60).toString().padStart(2, '0');
+        
+        return days > 0 ? `${h}:${min} (+${days}d)` : `${h}:${min}`;
+    }
+
+    function getDiff(start, end) {
+        if (!start || !end) return "";
+        
+        // Extremely fast, single-pass Regex parser for both "HH:MM" and "HHMM"
+        const parseTime = str => {
+            const match = String(str).match(/^(\d{1,2}):?(\d{2})$/);
+            return match ? { h: parseInt(match[1]), m: parseInt(match[2]) } : null;
+        };
+        
+        const t1 = parseTime(start);
+        const t2 = parseTime(end);
+        if (!t1 || !t2) return "";
+        
+        const startMins = t1.h * 60 + t1.m;
+        let endMins = t2.h * 60 + t2.m;
+        
+        // Auto-correct for midnight rollover (e.g., 23:00 to 02:00)
+        if (endMins < startMins) endMins += 1440;
+        
+        const diffMins = endMins - startMins;
+        const h = Math.floor(diffMins / 60).toString().padStart(2, '0');
+        const m = (diffMins % 60).toString().padStart(2, '0');
+        
+        return `${h}:${m}`;
+    }
+
+    function getCCMaxFDP() {
+        return document.getElementById('j-cc-max-fdp-hidden')?.value || "00:00";
+    }
+
+    // Fast inline time parser (HH:MM -> minutes)
+    const parseTimeStr = (str) => {
+        if (!str || !str.includes(':')) return 0;
+        const [h, m] = str.split(':').map(Number);
+        return (h * 60) + m;
+    };
+
+    window.calculateFuelForJourneyLog = function() {
+        // High-speed DOM reader helpers
+        const v = (id) => parseFloat(el(id)?.value) || 0;
+        const has = (id) => !!el(id)?.value;
+
+        const init = v('j-init'), uplift = v('j-uplift-w');
+        const act = v('j-act-ramp'), shut = v('j-shut');
+
+        // Calc Ramp & Discrepancy
+        if (has('j-init') || has('j-uplift-w')) {
+            const cr = init + uplift;
+            safeSet('j-calc-ramp', cr);
+            safeSet('j-disc', has('j-act-ramp') ? (act - cr) : '');
+        } else {
+            safeSet('j-calc-ramp', '');
+            safeSet('j-disc', '');
+        }
+
+        // Trip Burn
+        safeSet('j-burn', (has('j-act-ramp') && has('j-shut')) ? (act - shut) : '');
+    };
+
+    window.calculateTripTimeForJourneyLog = function() {
+        const outT = el('j-out')?.value, inT = el('j-in')?.value;
+        const offT = el('j-off')?.value, onT = el('j-on')?.value;
+
+        safeSet('j-block', (outT && inT) ? getDiff(outT, inT) : '');
+        safeSet('j-flight', (offT && onT) ? getDiff(offT, onT) : '');
+
+        calcDutyLogic();
+    };
+
+    window.calculateDutyValues = function(std, flt, dep, dest) {
+        if (!std) return { fc: "00:00", cc: "00:00", max: "00:00", ccMax: "00:00" };
+
+        const fltUpper = (flt || "").toUpperCase();
+        const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
+        const isAYN = fltUpper.includes('AYN') || fltUpper.includes('FS');
+
+        const isDepKZ = (dep || "").toUpperCase().startsWith('UA');
+        const isDestKZ = (dest || "").toUpperCase().startsWith('UA');
+
+        // 1. Flight Crew offset
+        let fcOffset = 60;
+        if (isDepKZ) {
+            if (isKZR) fcOffset = isDestKZ ? 75 : 90;
+            else if (isAYN) fcOffset = isDestKZ ? 60 : 75;
+        }
+
+        // 2. Cabin Crew offset
+        const ccOffset = (isKZR && isDepKZ) ? 15 : 0;
+
+        const stdMins = parseTimeStr(std);
+
+        // Calculate UTC reports
+        const fcStartUTC = (stdMins - fcOffset + 1440) % 1440;
+        const ccStartUTC = (fcStartUTC - ccOffset + 1440) % 1440;
+
+        // Convert UTC to local Kazakhstan (UTC+5 = +300 mins) for FDP table
+        const localStart = (fcStartUTC + 300) % 1440;
+        const baseFDP = calculateBaseMaxFDP(localStart);
+        const ccMaxFDP = baseFDP + Math.min(ccOffset, 60);
+
+        return {
+            fc: minsToTime(fcStartUTC),
+            cc: minsToTime(ccStartUTC),
+            max: minsToTime(baseFDP),
+            ccMax: minsToTime(ccMaxFDP)
+        };
+    };
+
+    window.calcDutyLogic = function() {
+        let flt = (el('j-flt')?.value || "").trim();
+        let dep = (el('j-dep')?.value || "").trim();
+        let dest = (el('j-dest')?.value || "").trim();
+        let std = (el('j-std')?.value || "").trim();
+
+        // Fallback to daily legs array if UI is empty
+        if ((!std || !flt) && dailyLegs && dailyLegs.length > 0) {
+            const leg = dailyLegs[0];
+            flt = leg['j-flt'] || "";
+            dep = leg['j-dep'] || "";
+            dest = leg['j-dest'] || "";
+            std = leg['j-std'] || "";
+        }
+
+        if (!std) return;
+
+        const dutyValues = calculateDutyValues(std, flt, dep, dest);
+
+        const fcEl = el('j-duty-start');
+        const ccEl = el('j-cc-duty-start');
+
+        if (!fcEl?.value) safeSet('j-duty-start', dutyValues.fc);
+        if (!ccEl?.value) safeSet('j-cc-duty-start', dutyValues.cc);
+
+        dutyStartTime = parseTimeStr(el('j-duty-start')?.value);
+        recalcMaxFDP();
+    };
+
+    function calculateBaseMaxFDP(localStartMins) {
+        const t = localStartMins % 1440;
+        
+        if (t < 300 || t >= 1020) return 660; // 17:00-04:59 (Flat lowest limit)
+        if (t >= 360 && t < 810) return 780;  // 06:00-13:29 (Flat max limit)
+        
+        // 05:00 to 05:59: Increases by 15 mins every 15-minute step
+        if (t >= 300 && t < 360) return 720 + (Math.floor((t - 300) / 15) * 15);
+        
+        // 13:30 to 16:59: Decreases by 15 mins every 30-minute step
+        if (t >= 810 && t < 1020) return 765 - (Math.floor((t - 810) / 30) * 15);
+        
+        return 780; // Failsafe
+    }
+
+    window.recalcMaxFDP = function() {
+        const fcTimeStr = el('j-duty-start')?.value;
+        if (!fcTimeStr) return;
+
+        const ccTimeStr = el('j-cc-duty-start')?.value || fcTimeStr;
+        const fcMinsUTC = parseTimeStr(fcTimeStr);
+        const ccMinsUTC = parseTimeStr(ccTimeStr);
+        
+        dutyStartTime = fcMinsUTC;
+        const sectors = dailyLegs?.length || 1;
+
+        // Convert UTC to local KZ (+300)
+        const localFcMins = (fcMinsUTC + 300) % 1440;
+        const baseFDP = calculateBaseMaxFDP(localFcMins);
+
+        // Cap reporting difference at 60 mins max
+        const reportingDiff = (fcMinsUTC - ccMinsUTC + 1440) % 1440;
+        const cappedDiff = Math.min(reportingDiff, 60);
+
+        // Sector reduction math
+        const sectorDrop = sectors >= 5 ? 90 : (sectors === 4 ? 60 : (sectors === 3 ? 30 : 0));
+        
+        const fcMax = Math.max(baseFDP - sectorDrop, 660);
+        const ccMax = Math.max(baseFDP + cappedDiff - sectorDrop, 660);
+
+        safeSet('j-max-fdp', minsToTime(fcMax));
+        const ccMaxInput = el('j-cc-max-fdp-hidden');
+        if (ccMaxInput) ccMaxInput.value = minsToTime(ccMax);
+    };
+
+    function setCCMaxFDP(value) {
+        safeSet('j-cc-max-fdp-hidden', value || "00:00");
+    }
+
+    function calculateNightDuty(startMinsUTC, endMinsUTC) {
+        if (startMinsUTC == null || endMinsUTC == null) return "00:00";
+
+        const start = startMinsUTC;
+        const end = endMinsUTC < start ? endMinsUTC + 1440 : endMinsUTC;
+
+        // Night window UTC: 21:00 to 24:00 (1260 to 1440)
+        // Check overlap for current day and potential next day (if duty crosses midnight twice)
+        const windows = [
+            { s: 1260, e: 1440 },
+            { s: 2700, e: 2880 } // Next day window
+        ];
+
+        let overlap = 0;
+        for (const w of windows) {
+            const overlapStart = Math.max(start, w.s);
+            const overlapEnd = Math.min(end, w.e);
+            if (overlapStart < overlapEnd) {
+                overlap += (overlapEnd - overlapStart);
+            }
+        }
+
+        return minsToTime(overlap);
+    }
+
+    function getNightDutyForCrew(startMinsUTC) {
+        if (startMinsUTC == null || !dailyLegs || dailyLegs.length === 0) return "00:00";
+        
+        const lastLeg = dailyLegs[dailyLegs.length - 1];
+        if (!lastLeg || !lastLeg['j-in']) return "00:00";
+        
+        const endMinsUTC = parseTimeStr(lastLeg['j-in']);
+        return calculateNightDuty(startMinsUTC, endMinsUTC);
+    }
+
+    function updateFlightLogTablesIncremental() {
+        if (!waypoints || waypoints.length === 0) return;
+        
+        waypoints.forEach((wp, i) => {
+            const etoCell = el(`o-eto-${i}`);
+            if (etoCell) {
+                const newEto = wp.eto || "--";
+                if (etoCell.textContent !== newEto) etoCell.textContent = newEto;
+            }
+            
+            const fuelCell = el(`o-calcfuel-${i}`);
+            if (fuelCell) {
+                const newFuel = wp.fuel ? Math.round(wp.fuel) : "-";
+                if (fuelCell.textContent !== String(newFuel)) fuelCell.textContent = newFuel;
+            }
+        });
+    }
+
+    function updateAlternateTableIncremental() {
+        if (!alternateWaypoints || alternateWaypoints.length === 0) return;
+        
+        alternateWaypoints.forEach((wp, i) => {
+            const etoCell = el(`a-eto-${i}`);
+            if (etoCell) {
+                const newEto = wp.eto || "--";
+                if (etoCell.textContent !== newEto) etoCell.textContent = newEto;
+            }
+            
+            const fuelCell = el(`a-calcfuel-${i}`);
+            if (fuelCell) {
+                const newFuel = wp.fuel ? Math.round(wp.fuel) : "-";
+                if (fuelCell.textContent !== String(newFuel)) fuelCell.textContent = newFuel;
+            }
+        });
+    }
+
+    window.updateTakeoffTime = function(v) {
+        try {
+            const validated = validateTimeInputs(v, 'Takeoff Time');
+            const newTime = validated.value;
+            
+            const ofpInput = el('ofp-atd-in');
+            const jInput = el('j-off');
+            
+            if (ofpInput && ofpInput.value !== newTime) ofpInput.value = newTime;
+            if (jInput && jInput.value !== newTime) jInput.value = newTime;
+            
+            if (typeof debouncedFullRecalc === 'function') debouncedFullRecalc();
+        } catch (error) {
+            alert(error.message);
+            // Revert gently
+            const current = el('ofp-atd-in')?.value || '';
+            if (el('ofp-atd-in')) el('ofp-atd-in').value = current;
+            if (el('j-off')) el('j-off').value = current;
+        }
+    };
+
+    window.updateAlternateETOs = function() {
+        if (!waypoints || waypoints.length === 0 || !alternateWaypoints || alternateWaypoints.length === 0) return;
+
+        const lastPrimaryIdx = waypoints.length - 1;
+        const destWp = waypoints[lastPrimaryIdx];
+        
+        // 1. Determine Base Time (Destination Arrival)
+        let baseTimeStr = waypointATOCache[lastPrimaryIdx]?.value;
+        if (!baseTimeStr && destWp.eto && destWp.eto.length === 4) {
+             baseTimeStr = destWp.eto.substring(0,2) + ":" + destWp.eto.substring(2,4);
+        }
+
+        if (!baseTimeStr) return;
+
+        // Fast integer math for time calculation
+        const [bh, bm] = baseTimeStr.includes(':') 
+            ? baseTimeStr.split(':').map(Number) 
+            : [parseInt(baseTimeStr.substring(0,2)), parseInt(baseTimeStr.substring(2,4))];
+            
+        const baseMinsFromMidnight = (bh * 60) + bm;
+        const destMins = destWp.totalMins;
+
+        // 2. Calculate Alternate Times
+        alternateWaypoints.forEach((wp) => {
+            let delta = wp.totalMins - destMins;
+            // Handle cases where alternate mins might reset to 0 in OFP
+            if (delta < 0) delta = wp.totalMins; 
+
+            const targetMins = baseMinsFromMidnight + delta;
+            
+            const newH = Math.floor((targetMins / 60) % 24).toString().padStart(2, '0');
+            const newM = Math.floor(targetMins % 60).toString().padStart(2, '0');
+            
+            wp.eto = newH + newM; 
+            
+            // We NO LONGER update the DOM here, because updateAlternateTableIncremental() 
+            // runs immediately after this function and handles the DOM injection cleanly.
+        });
+    };
+
+
+// ==========================================
+// 6. PARSING
+// ==========================================
 
     // Analyze OFP (parses PDF and populates waypoints etc.)
     async function runAnalysis(fileOrEvent, isAutoLoad = false) {
-        // Determine if this is a batch upload (multiple files) by checking if the progress modal is visible.
-        const isBatchUpload = !isAutoLoad && 
-            document.getElementById('upload-progress-modal')?.style.display === 'block';
+        const isBatchUpload = !isAutoLoad && document.getElementById('upload-progress-modal')?.style.display === 'block';
         let blob = null;
 
-        // 1. Determine source
         if (fileOrEvent instanceof Blob) {
             blob = fileOrEvent;
         } else {
@@ -1927,17 +2696,14 @@
         }
         if (!blob) return;
 
-        // 2. Common preparation (memory + preview)
         window.ofpPdfBytes = await blob.arrayBuffer();
         window.originalFileName = blob.name || "Logged_OFP.pdf";
         renderPDFPreview(window.ofpPdfBytes).catch(console.error);
 
-        // 3. Manual upload: clear UI, show leg form (only for single manual uploads, not batch)
         if (!isAutoLoad && !isBatchUpload) {
             await prepareForManualUpload();
         }
 
-        // 4. PARSE PDF
         let parseResult;
         try {
             parseResult = await parsePDFData(window.ofpPdfBytes, isAutoLoad);
@@ -1970,7 +2736,6 @@
             return;
         }
 
-        // 5. Save to INDEXEDDB (manual uploads only)
         if (!isAutoLoad) {
             const metadata = parseResult.metadata;
             const { flight, date } = metadata;
@@ -1979,71 +2744,51 @@
 
             try {
                 let newlySavedId = null;
-
                 if (existingOFP) {
-                    // Pass isBatchUpload to the handler
                     await handleReplacement(existingOFP, blob, metadata, previouslyActiveId, isBatchUpload);
                     newlySavedId = existingOFP.id;
                 } else {
-                    // Pass isBatchUpload to the handler
                     await handleNewOFP(blob, metadata, isBatchUpload);
-                    
-                    // Fetch the newly created record to get its generated ID
                     const freshlySaved = await findOFPByFlightAndDate(flight, date);
                     if (freshlySaved) newlySavedId = freshlySaved.id;
                 }
 
-                // --- NEW: AUTO-ACTIVATE THE UPLOADED OFP ---
                 if (newlySavedId && !isBatchUpload) {
-                    // 1. Tell the app this is the active flight
                     localStorage.setItem('activeOFPId', newlySavedId);
-                    
-                    // 2. Automatically switch to the Summary tab
                     const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
                     if (summaryBtn) {
                         if (typeof window.showTab === 'function') window.showTab('summary', summaryBtn);
                         else summaryBtn.click();
                     }
-                    
-                    // 3. Show success message
                     showToast(`Activated: ${flight}`, 'success');
                     if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
                 }
-                // ------------------------------------------
 
-                // After replacement or new OFP, refresh OFP manager if sectors tab is active
                 if (!isBatchUpload && document.querySelector('.tool-section.active')?.id === 'section-sectors') {
                     await renderOFPMangerTable();
                 }
             } catch (error) {
-                // Emergency fallback – something went wrong in the handlers
                 console.error("Unexpected error during save:", error);
                 const emergencyResult = await emergencySaveOFP(blob, metadata, existingOFP || null);
                 
-                // Try to activate even on emergency save
                 if (emergencyResult.ofpsRecordCreated && !isBatchUpload) {
                     const emergencySaved = await findOFPByFlightAndDate(flight, date);
                     if (emergencySaved) localStorage.setItem('activeOFPId', emergencySaved.id);
                 }
 
-                let toastMessage = existingOFP
-                    ? "OFP replaced (emergency mode)"
-                    : "OFP saved (emergency mode)";
+                let toastMessage = existingOFP ? "OFP replaced (emergency mode)" : "OFP saved (emergency mode)";
                 if (!emergencyResult.pdfSaved) toastMessage += " – PDF not saved";
                 if (!emergencyResult.ofpsRecordCreated) toastMessage += " – record not created";
-                toastMessage += ")";
                 showToast(toastMessage, emergencyResult.ofpsRecordCreated ? 'warning' : 'error');
                 setOFPLoadedState(true);
             }
         }
 
-        // After saving, reload user data for the currently active OFP
         if (!isAutoLoad && !isBatchUpload) {
             const activeId = localStorage.getItem('activeOFPId');
             if (activeId) {
                 const userData = await loadOFPUserData(Number(activeId));
                 if (userData) {
-                    // Restore waypoint inputs
                     if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
                         userData.userWaypoints.forEach((data, i) => {
                             if (i < waypoints.length) {
@@ -2053,29 +2798,24 @@
                                 if (data.agl) safeSet(`o-agl-${i}`, data.agl);
                             }
                         });
-                        runFlightLogCalculations();
-                        syncLastWaypoint();
+                        if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+                        if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
                     }
-                    // Restore persistent text inputs (excluding drawings)
                     if (userData.userInputs && typeof userData.userInputs === 'object') {
                         Object.keys(userData.userInputs).forEach(id => {
                             const val = userData.userInputs[id];
                             if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') return;
-                            if (val !== undefined && val !== null) {
-                                safeSet(id, val);
-                            }
+                            if (val !== undefined && val !== null) safeSet(id, val);
                         });
                     }
                 }
             }
         }
 
-        // After manual upload, force a full redraw of flight log tables (only for non‑batch)
-        if (!isAutoLoad && !isBatchUpload) {
+        if (!isAutoLoad && !isBatchUpload && typeof renderFlightLogTables === 'function') {
             renderFlightLogTables(true);
         }
 
-        // 6. Log success event
         try {
             await logSecurityEvent('PDF_UPLOAD', {
                 fileName: blob.name,
@@ -2087,1413 +2827,190 @@
             console.error('Failed to log upload:', logError);
         }
 
-        // 7. Handle state (auto‑save)
-        if (!isAutoLoad) {
+        if (!isAutoLoad && typeof saveState === 'function') {
             saveState();
         }
     }
 
-    // Event delegation for Flight Log tables
-    function setupWaypointDelegation() {
-        const ofpTbody = document.getElementById('ofp-tbody');
-        const altnTbody = document.getElementById('altn-tbody');
-
-        if (ofpTbody) {
-            ofpTbody.addEventListener('input', handleWaypointInput);
-            ofpTbody.addEventListener('change', handleWaypointChange); // for blur-like behavior
-        }
-        if (altnTbody) {
-            altnTbody.addEventListener('input', handleWaypointInput);
-            altnTbody.addEventListener('change', handleWaypointChange);
-        }
-    }
-
-// ==========================================
-// 4. VALIDATIONS
-// ==========================================
-    
-    window.validateOFPInputs = function() {
-        const flt = el('j-flt')?.value;
-        const date = el('j-date')?.value;
-        const alt1 = el('front-altm1')?.value;
-        const summaryOK = !!flt && !!date && !!alt1;
-        const fuelOK = (blockFuelValue > 0);
-
-        let flightLogOK = false;
-        const atoInputs = document.querySelectorAll('[id^="o-a-"]');
-        for (let input of atoInputs) {
-            if (input.value && input.value.trim() !== '') {
-                flightLogOK = true;
-                break;
-            }
-        }
-
-        let journeyOK = false;
-        const currentFlight = el('j-flt')?.value || el('view-flt')?.innerText;
-        if (currentFlight && dailyLegs.length > 0) {
-            journeyOK = dailyLegs.some(leg => leg['j-flt'] === currentFlight);
-        }
-
-        const signatureOK = pads.main.pad && !pads.main.pad.isEmpty();
-
-        const checks = [
-            { label: "Flight Summary", valid: summaryOK },
-            { label: "Fuel", valid: fuelOK },
-            { label: "Flight Log", valid: flightLogOK },
-            { label: "Journey Log (current flight)", valid: journeyOK },
-            { label: "Signature", valid: signatureOK }
-        ];
-
-        const list = el('validation-list');
-        if (list) {
-            list.innerHTML = checks.map(c => 
-                `<div class="checklist-item"><span>${sanitizeHTML(c.label)}</span><span class="${c.valid?'status-ok':'status-fail'}">${c.valid?'✔':'✖'}</span></div>`
-            ).join('');
-            
-            const valid = checks.every(c => c.valid);
-            const sendBtn = el('btn-send-ofp');
-            if (sendBtn) {
-                sendBtn.disabled = !valid;
-            }
-        }
-    };
-
-    window.validateAltimeter = function(el) {
-        const match = el.value.match(/^-?[0-9]{0,4}/);
-        if (match) el.value = match[0];
-    };
-
-    function validateTimeInputs(timeStr, fieldName = '') {
-        if (!timeStr) return { valid: true, value: '' };
-        
-        // Check if this is a time field or number field
-        const isTimeField = fieldName.includes('Time') || 
-                        fieldName.includes('ATD') || 
-                        fieldName.includes('ATO') ||
-                        fieldName.includes('STD') ||
-                        fieldName.includes('STA') ||
-                        fieldName.includes('DUTY') ||
-                        fieldName.includes('FDP');
-        
-        // If it's NOT a time field (e.g., fuel/weight), return as-is
-        if (!isTimeField) {
-            return { valid: true, value: timeStr };
-        }
-        
-        // Accept HH:MM or HHMM format
-        let cleanTime = timeStr.replace(/[^0-9:]/g, '');
-        
-        // Convert HHMM to HH:MM
-        if (cleanTime.length === 4 && !cleanTime.includes(':')) {
-            cleanTime = cleanTime.substring(0, 2) + ':' + cleanTime.substring(2, 4);
-        }
-        
-        // Validate format
-        const timeRegex = /^([01]?[0-9]|2[0-3]):?([0-5][0-9])$/;
-        if (!timeRegex.test(cleanTime.replace(':', ''))) {
-            throw new Error(`Invalid time format${fieldName ? ' for ' + fieldName : ''}. Use HH:MM (00:00-23:59)`);
-        }
-        
-        // Ensure colon format
-        if (!cleanTime.includes(':')) {
-            cleanTime = cleanTime.substring(0, 2) + ':' + cleanTime.substring(2, 4);
-        }
-        
-        const [hours, minutes] = cleanTime.split(':').map(Number);
-        
-        // Validate realistic times
-        if (fieldName.includes('STD') || fieldName.includes('STA')) {
-            if (hours > 23 || minutes > 59) {
-                throw new Error(`${fieldName} time must be between 00:00 and 23:59`);
-            }
-        }
-        
-        // For flight times, allow up to 48 hours for multi-day ops
-        if (fieldName.includes('DUTY') || fieldName.includes('FDP')) {
-            if (hours > 48) {
-                throw new Error(`${fieldName} cannot exceed 48 hours`);
-            }
-        }
-        
-        return { valid: true, value: cleanTime };
-    }
-
-    function addTimeInputMasks() {
-        // Create a Set to store unique time input elements
-        const timeElements = new Set();
-        
-        // 1. Add all inputs with type="time"
-        document.querySelectorAll('input[type="time"]').forEach(el => {
-            timeElements.add(el);
-        });
-        
-        // 2. Add specific journey log time inputs
-        const journeyTimeIds = [
-            'j-out', 'j-off', 'j-on', 'j-in', 
-            'j-night', 'j-night-calc', 
-            'j-duty-start', 'j-cc-duty-start', 'j-max-fdp',
-            'j-std'
-        ];
-        
-        journeyTimeIds.forEach(id => {
-            const el = document.getElementById(id);
-            if (el) timeElements.add(el);
-        });
-        
-        // 3. Add waypoint time inputs (flight log)
-        // Generate IDs for a reasonable number of waypoints (e.g., 20)
-        for (let i = 0; i < 20; i++) {
-            const oEl = document.getElementById(`o-a-${i}`);
-            const aEl = document.getElementById(`a-a-${i}`);
-            if (oEl) timeElements.add(oEl);
-            if (aEl) timeElements.add(aEl);
-        }
-        
-        // Now apply the time mask to all collected elements
-        timeElements.forEach(input => {
-            // Add placeholder
-            if (!input.placeholder) {
-                input.placeholder = 'HH:MM';
-            }
-            
-            // Add pattern for mobile keyboards
-            input.pattern = '[0-9]{2}:[0-9]{2}';
-            input.inputMode = 'numeric';
-            
-            // Auto-format on input
-            input.addEventListener('input', function(e) {
-                let value = e.target.value.replace(/[^0-9]/g, '');
-                
-                if (value.length > 4) {
-                    value = value.substring(0, 4);
-                }
-                
-                if (value.length >= 3) {
-                    value = value.substring(0, 2) + ':' + value.substring(2);
-                }
-                
-                e.target.value = value;
-            });
-        });
-    }
-
-    // Handle input events 
-    function handleWaypointInput(e) {
-        const target = e.target;
-        const id = target.id;
-        if (!id) return;
-
-        // ATO input
-        if (id.startsWith('o-a-') || id.startsWith('a-a-')) {
-            const [prefix, , idx] = id.split('-');
-            const index = parseInt(idx, 10);
-            const isTO = (index === 0 && prefix === 'o');
-            
-            if (isTO) {
-                try {
-                    const validated = validateTimeInputs(target.value, 'Takeoff Time');
-                    target.value = validated.value;
-                    updateTakeoffTime(validated.value);
-                    debouncedFullRecalc();
-                } catch (error) {
-                    alert(error.message);
-                    target.value = '';
-                }
-            } else {
-                debouncedSyncLastWaypoint();
-            }
-            debouncedSave(); // auto-save
-        }
-
-        // Fuel input
-        else if (id.startsWith('o-f-') || id.startsWith('a-f-')) {
-            const [prefix, , idx] = id.split('-');
-            const index = parseInt(idx, 10);
-            const isTO = (index === 0 && prefix === 'o');
-            
-            if (isTO) {
-                runFlightLogCalculations();
-                debouncedSyncLastWaypoint();
-            } else {
-                debouncedSyncLastWaypoint();
-            }
-            debouncedSave();
-        }
-
-        // Notes input
-        else if (id.startsWith('o-n-') || id.startsWith('a-n-')) {
-            debouncedSave();
-        }
-
-        // Actual FL input
-        else if (id.startsWith('o-agl-') || id.startsWith('a-agl-')) {
-            debouncedUpdateCruiseLevel();
-            debouncedSave();
-        }
-    }
-
-    // Handle change events 
-    function handleWaypointChange(e) {
-        const target = e.target;
-        const id = target.id;
-        if (!id) return;
-
-        // Validate ATO on blur
-        if (id.startsWith('o-a-') || id.startsWith('a-a-')) {
-            try {
-                const validated = validateTimeInputs(target.value, 'Waypoint Time');
-                target.value = validated.value;
-            } catch (error) {
-                alert(error.message);
-                target.value = '';
-            }
-        }
-    }
-
-// ==========================================
-// 5. DATA EXTRACTION FROM OFP
-// ==========================================
-
-    function extractMetadataFromUI() {
-        // Trip Time
-        let tripTime = '';
-        const tripEntry = fuelData.find(item => item.name === "TRIP");
-        if (tripEntry && tripEntry.time) {
-            tripTime = tripEntry.time;
-            if (tripTime.includes('.')) tripTime = tripTime.replace('.', ':');
-        }
-        // Fallback: read from rendered fuel table
-        if (!tripTime) {
-            const fuelRows = document.querySelectorAll('#fuel-tbody tr');
-            fuelRows.forEach(row => {
-                const cells = row.querySelectorAll('td');
-                if (cells.length >= 2 && cells[0].innerText === 'TRIP') {
-                    tripTime = cells[1].innerText;
-                }
-            });
-        }
-
-        // Max SR
-        let maxSR = '';
-        const crzWindTempEl = document.getElementById('view-crz-wind-temp');
-        if (crzWindTempEl) {
-            const text = crzWindTempEl.innerText || crzWindTempEl.textContent;
-            const match = text?.match(/MAX SR\s+(\d{1,2})/i);
-            if (match) maxSR = match[1];
-        }
-
-        // Basic flight info
-        const flight = document.getElementById('view-flt')?.innerText || 'N/A';
-        const date = document.getElementById('view-date')?.innerText || 'N/A';
-        const dep = document.getElementById('view-dep')?.innerText || 'N/A';
-        const dest = document.getElementById('view-dest')?.innerText || 'N/A';
-
-        return { flight, date, dep, dest, tripTime, maxSR };
-    }
-
-    function extractMainPageCoordinates(items) {
-        items.forEach(item => {
-            const raw = item.str.toUpperCase();
-            if (raw.includes('ALTM1')) frontCoords.altm1 = item;
-            if (raw.includes('ALTM2')) frontCoords.altm2 = item;
-            if (raw.includes('ATIS')) frontCoords.atis = item;
-            if (raw.includes('CLRNC')) frontCoords.atcLabel = item;
-            if (raw.includes('STBY')) frontCoords.stby = item;
-            if (raw.includes('PIC') && raw.includes('BLOCK')) frontCoords.picBlockLabel = item;
-            if (raw.includes('REASON')) frontCoords.reasonLabel = item;
-        });
-    }
-
-    function extractFuelData(text) {
-        fuelData = []; blockFuelValue = 0;
-        
-        // Create a clean text version for pattern matching
-        const cleanText = text.replace(/\n/g, ' ').replace(/\s+/g, ' ');
-        
-        const patterns = [
-            // ALTN: ALTN LTAC 00.47 2003
-            { name: "ALTN", regex: /ALTN\s+([A-Z]{3,4})\s+([\d.]+)\s+(\d+)/ },
-            
-            // FINAL RESERVE: FINAL RESERVE 00.30 1095
-            { name: "FINAL RESERVE", regex: /FINAL\s+RESERVE\s+([\d.]+)\s+(\d+)/ },
-            
-            // MIN DIVERSION: MIN DIVERSION 01.17 3098
-            { name: "MIN DIVERSION", regex: /MIN\s+DIVERSION\s+([\d.]+)\s+(\d+)/ },
-            
-            // CONTINGENCY: CONTINGENCY 3% ERA 00.11 423 or CONTINGENCY 5% 00.10 200
-            { name: "CONTINGENCY", regex: /CONTINGENCY\s+\d+%\s*(?:ERA)?\s+([\d.]+)\s+(\d+)/ },
-            
-            // MIN ADDITIONAL: MIN ADDITIONAL 00.00 0
-            { name: "MIN ADDITIONAL", regex: /MIN\s+ADDITIONAL\s+([\d.]+)\s+(\d+)/ },
-            
-            // TOTAL RESERVE: TOTAL RESERVE 01.28 3521
-            { name: "TOTAL RESERVE", regex: /TOTAL\s+RESERVE\s+([\d.]+)\s+(\d+)/ },
-            
-            // TRIP: TRIP 05.27 14114
-            { name: "TRIP", regex: /TRIP\s+([\d.]+)\s+(\d+)/ },
-            
-            // ENDURANCE: ENDURANCE 06.55 17635
-            { name: "ENDURANCE", regex: /ENDURANCE\s+([\d.]+)\s+(\d+)/ },
-            
-            // TAXI: TAXI 227
-            { name: "TAXI", regex: /TAXI\s+(\d+)/ },
-            
-            // MINIMUM BLOCK: MINIMUM BLOCK 17862
-            { name: "MINIMUM BLOCK", regex: /MINIMUM\s+BLOCK\s+(\d+)/ },
-            
-            // EXTRA: EXTRA 00.00 0
-            { name: "EXTRA", regex: /EXTRA\s+([\d.]+)\s+(\d+)/ },
-            
-            // TANKERING: TANKERING 03.27 8162
-            { name: "TANKERING", regex: /TANKERING\s+([\d.]+)\s+(\d+)/ },
-            
-            // BLOCK FUEL: BLOCK FUEL 10.44 26024
-            { name: "BLOCK FUEL", regex: /BLOCK\s+FUEL\s+([\d.]+)\s+(\d+)/ }
-        ];
-        
-        // First pass with original patterns
-        patterns.forEach(p => {
-            const m = text.match(p.regex);
-            if (m) {
-                
-                if (p.name === "TAXI") {
-                    fuelData.push({ name: p.name, time: "-", fuel: m[1], remarks: "" });
-                } else if (p.name === "MINIMUM BLOCK") {
-                    safeText('view-min-block', m[1] + " kg");
-                } else if (p.name === "ALTN") {
-                    fuelData.push({ name: p.name, time: m[2], fuel: m[3], remarks: m[1] });
-                } else {
-                    fuelData.push({ name: p.name, time: m[1], fuel: m[2], remarks: "" });
-                    if (p.name === "BLOCK FUEL") blockFuelValue = parseInt(m[2]);
-                }
-            }
-        });
-        
-        // Special handling for CONTINGENCY if not found by first pattern
-        if (!fuelData.find(item => item.name === "CONTINGENCY")) {
-            
-            // Try pattern for "CONTINGENCY 3% ERA 00.11 423"
-            const contingencyMatch1 = text.match(/CONTINGENCY\s+(\d+%)\s+ERA\s+([\d.]+)\s+(\d+)/);
-            if (contingencyMatch1) {
-                fuelData.push({ 
-                    name: "CONTINGENCY", 
-                    time: contingencyMatch1[2], 
-                    fuel: contingencyMatch1[3], 
-                    remarks: contingencyMatch1[1] + " ERA" 
-                });
-            } else {
-                // Try pattern for "CONTINGENCY 5% 00.10 200"
-                const contingencyMatch2 = text.match(/CONTINGENCY\s+(\d+%)\s+([\d.]+)\s+(\d+)/);
-                if (contingencyMatch2) {
-                    fuelData.push({ 
-                        name: "CONTINGENCY", 
-                        time: contingencyMatch2[2], 
-                        fuel: contingencyMatch2[3], 
-                        remarks: contingencyMatch2[1]
-                    });
-                } else {
-                    // Try pattern for "CONTINGENCY 5M 00.10 200"
-                    const contingencyMatch3 = text.match(/CONTINGENCY\s+(5M)\s+([\d.]+)\s+(\d+)/);
-                    if (contingencyMatch3) {
-                        fuelData.push({ 
-                            name: "CONTINGENCY", 
-                            time: contingencyMatch3[2], 
-                            fuel: contingencyMatch3[3], 
-                            remarks: contingencyMatch3[1]
-                        });
-                    } else {
-                        // Try generic pattern as fallback
-                        const contingencyMatch4 = text.match(/CONTINGENCY\s+([\d.]+)\s+(\d+)/);
-                        if (contingencyMatch4) {
-                            fuelData.push({ 
-                                name: "CONTINGENCY", 
-                                time: contingencyMatch4[1], 
-                                fuel: contingencyMatch4[2], 
-                                remarks: "" 
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        
-        // If still no fuel data found, try a more aggressive approach
-        if (fuelData.length === 0) {
-            console.log("No fuel data found with patterns, trying aggressive extraction...");
-            
-            // Look for the fuel table section
-            const fuelSectionMatch = text.match(/ALTN.*?(?:BLOCK FUEL.*?\d+)/s);
-            if (fuelSectionMatch) {
-                const fuelSection = fuelSectionMatch[0];
-                
-                // Extract individual lines
-                const lines = fuelSection.split('\n').filter(line => line.trim());
-                
-                lines.forEach(line => {
-                    const trimmed = line.trim();
-                    
-                    // Try to parse each line
-                    if (trimmed.startsWith('ALTN')) {
-                        const match = trimmed.match(/ALTN\s+([A-Z]{3,4})\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "ALTN", time: match[2], fuel: match[3], remarks: match[1] });
-                        }
-                    } else if (trimmed.startsWith('FINAL RESERVE')) {
-                        const match = trimmed.match(/FINAL RESERVE\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "FINAL RESERVE", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('MIN DIVERSION')) {
-                        const match = trimmed.match(/MIN DIVERSION\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "MIN DIVERSION", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('CONTINGENCY')) {
-                        const match = trimmed.match(/CONTINGENCY\s+(\d+%)\s+ERA\s+([\d.]+)\s+(\d+)/) ||
-                                    trimmed.match(/CONTINGENCY\s+(\d+%)\s+([\d.]+)\s+(\d+)/) ||
-                                    trimmed.match(/CONTINGENCY\s+(5M)\s+([\d.]+)\s+(\d+)/) ||
-                                    trimmed.match(/CONTINGENCY\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            let remarks = "";
-                            if (match[1] && (match[1].includes('%') || match[1] === '5M')) {
-                                remarks = match[1];
-                                if (trimmed.includes('ERA')) remarks += ' ERA';
-                            }
-                            const timeIndex = match[1] && (match[1].includes('%') || match[1] === '5M') ? 2 : 1;
-                            const fuelIndex = match[1] && (match[1].includes('%') || match[1] === '5M') ? 3 : 2;
-                            fuelData.push({ 
-                                name: "CONTINGENCY", 
-                                time: match[timeIndex], 
-                                fuel: match[fuelIndex], 
-                                remarks: remarks 
-                            });
-                        }
-                    } else if (trimmed.startsWith('MIN ADDITIONAL')) {
-                        const match = trimmed.match(/MIN ADDITIONAL\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "MIN ADDITIONAL", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('TOTAL RESERVE')) {
-                        const match = trimmed.match(/TOTAL RESERVE\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "TOTAL RESERVE", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('TRIP')) {
-                        const match = trimmed.match(/TRIP\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "TRIP", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('ENDURANCE')) {
-                        const match = trimmed.match(/ENDURANCE\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "ENDURANCE", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('TAXI')) {
-                        const match = trimmed.match(/TAXI\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "TAXI", time: "-", fuel: match[1], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('MINIMUM BLOCK')) {
-                        const match = trimmed.match(/MINIMUM BLOCK\s+(\d+)/);
-                        if (match) {
-                            safeText('view-min-block', match[1] + " kg");
-                        }
-                    } else if (trimmed.startsWith('EXTRA')) {
-                        const match = trimmed.match(/EXTRA\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "EXTRA", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('TANKERING')) {
-                        const match = trimmed.match(/TANKERING\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "TANKERING", time: match[1], fuel: match[2], remarks: "" });
-                        }
-                    } else if (trimmed.startsWith('BLOCK FUEL')) {
-                        const match = trimmed.match(/BLOCK FUEL\s+([\d.]+)\s+(\d+)/);
-                        if (match) {
-                            fuelData.push({ name: "BLOCK FUEL", time: match[1], fuel: match[2], remarks: "" });
-                            blockFuelValue = parseInt(match[2]);
-                        }
-                    }
-                });
-            }
-        }
-        
-    }
-
-    function extractWeights(text) {
-        const m = text.match(/MTOW\s+(\d+)\s+MLW\s+(\d+)\s+MZFW\s+(\d+)\s+MPLD\s+(\d+)\s+FCAP\s+(\d+)\s+DOW\s+(\d+)\s+TOW\s+(\d+)\s+LW\s+(\d+)\s+ZFW\s+(\d+)\s+PLD\s+(\d+)/);
-        if(m) {
-            safeText('view-mtow', m[1]); 
-            safeText('view-mlw', m[2]);
-            safeText('view-mzfw', m[3]); 
-            safeText('view-mpld', m[4]); 
-            safeText('view-fcap', m[5]); 
-            safeText('view-dow', m[6]); 
-            safeText('view-tow', m[7]);
-            safeText('view-lw', m[8]); 
-            safeText('view-zfw', m[9]);
-            safeText('view-pld', m[10]);
-        }
-    }
-
-    function extractRoutes(text) {
-        // Destination Route
-        const destRouteMatch = text.match(/DEST\s+ROUTE[:\s]+(.*?)(?=\s+ALTN\d?\s+ROUTE|\s+FUEL|\s+$)/is);
-        safeText('view-dest-route', destRouteMatch ? destRouteMatch[1].trim() : '-');
-
-        // Alternate Route
-        const altn1Match = text.match(/ALTN1?\s+ROUTE[:\s]+(.*?)(?=\s+ALTN2?\s+ROUTE|\s+FUEL|\s+$)/is);
-        safeText('view-altn-route', altn1Match ? altn1Match[1].trim() : '-');
-
-        // Alternate Route 2
-        const altn2Match = text.match(/ALTN2\s+ROUTE[:\s]+(.*?)(?=\s+FUEL|\s+$)/is);
-        if (altn2Match) {
-            safeText('view-altn2-route', altn2Match[1].trim());
-        } else {
-            safeText('view-altn2-route', '-');
-        }
-    }
-
-    function processWaypointsList() {
-        const dest = el('view-dest')?.innerText || "ZZZZ";
-        let splitIndex = -1;
-        for(let i = 0; i < waypoints.length; i++) {
-            if(waypoints[i].name === dest) { splitIndex = i + 1; break; }
-        }
-        if(splitIndex === -1) {
-            for(let i = 1; i < waypoints.length; i++) {
-                const fuelDrop = waypoints[i-1].fob - waypoints[i].fob;
-                if(fuelDrop > 1000 && fuelDrop > (waypoints[i-1].fob * 0.1)) { splitIndex = i; break; }
-                if(waypoints[i].name.includes('TOD') || waypoints[i].name.includes('DES')) { splitIndex = i + 1; break; }
-            }
-        }
-        const all = [...waypoints];
-        if(splitIndex > 0 && splitIndex < all.length) {
-            waypoints = all.slice(0, splitIndex);
-            alternateWaypoints = all.slice(splitIndex);
-        } else {
-            waypoints = all;
-            alternateWaypoints = [];
-        }
-    }
-    
-    function extractAdditionalFlightInfo(textContent) {
-        // Join all lines into one string for easier pattern matching
-        const singleLine = textContent.replace(/\n/g, ' ').replace(/\s+/g, ' ');
-        
-        // Pattern for Row 1: CRZ WIND M032 AVG TEMP M54 ISA DEV M08 LOWEST TEMP M60 MAX SR 08
-        const row1Pattern = /CRZ WIND\s+(M?\d+)\s+AVG TEMP\s+(M?\d+)\s+ISA DEV\s+(M?\d+)\s+LOWEST TEMP\s+(M?\d+)\s+MAX SR\s+(\d+)/i;
-        const row1Match = singleLine.match(row1Pattern);
-        
-        // Pattern for Row 2: IDLE/PERF -0.1/2.0 SEATS 166 (16/150) STN 7 JMP 2
-        const row2Pattern = /IDLE\/PERF\s+([-\d\.]+)\/([\d\.]+)\s+SEATS\s+(\d+)\s*\((\d+)\/(\d+)\)\s+STN\s+(\d+)\s+JMP\s+(\d+)/i;
-        const row2Match = singleLine.match(row2Pattern);
-        
-        let row1Text = "-";
-        let row2Text = "-";
-        let maxSR = '';
-        
-        if (row1Match) {
-            maxSR = row1Match[5]; // Capture the SR value
-            row1Text = `CRZ WIND ${row1Match[1]} AVG TEMP ${row1Match[2]} ISA DEV ${row1Match[3]} LOWEST TEMP ${row1Match[4]} MAX SR ${row1Match[5]}`;
-        } else {
-            // Try alternative pattern without the M prefix
-            const altRow1Pattern = /CRZ WIND\s+(\w+)\s+AVG TEMP\s+(\w+)\s+ISA DEV\s+(\w+)\s+LOWEST TEMP\s+(\w+)\s+MAX SR\s+(\w+)/i;
-            const altRow1Match = singleLine.match(altRow1Pattern);
-            if (altRow1Match) {
-                maxSR = altRow1Match[5];
-                row1Text = `CRZ WIND ${altRow1Match[1]} AVG TEMP ${altRow1Match[2]} ISA DEV ${altRow1Match[3]} LOWEST TEMP ${altRow1Match[4]} MAX SR ${altRow1Match[5]}`;
-            }
-        }
-        
-        if (row2Match) {
-            row2Text = `IDLE/PERF ${row2Match[1]}/${row2Match[2]} SEATS ${row2Match[3]} (${row2Match[4]}/${row2Match[5]}) STN ${row2Match[6]} JMP ${row2Match[7]}`;
-        } else {
-            const altRow2Pattern = /IDLE\/PERF\s+([^ ]+)\s+SEATS\s+([^ ]+)\s+STN\s+([^ ]+)\s+JMP\s+([^ ]+)/i;
-            const altRow2Match = singleLine.match(altRow2Pattern);
-            if (altRow2Match) {
-                row2Text = `IDLE/PERF ${altRow2Match[1]} SEATS ${altRow2Match[2]} STN ${altRow2Match[3]} JMP ${altRow2Match[4]}`;
-            }
-        }
-        
-        // Update the UI
-        safeText('view-crz-wind-temp', row1Text);
-        safeText('view-seats-stn-jmp', row2Text);
-        
-        return { row1: row1Text, row2: row2Text, maxSR: maxSR };
-    }
-
-    function extractRequestNumber(textContent) {
-        if (!textContent) return '';
-        // Pattern: REQUEST # 03251  or  REQUEST#03251  or  REQUEST #03251
-        const match = textContent.match(/REQUEST\s*#\s*(\d+)/i);
-        return match ? match[1] : '';
-    }
-
-    function parsePageOne(textContent) {
+    async function parsePDFData(pdfBytes, isAutoLoad) {
         try {
-            // Clean up the text: replace multiple spaces with single spaces
-            const cleanText = textContent.replace(/\s+/g, ' ').trim();
-            
-            // Look for the flight info pattern in the cleaned text
-            // Pattern: FLT REG DATE DEP DEST CI STD ETD STA ETA ALTN
-            // Example: KZR622 EI-KDD 10/01/26 UACC UAAA CI013 0210 0210 0400 0409 UACC
-            const flightPattern = /([A-Z]{3}\d{3,4})\s+([A-Z0-9-]{3,7})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s+([A-Z]{4})\s+(CI\d+)\s+(\d{4})\s+(\d{4})\s+(\d{4})\s+(\d{4})\s+([A-Z]{4})/;
-            
-            const match = cleanText.match(flightPattern);
-            
-            if (match) {
-                const [
-                    , // full match
-                    flt, reg, date, dep, dest, ci, 
-                    stdRaw, etdRaw, staRaw, etaRaw, altn
-                ] = match;
-                
-                // Now look for ERA and ALTN2 AFTER the flight pattern
-                const afterFlight = cleanText.substring(match.index + match[0].length);
-                
-                // Look for 4-letter airport codes after the flight pattern, but stop at "MET" or "MTOW"
-                const nextTokens = afterFlight.trim().split(/\s+/);
-                let era = '';
-                let altn2 = '';
-                
-                for (let i = 0; i < nextTokens.length; i++) {
-                    const token = nextTokens[i];
-                    
-                    // Stop if we hit MET, MTOW, or other section headers
-                    if (token.startsWith('MET') || token.startsWith('MTOW') || 
-                        token.startsWith('TIME') || token.startsWith('ALTN') ||
-                        token.startsWith('FINAL') || /^\d/.test(token)) {
-                        break;
-                    }
-                    
-                    // Only consider 4-letter uppercase codes as airports
-                    if (token.length === 4 && /^[A-Z]{4}$/.test(token)) {
-                        if (!era) {
-                            era = token;
-                        } else if (!altn2) {
-                            altn2 = token;
-                            break; // Found both, stop
-                        }
-                    }
-                }
-                
-                // Format times
-                const formatTime = (t) => t && t.length === 4 ? t.substring(0,2) + ":" + t.substring(2,4) : "-";
-                
-                // Set all values
-                safeText('view-flt', flt); 
-                safeText('view-reg', reg); 
-                safeText('view-date', date);
-                safeText('view-dep', dep); 
-                safeText('view-dest', dest); 
-                safeText('view-ci', ci);
-                safeText('view-std-text', formatTime(stdRaw));
-                safeText('view-etd-text', formatTime(etdRaw));
-                safeText('view-sta-text', formatTime(staRaw));
-                safeText('view-eta-text', formatTime(etaRaw));
-                safeText('view-altn', altn);
-                
-                if (era) 
-                    safeText('view-era-text', era);
-                else
-                    safeText('view-era-text', '');
-                if (altn2) 
-                    safeText('view-altn2', altn2);
-                else
-                    safeText('view-altn2', '');
-                
-                // Sync to journey log
-                safeSet('j-flt', flt);
-                safeSet('j-reg', reg);
-                safeSet('j-date', date);
-                safeSet('j-dep', dep);
-                safeSet('j-dest', dest);
-                safeSet('j-altn', altn);
-                
-                if (era && el('j-era')) el('j-era').value = era;
-                if (altn2 && el('j-altn2')) el('j-altn2').value = altn2;
-                
-                if (!el('j-std')?.value) safeSet('j-std', formatTime(stdRaw));
+            resetParsingState();
+            const pdf = await pdfjsLib.getDocument(pdfBytes).promise;
 
-                // Extract other sections
-                extractAdditionalFlightInfo(textContent);
-                extractRoutes(textContent);
-                extractFuelData(textContent);
-                extractWeights(textContent);
-                
-                return true; // Success
-                
-            } else {
-                console.error('Could not find flight info pattern in OFP');
-                
-                // Fallback: Try to find flight info manually
-                const words = cleanText.split(' ');
-                let foundFlight = false;
-                
-                for (let i = 0; i < words.length; i++) {
-                    if (/^[A-Z]{3}\d{3,4}$/.test(words[i])) {
-                        console.log('Found potential flight number at index', i, ':', words[i]);
-                        foundFlight = true;
-                        
-                        if (i + 5 < words.length) {
-                            // Try to extract manually
-                            safeText('view-flt', words[i]);
-                            if (words[i+1]) safeText('view-reg', words[i+1]);
-                            if (words[i+2]) safeText('view-date', words[i+2]);
-                            if (words[i+3]) safeText('view-dep', words[i+3]);
-                            if (words[i+4]) safeText('view-dest', words[i+4]);
-                            
-                            // Look for CI pattern in next few words
-                            for (let j = i+5; j < Math.min(i+15, words.length); j++) {
-                                if (words[j] && words[j].startsWith('CI')) {
-                                    safeText('view-ci', words[j]);
-                                    break;
-                                }
-                            }
+            // Extract Page 1
+            const { requestNumber, page1Lines } = await parsePage1(pdf);
+
+            // Waypoints
+            const extractedWaypoints = await parseAllWaypoints(pdf);
+            waypoints = extractedWaypoints;
+
+            // Collect full text nicely line-by-line for NOTAM/Weather parsers
+            let allLines = [...page1Lines];
+            for (let i = 2; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const lines = await getLinesFromPDFPage(page);
+                allLines.push(...lines);
+
+                // Detect cutoff
+                if (i >= 4) {
+                    const pageText = lines.join('\n');
+                    const cutoff = detectCutoffPage(pageText, i);
+                    if (cutoff !== null) window.cutoffPageIndex = cutoff;
+                }
+            }
+
+            if (waypoints.length === 0) console.warn('No waypoints found in PDF');
+            waypoints.forEach(wp => {
+                wp.baseFuel = parseInt(wp.fob) || 0;
+                wp.fuel = wp.baseFuel;
+            });
+            if (typeof processWaypointsList === 'function') processWaypointsList();
+
+            let { flight, date, dep, dest, tripTime, maxSR } = extractMetadataFromUI();
+
+            // Filename metadata fallback
+            if (!flight || flight === "N/A" || flight === "Unknown") {
+                if (window.originalFileName) {
+                    const match = window.originalFileName.match(/^([A-Za-z0-9]+)_(\d{4}-?\d{2}-?\d{2})/);
+                    if (match) {
+                        flight = match[1];
+                        let rawDate = match[2];
+                        if (rawDate.length === 8 && !rawDate.includes('-')) {
+                            rawDate = `${rawDate.substring(0,4)}-${rawDate.substring(4,6)}-${rawDate.substring(6,8)}`;
                         }
-                        break;
+                        date = rawDate;
+                        if (document.getElementById('view-flt')) document.getElementById('view-flt').innerText = flight;
+                        if (document.getElementById('view-date')) document.getElementById('view-date').innerText = date;
                     }
                 }
-                
-                if (!foundFlight) {
-                    throw new Error('Could not parse flight information from OFP');
-                }
-                
-                return false; // Partial success with fallback
             }
+
+            const metadata = {
+                flight,
+                date,
+                departure: dep || 'TBA',
+                destination: dest || 'TBA',
+                tripTime: tripTime || '',
+                maxSR: maxSR || '',
+                requestNumber: requestNumber || ''
+            };
+
+            updateUIAfterParsing();
+
+            return {
+                success: true,
+                metadata,
+                tripTime,
+                maxSR,
+                requestNumber,
+                fullText: allLines.join('\n') // Preserves compatibility with NOTAM/WX
+            };
+
+        } catch (error) {
+            console.error('Error in parsePDFData:', error);
+            throw error;
+        }
+    }
+
+    function parsePageOne(lines) {
+        try {
+            let foundFlight = false;
+            const flightPattern = /^([A-Z]{3}\d{3,4})\s+([A-Z0-9-]{3,7})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s+([A-Z]{4})\s+(CI\d+)\s+(\d{4})\s+(\d{4})\s+(\d{4})\s+(\d{4})\s+([A-Z]{4})/;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const match = line.match(flightPattern);
+                
+                if (match) {
+                    const [, flt, reg, date, dep, dest, ci, stdRaw, etdRaw, staRaw, etaRaw, altn] = match;
+                    
+                    // Look for ERA and ALTN2 (they usually trail on the exact same line!)
+                    const afterFlight = line.substring(match.index + match[0].length).trim();
+                    const nextTokens = afterFlight.split(/\s+/);
+                    let era = '', altn2 = '';
+                    
+                    for (let token of nextTokens) {
+                        if (token.length === 4 && /^[A-Z]{4}$/.test(token)) {
+                            if (!era) era = token;
+                            else if (!altn2) { altn2 = token; break; }
+                        }
+                    }
+                    
+                    const formatTime = (t) => t && t.length === 4 ? t.substring(0,2) + ":" + t.substring(2,4) : "-";
+                    
+                    safeText('view-flt', flt); 
+                    safeText('view-reg', reg); 
+                    safeText('view-date', date);
+                    safeText('view-dep', dep); 
+                    safeText('view-dest', dest); 
+                    safeText('view-ci', ci);
+                    safeText('view-std-text', formatTime(stdRaw));
+                    safeText('view-etd-text', formatTime(etdRaw));
+                    safeText('view-sta-text', formatTime(staRaw));
+                    safeText('view-eta-text', formatTime(etaRaw));
+                    safeText('view-altn', altn);
+                    safeText('view-era-text', era || '');
+                    safeText('view-altn2', altn2 || '');
+                    
+                    safeSet('j-flt', flt);
+                    safeSet('j-reg', reg);
+                    safeSet('j-date', date);
+                    safeSet('j-dep', dep);
+                    safeSet('j-dest', dest);
+                    safeSet('j-altn', altn);
+                    if (era && el('j-era')) el('j-era').value = era;
+                    if (altn2 && el('j-altn2')) el('j-altn2').value = altn2;
+                    if (!el('j-std')?.value) safeSet('j-std', formatTime(stdRaw));
+
+                    foundFlight = true;
+                    break;
+                }
+            }
+            
+            if (!foundFlight) throw new Error('Could not parse flight information from OFP');
+
+            extractAdditionalFlightInfo(lines);
+            extractRoutes(lines);
+            extractFuelData(lines);
+            extractWeights(lines);
+            
+            return true;
             
         } catch (error) {
             console.error('Error in parsePageOne:', error);
-            
-            // Clear flight summary to show parsing failed
             ['view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 
-            'view-altn', 'view-std-text', 'view-sta-text', 'view-ci',
-            'view-era-text', 'view-altn2'].forEach(id => {
-                safeText(id, '-');
-            });
-            
-            // Show error message to user
-            if (typeof setOFPLoadedState === 'function') {
-                setOFPLoadedState(false);
-            }
-            
-            // Show error notification
-            setTimeout(() => {
-                const errorDiv = document.createElement('div');
-                errorDiv.style.cssText = `
-                    position: fixed;
-                    top: 20px;
-                    right: 20px;
-                    background: #ff3b30;
-                    color: white;
-                    padding: 15px 20px;
-                    border-radius: 8px;
-                    z-index: 10000;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                `;
-                errorDiv.innerHTML = `
-                    <strong>⚠️ OFP Parsing Failed</strong><br>
-                    <small>${error.message || 'Unknown error'}</small><br>
-                    <button onclick="this.parentElement.remove()" style="
-                        margin-top: 8px;
-                        background: rgba(255,255,255,0.2);
-                        border: none;
-                        color: white;
-                        padding: 5px 10px;
-                        border-radius: 4px;
-                        cursor: pointer;
-                    ">Dismiss</button>
-                `;
-                document.body.appendChild(errorDiv);
-                
-                // Auto-remove after 10 seconds
-                setTimeout(() => {
-                    if (errorDiv.parentElement) {
-                        errorDiv.remove();
-                    }
-                }, 10000);
-            }, 100);
-            
-            throw error; // Re-throw so calling function knows it failed
+             'view-altn', 'view-std-text', 'view-sta-text', 'view-ci',
+             'view-era-text', 'view-altn2'].forEach(id => safeText(id, '-'));
+            if (typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
+            throw error; 
         }
     }
 
     async function parsePage1(pdf) {
         const page = await pdf.getPage(1);
+        const lines = await getLinesFromPDFPage(page);
+        
+        // Extract raw coordinates (this still needs raw items, so we pull them)
         const content = await page.getTextContent();
-        const textContent = content.items.map(x => x.str).join(' ');
+        if (typeof extractMainPageCoordinates === 'function') {
+            extractMainPageCoordinates(content.items);
+        }
 
-        extractMainPageCoordinates(content.items);
         try {
-            parsePageOne(textContent);
+            parsePageOne(lines); // Pass the perfectly ordered array
         } catch (parseError) {
             console.warn('Failed to parse page 1:', parseError);
-            if (typeof setOFPLoadedState === 'function') {
-                setOFPLoadedState(false);
-            }
+            if (typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
             throw parseError;
         }
 
-        const requestNumber = extractRequestNumber(textContent);
-        return { requestNumber, textContent };
+        // We join it just for the request number extraction (legacy support)
+        const textContent = lines.join('\n');
+        let requestNumber = '';
+        if (typeof extractRequestNumber === 'function') requestNumber = extractRequestNumber(textContent);
+        
+        return { requestNumber, page1Lines: lines, textContent };
     }
-
-    function extractNOTAMs(fullText) {
-        const notams = [];
-        const notamIdPattern = '[A-Z]{1,2}\\d{4}\\/\\d{2}';
-        const notamStartRegex = new RegExp(
-            '(?:^|\\s)(?:-)?\\s*([A-Z]{4})\\s+(' + notamIdPattern + ')|NOTAM([A-Z]{4})\\s+(' + notamIdPattern + ')',
-            'g'
-        );
-        
-        const stopMarkers = [
-            'ARRIVAL:', 'OTHER:', 'DEPARTURE:', '---', 
-            'PAGE', 'FLY ARYSTAN BRIEF', 'AIR ASTANA BRIEF',
-            'CTR', 'RWY TDZ LGT', 'ACFT STAND', 'APRON',
-            'ILS', 'APCH LGT', 'TWY CENTRELINE LGT', 'Fir:', 'Region:',
-            'TWY', 'RWY', 'AD', 'TWR', 'STAR', 'SID', 'PJE',
-            'NOT CLASSIFIED', 'FIRE AND RESCUE', 'FIREFIGHTING'
-        ];
-
-        const matches = [];
-        let match;
-        while ((match = notamStartRegex.exec(fullText)) !== null) {
-            matches.push({ start: match.index });
-        }
-
-        for (let i = 0; i < matches.length; i++) {
-            const current = matches[i];
-            const next = matches[i + 1];
-            const end = next ? next.start : fullText.length;
-            let rawText = fullText.substring(current.start, end).trim();
-
-            const lines = rawText.split('\n');
-            let stopLineIndex = lines.length;
-            for (let j = 0; j < lines.length; j++) {
-                const trimmed = lines[j].trim();
-                if (stopMarkers.some(marker => trimmed.startsWith(marker))) {
-                    stopLineIndex = j;
-                    break;
-                }
-            }
-            let cleanedText = lines.slice(0, stopLineIndex).join('\n').trim();
-
-            // --- Cleanup: remove inline footer and section headers ---
-            cleanedText = cleanedText
-                .replace(/\s*FLY\s+ARYSTAN\s+BRIEF\s+PAGE\s+\d+\s+OF\s+\d+(\s+PAGE\s+\d+\s+OF\s+\d+)?.*$/gi, '')
-                .replace(/\s+PAGE\s+\d+\s+OF\s+\d+.*$/gi, '')
-                .replace(/\s*Fir:\s*.*$/i, '')       // NEW
-                .replace(/\s*Region:\s*.*$/i, '')    // NEW
-                .trim();
-
-            // Keyword check
-            const keywords = [
-                'RWY', 'TWY', 'CLSD', 'U/S', 'NOT AVBL', 'WIP', 'FIRE', 'RESCUE', 'BIRD', 'BA',
-                'ICE', 'SNOW', 'SLUSH', 'ILS', 'VOR', 'NDB', 'DME', 'RNAV', 'GPS', 'RNP',
-                'APU', 'DE-ICING', 'PUSHBACK', 'STAND', 'ACFT',
-                'RWYCC', 'DOWNGRADED', 'FROST', 'DRIFTING SNOW', 'CONTAMINATION',
-                'BRAKING ACTION', 'POOR', 'MEDIUM', 'NIL', 'CONDITION CODE'
-            ];
-            const upper = cleanedText.toUpperCase();
-            const hasKeyword = keywords.some(kw => upper.includes(kw));
-
-            if (hasKeyword && cleanedText.length > 20) {
-                notams.push(cleanedText);
-            }
-        }
-
-        console.log(`Found ${notams.length} potential NOTAMs after filtering`);
-        return notams;
-    }
-
-    function extractWeather(fullText) {
-        const weather = [];
-        const weatherStartRegex = /\b(METAR|SPECI|TAF(?:\s+AMD)?)\s+([A-Z]{4})\b/gi;
-        
-        const stopMarkers = [
-            'OTHER:', 'DEPARTURE:', 'ARRIVAL:', '---', 'AIR ASTANA BRIEF', 'PAGE',
-            'NO AIRMET', 'NO PIREP', 'AIRMET', 'PIREP', 'Fir:', 'Region:',
-            'NO TAF', 'NO TAF REPORTS', 'NO TAF REPORTS FOUND'
-        ];
-
-        const matches = [];
-        let match;
-        while ((match = weatherStartRegex.exec(fullText)) !== null) {
-            matches.push({ start: match.index });
-        }
-
-        for (let i = 0; i < matches.length; i++) {
-            const start = matches[i].start;
-            const end = (i + 1 < matches.length) ? matches[i + 1].start : fullText.length;
-            let rawText = fullText.substring(start, end).trim();
-
-            // Truncate at the first stop marker
-            let stopIdx = rawText.length;
-            for (let marker of stopMarkers) {
-                let idx = rawText.indexOf(marker);
-                if (idx !== -1 && idx < stopIdx) {
-                    stopIdx = idx;
-                }
-            }
-            let cleanedText = rawText.substring(0, stopIdx).trim();
-
-            // Additional regex truncation: cut at any occurrence of "NO TAF" or "AIR ASTANA BRIEF"
-            const patterns = [/\bNO\s+TAF\b/i, /\bAIR\s+ASTANA\s+BRIEF\b/i];
-            for (let pattern of patterns) {
-                let match = cleanedText.match(pattern);
-                if (match) {
-                    cleanedText = cleanedText.substring(0, match.index).trim();
-                }
-            }
-
-            if (cleanedText.length > 20) {
-                weather.push(cleanedText);
-            }
-        }
-
-        console.log(`Extracted ${weather.length} weather reports`);
-        if (weather.length === 0) {
-            console.log('No weather reports found. First 500 chars:', fullText.substring(0, 500));
-        }
-        return weather;
-    }
-
-    function cleanNOTAMText(text) {
-        // Case 1: "NOTAM" followed immediately or with space by 4 letters
-        let match = text.match(/NOTAM\s*([A-Z]{4})/i);
-        if (match) {
-            const airport = match[1].toUpperCase();
-            // Remove the "NOTAMXXXX" prefix (including optional space)
-            let cleaned = text.replace(/NOTAM\s*[A-Z]{4}/i, '').trim();
-            return { airport, text: cleaned };
-        }
-        // Case 2: Leading ICAO code with optional dash/spaces (e.g., "- UAAA" or "UAAA")
-        match = text.match(/^[-–—\s]*([A-Z]{4})\b/);
-        if (match) {
-            const airport = match[1].toUpperCase();
-            let cleaned = text.replace(/^[-–—\s]*[A-Z]{4}\s*/, '').trim();
-            return { airport, text: cleaned };
-        }
-        // Case 3: Four letters at the very end (maybe preceded by space)
-        match = text.match(/([A-Z]{4})$/);
-        if (match) {
-            const airport = match[1];
-            let cleaned = text.replace(/\s*[A-Z]{4}$/, '').trim();
-            return { airport, text: cleaned };
-        }
-        // Fallback: Unknown
-        return { airport: 'Unknown', text };
-    }
-
-// ==========================================
-// 5. CALCULATION LOGIC
-// ==========================================
-    
-    window.runFlightLogCalculations = function() {
-        const atd = el('ofp-atd-in')?.value || el('o-a-0')?.value || el('j-off')?.value;
-        
-        // 1. Find Taxi Fuel
-        let taxiFuel = 200;
-        if (typeof fuelData !== 'undefined' && Array.isArray(fuelData)) {
-            const taxiEntry = fuelData.find(item => item.name === "TAXI");
-            if (taxiEntry && taxiEntry.fuel) {
-                taxiFuel = parseInt(taxiEntry.fuel);
-            }
-        }
-
-        // 2. Find the latest ATO using cache
-        let lastAtoMins = -1;
-        let lastAtoIndex = -1;
-
-        for (let i = waypoints.length - 1; i >= 0; i--) {
-            const atoInput = waypointATOCache[i];
-            if (atoInput && atoInput.value) {
-                const [h, m] = atoInput.value.split(':').map(Number);
-                lastAtoMins = h * 60 + m;
-                lastAtoIndex = i;
-                break;
-            }
-        }
-
-        // 3. Determine start fuel
-        const pdfTakeoffFuel = waypoints[0] ? (waypoints[0].baseFuel || parseInt(waypoints[0].fob)) : 0;
-        const picBlock = parseInt(el('view-pic-block')?.value || el('view-pic-block')?.innerText) || blockFuelValue || 0;
-        
-        let currentStartFuel = (takeoffFuelInput && takeoffFuelInput.value) 
-            ? parseInt(takeoffFuelInput.value) 
-            : (picBlock - taxiFuel);
-
-        const delta = currentStartFuel - pdfTakeoffFuel;
-
-        // 4. Update Waypoints 
-        waypoints.forEach((wp, index) => {
-            if (wp.baseFuel === undefined) wp.baseFuel = parseInt(wp.fob) || 0;
-            
-            // Apply Delta
-            if (wp.baseFuel > 0) wp.fuel = wp.baseFuel + delta;
-
-            // Calculate Time
-            if (index === 0 && wp.name === "TAKEOFF") {
-                wp.eto = atd ? atd.replace(':', '') : "";
-            } 
-            else if (lastAtoIndex !== -1 && index > lastAtoIndex) {
-                // Ripple Calculation
-                const minutesFromLatest = wp.totalMins - waypoints[lastAtoIndex].totalMins;
-                const newEtoMins = lastAtoMins + minutesFromLatest;
-                
-                const h = Math.floor((newEtoMins / 60) % 24).toString().padStart(2, '0');
-                const m = Math.floor(newEtoMins % 60).toString().padStart(2, '0');
-                wp.eto = h + m;
-            } 
-            else {
-                // Standard Calculation
-                if(!atd) wp.eto = "";
-                else {
-                    const [h, m] = atd.split(':').map(Number);
-                    const targetMins = (h * 60 + m) + wp.totalMins;
-                    const hh = Math.floor((targetMins / 60) % 24).toString().padStart(2, '0');
-                    const mm = Math.floor(targetMins % 60).toString().padStart(2, '0');
-                    wp.eto = hh + mm;
-                }
-            }
-        });
-    updateAlternateETOs();
-    updateFlightLogTablesIncremental();
-    updateAlternateTableIncremental();
-    
-    waypointTableCache.lastUpdate = Date.now();
-    };
-
-    function calculatePICBlock() {
-        const extra = parseInt(el('front-extra-kg')?.value) || 0;
-        if(blockFuelValue > 0 || extra > 0) {
-            safeText('view-pic-block', (blockFuelValue + extra) + " kg");
-        } else {
-            safeText('view-pic-block', '-');
-        }
-    }
-
-    window.calculateExtraFromTotal = function() {
-        const totalInput = el('view-pic-block');
-        const extraInput = el('front-extra-kg');
-        
-        // Ensure we have the base Block Fuel from the OFP
-        if (typeof blockFuelValue === 'undefined' || blockFuelValue === 0) return;
-            const picTotal = parseInt(totalInput.value) || 0;
-        
-        // Calculation: Extra = User Total - OFP Block
-        let diff = picTotal - blockFuelValue;
-
-        extraInput.value = diff;
-        
-        // Update the Flight Log Table immediately
-        runFlightLogCalculations();
-    };
-
-    async function getOFPCount() {
-        const db = await getDB();
-        if (!db.objectStoreNames.contains('ofps')) return 0;
-        const tx = db.transaction('ofps', 'readonly');
-        const store = tx.objectStore('ofps');
-        return new Promise((resolve, reject) => {
-            const req = store.count();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = (e) => reject(e.target.error);
-        });
-    }
-
-    function minsToTime(m) {
-        if(m < 0) m += 1440 * Math.ceil(Math.abs(m) / 1440);
-        
-        const days = Math.floor(m / 1440);
-        const remainingMins = m % 1440;
-        
-        const h = Math.floor(remainingMins / 60);
-        const min = remainingMins % 60;
-        
-        if (days > 0) {
-            return `${h.toString().padStart(2,'0')}:${min.toString().padStart(2,'0')} (+${days}d)`;
-        }
-        
-        return `${h.toString().padStart(2,'0')}:${min.toString().padStart(2,'0')}`;
-    }
-
-    function getCCMaxFDP() {
-        const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
-        return ccMaxHidden ? ccMaxHidden.value : "00:00";
-    }
-
-    function getDiff(start, end) {
-        if (!start || !end) return "";
-        
-        const parseTime = (timeStr) => {
-            if (!timeStr) return null;
-            if (timeStr.length === 4 && /^\d{4}$/.test(timeStr)) {
-                return {
-                    h: parseInt(timeStr.substring(0, 2)),
-                    m: parseInt(timeStr.substring(2, 4))
-                };
-            }
-            if (timeStr.includes(':')) {
-                const [h, m] = timeStr.split(':').map(Number);
-                return { h, m };
-            }
-            return null;
-        };
-        
-        const startTime = parseTime(start);
-        const endTime = parseTime(end);
-        if (!startTime || !endTime) return "";
-        
-        let startMinutes = startTime.h * 60 + startTime.m;
-        let endMinutes = endTime.h * 60 + endTime.m;
-        
-        let dayOffset = 0;
-        if (endMinutes < startMinutes - 720) dayOffset = 1;
-        else if (endMinutes < startMinutes) dayOffset = 1;
-        
-        const totalMinutes = (endMinutes + dayOffset * 1440) - startMinutes;
-        
-        if (totalMinutes < 0 || totalMinutes > 2880) {
-            const diff = endMinutes - startMinutes;
-            if (diff < 0) {
-                const correctedDiff = diff + 1440;
-                const hours = Math.floor(correctedDiff / 60);
-                const minutes = correctedDiff % 60;
-                return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-            }
-        }
-        
-        const hours = Math.floor(totalMinutes / 60);
-        const minutes = totalMinutes % 60;
-        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-    }
-
-    window.calculateFuelForJourneyLog = function() {
-        // Safely get numeric values
-        const val = (id) => { 
-            const e = el(id); 
-            return e && e.value !== "" ? parseFloat(e.value) : 0; 
-        };
-        const has = (id) => { const e = el(id); return e && e.value !== ""; };
-
-        const init = val('j-init');
-        const uplift = val('j-uplift-w');
-        const act = val('j-act-ramp');
-        const shut = val('j-shut');
-
-        // Calc Ramp
-        if(has('j-init') || has('j-uplift-w')) {
-            const cr = init + uplift;
-            safeSet('j-calc-ramp', cr);
-            
-            // Discrepancy
-            if(has('j-act-ramp')) {
-                safeSet('j-disc', act - cr);
-            } else {
-                safeSet('j-disc', '');
-            }
-        } else {
-            safeSet('j-calc-ramp', '');
-            safeSet('j-disc', '');
-        }
-
-        // Trip Burn
-        if(has('j-act-ramp') && has('j-shut')) {
-            safeSet('j-burn', act - shut);
-        } else {
-            safeSet('j-burn', '');
-        }
-    };
-
-    window.calculateTripTimeForJourneyLog = function() {
-        const outT = el('j-out')?.value;
-        const inT = el('j-in')?.value;
-        const offT = el('j-off')?.value;
-        const onT = el('j-on')?.value;
-
-        if (outT && inT) safeSet('j-block', getDiff(outT, inT));
-        else safeSet('j-block', '');
-
-        if (offT && onT) safeSet('j-flight', getDiff(offT, onT));
-        else safeSet('j-flight', '');
-
-        calcDutyLogic();
-    };
-
-    window.calculateDutyValues = function(std, flt, dep, dest) {
-        if (!std) return { fc: "00:00", cc: "00:00", max: "00:00", ccMax: "00:00" };
-
-        const fltUpper = (flt || "").toUpperCase();
-        const isKZR = fltUpper.includes('KZR') || fltUpper.includes('KC');
-        const isAYN = fltUpper.includes('AYN') || fltUpper.includes('FS');
-
-        const isDepKZ = (dep || "").toUpperCase().startsWith('UA');
-        const isDestKZ = (dest || "").toUpperCase().startsWith('UA');
-
-        // 1. Flight Crew offset (minutes before STD)
-        let fcOffset = 60; // default
-        if (isDepKZ) {
-            if (isKZR) {
-                fcOffset = isDestKZ ? 75 : 90;
-            } else if (isAYN) {
-                fcOffset = isDestKZ ? 60 : 75;
-            }
-        }
-
-        // 2. Cabin Crew offset (minutes before FC)
-        let ccOffset = 0;
-        if (isKZR && isDepKZ) {
-            ccOffset = 15;
-        }
-
-        const stdMins = parseTimeString(std);   // STD in UTC minutes
-
-        // FC report in UTC
-        let fcStartUTC = stdMins - fcOffset;
-        if (fcStartUTC < 0) fcStartUTC += 1440;
-
-        // CC report in UTC
-        let ccStartUTC = fcStartUTC - ccOffset;
-        if (ccStartUTC < 0) ccStartUTC += 1440;
-
-        // Convert FC report UTC to local Kazakhstan (UTC+5) for FDP table
-        let localStart = (fcStartUTC + 300) % 1440;
-        const baseFDP = calculateBaseMaxFDP(localStart);
-        const ccMaxFDP = baseFDP + Math.min(ccOffset, 60);
-
-        return {
-            fc: minsToTime(fcStartUTC),
-            cc: minsToTime(ccStartUTC),
-            max: minsToTime(baseFDP),
-            ccMax: minsToTime(ccMaxFDP)
-        };
-    };
-
-    window.calcDutyLogic = function() {
-        let flt = (el('j-flt')?.value || "").trim();
-        let dep = (el('j-dep')?.value || "").trim();
-        let dest = (el('j-dest')?.value || "").trim();
-        let std = (el('j-std')?.value || "").trim();
-
-        if ((!std || !flt) && dailyLegs.length > 0) {
-            flt = dailyLegs[0]['j-flt'] || "";
-            dep = dailyLegs[0]['j-dep'] || "";
-            dest = dailyLegs[0]['j-dest'] || "";
-            std = dailyLegs[0]['j-std'] || "";
-        }
-
-        if (!std) return;
-
-        const dutyValues = calculateDutyValues(std, flt, dep, dest);
-
-        const currentFc = el('j-duty-start')?.value;
-        const currentCc = el('j-cc-duty-start')?.value;
-
-        if (!currentFc || currentFc.trim() === '') {
-            safeSet('j-duty-start', dutyValues.fc);
-        }
-        if (!currentCc || currentCc.trim() === '') {
-            safeSet('j-cc-duty-start', dutyValues.cc);
-        }
-
-        dutyStartTime = parseTimeString(el('j-duty-start')?.value);
-        recalcMaxFDP();
-    };
-
-    function calculateBaseMaxFDP(localStartMins) {
-        const t = localStartMins % 1440;
-        if (t >= 360 && t <= 809) return 780;   // 06:00-13:29
-        if (t >= 810 && t <= 839) return 765;   // 13:30-13:59
-        if (t >= 840 && t <= 869) return 750;   // 14:00-14:29
-        if (t >= 870 && t <= 899) return 735;   // 14:30-14:59
-        if (t >= 900 && t <= 929) return 720;   // 15:00-15:29
-        if (t >= 930 && t <= 959) return 705;   // 15:30-15:59
-        if (t >= 960 && t <= 989) return 690;   // 16:00-16:29
-        if (t >= 990 && t <= 1019) return 675;  // 16:30-16:59
-        if (t >= 1020 || t <= 299) return 660;  // 17:00-04:59
-        if (t >= 300 && t <= 314) return 720;   // 05:00-05:14
-        if (t >= 315 && t <= 329) return 735;   // 05:15-05:29
-        if (t >= 330 && t <= 344) return 750;   // 05:30-05:44
-        if (t >= 345 && t <= 359) return 765;   // 05:45-05:59
-        return 780;
-    }
-
-    window.recalcMaxFDP = function() {
-        const fcTimeStr = el('j-duty-start')?.value;
-        const ccTimeStr = el('j-cc-duty-start')?.value;
-        if (!fcTimeStr) return;
-
-        const fcMinsUTC = parseTimeString(fcTimeStr);
-        const ccMinsUTC = ccTimeStr ? parseTimeString(ccTimeStr) : fcMinsUTC;
-        dutyStartTime = fcMinsUTC;
-
-        const sectors = dailyLegs.length;
-
-        // Convert UTC to local Kazakhstan (UTC+5) for FDP table
-        const localFcMins = (fcMinsUTC + 300) % 1440;
-        const baseFDP = calculateBaseMaxFDP(localFcMins);
-
-        let reportingDiff = fcMinsUTC - ccMinsUTC;
-        if (reportingDiff < 0) reportingDiff += 1440;
-        const cappedDiff = Math.min(reportingDiff, 60);
-
-        const getMaxFDPWithSectors = (baseMax, sectors) => {
-            let finalMax = baseMax;
-            if (sectors === 3) finalMax -= 30;
-            else if (sectors === 4) finalMax -= 60;
-            else if (sectors >= 5) finalMax -= 90;
-            return Math.max(finalMax, 660);
-        };
-
-        const fcMax = getMaxFDPWithSectors(baseFDP, sectors);
-        const ccMax = getMaxFDPWithSectors(baseFDP + cappedDiff, sectors);
-
-        safeSet('j-max-fdp', minsToTime(fcMax));
-        const ccMaxInput = document.getElementById('j-cc-max-fdp-hidden');
-        if (ccMaxInput) ccMaxInput.value = minsToTime(ccMax);
-    };
-
-    function calculateNightDuty(startMinsUTC, endMinsUTC) {
-        if (!startMinsUTC && startMinsUTC !== 0 || !endMinsUTC && endMinsUTC !== 0) return "00:00";
-
-        let nightOverlap = 0;
-        let start = startMinsUTC;
-        let end = endMinsUTC;
-        if (end < start) end += 1440;   // handle crossing midnight
-
-        // Night window in UTC: 21:00 (1260) to 23:59 (1439)
-        const nightStart = 1260;
-        const nightEnd = 1439;
-
-        for (let i = start; i < end; i++) {
-            const minuteOfDay = i % 1440;
-            if (minuteOfDay >= nightStart && minuteOfDay <= nightEnd) {
-                nightOverlap++;
-            }
-        }
-
-        return minsToTime(nightOverlap);
-    }
-
-    function getNightDutyForCrew(startMinsUTC) {
-        if(!startMinsUTC && startMinsUTC !== 0) return "00:00";
-        
-        const lastLeg = dailyLegs[dailyLegs.length - 1];
-        if (!lastLeg) return "00:00";
-        
-        const endMinsUTC = parseTimeString(lastLeg['j-in']);
-        if (!endMinsUTC && endMinsUTC !== 0) return "00:00";
-        
-        return calculateNightDuty(startMinsUTC, endMinsUTC);
-    }
-
-
-// ==========================================
-// 6. PARSING
-// ==========================================
 
     function parseTimeString(timeStr) {
         if(!timeStr) return 0;
@@ -3698,105 +3215,6 @@
             return pageIndex - 1; // page before this one
         }
         return null;
-    }
-
-async function parsePDFData(pdfBytes, isAutoLoad) {
-        try {
-            // 1. Reset all global parsing state
-            resetParsingState();
-
-            // 2. Load PDF document
-            const pdf = await pdfjsLib.getDocument(pdfBytes).promise;
-
-            // 3. Parse page 1 (flight info, fuel, weights, front coords)
-            const { requestNumber, textContent: page1Text } = await parsePage1(pdf);
-
-            // 4. Parse waypoints (pages 2+)
-            const extractedWaypoints = await parseAllWaypoints(pdf);
-            waypoints = extractedWaypoints;
-
-            // 5. Collect full text from all pages (starting from page 2) and detect cutoff
-            let fullText = page1Text;
-            for (let i = 2; i <= pdf.numPages; i++) {
-                const page = await pdf.getPage(i);
-                const content = await page.getTextContent();
-                const pageText = content.items.map(x => x.str).join(' ');
-                fullText += ' ' + pageText;
-
-                // Detect cutoff page (starting from page 4)
-                if (i >= 4) {
-                    const cutoff = detectCutoffPage(pageText, i);
-                    if (cutoff !== null) {
-                        window.cutoffPageIndex = cutoff;
-                        // Do not break – we still want the rest of the text (NOTAMs/weather)
-                    }
-                }
-            }
-
-            // 6. Process waypoints (split into primary/alternate, set baseFuel)
-            if (waypoints.length === 0) {
-                console.warn('No waypoints found in PDF');
-            }
-            waypoints.forEach(wp => {
-                wp.baseFuel = parseInt(wp.fob) || 0;
-                wp.fuel = wp.baseFuel;
-            });
-            processWaypointsList();
-
-            // 7. Extract metadata from UI
-            let { flight, date, dep, dest, tripTime, maxSR } = extractMetadataFromUI();
-
-            // --- THE FIX: BRUTE FORCE METADATA FROM FILENAME ---
-            if (!flight || flight === "N/A" || flight === "Unknown") {
-                if (window.originalFileName) {
-                    // Looks for patterns like "KC982_20260803" or "KC982_2026-08-03"
-                    const match = window.originalFileName.match(/^([A-Za-z0-9]+)_(\d{4}-?\d{2}-?\d{2})/);
-                    if (match) {
-                        flight = match[1];
-                        
-                        // Format the date nicely to YYYY-MM-DD
-                        let rawDate = match[2];
-                        if (rawDate.length === 8 && !rawDate.includes('-')) {
-                            rawDate = `${rawDate.substring(0,4)}-${rawDate.substring(4,6)}-${rawDate.substring(6,8)}`;
-                        }
-                        date = rawDate;
-
-                        // Force the UI to show the right info immediately so updateUIAfterParsing doesn't override it
-                        if (document.getElementById('view-flt')) document.getElementById('view-flt').innerText = flight;
-                        if (document.getElementById('view-date')) document.getElementById('view-date').innerText = date;
-                    }
-                }
-            }
-            // ---------------------------------------------------
-
-            // 8. Build final metadata object
-            const metadata = {
-                flight,
-                date,
-                departure: dep || 'TBA',
-                destination: dest || 'TBA',
-                tripTime: tripTime || '',
-                maxSR: maxSR || '',
-                requestNumber: requestNumber || ''
-            };
-
-            // 9. Update UI tables and calculations
-            updateUIAfterParsing();
-
-            // 10. Return everything needed, including full text
-            return {
-                success: true,
-                metadata,
-                tripTime,
-                maxSR,
-                requestNumber,
-                fullText  
-            };
-
-        } catch (error) {
-            console.error('Error in parsePDFData:', error);
-            throw error;
-        }
     }
     
     window.analyzeNotamsAndWeather = function() {
@@ -4201,40 +3619,51 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
 // 7. UI RENDERING
 // ==========================================
 
+    // High-performance, GPU-accelerated Toast Notifications
     function showToast(message, type = 'success') {
         const toast = document.createElement('div');
-        let bgColor = 'var(--success)';
-        if (type === 'error') bgColor = 'var(--error)';
-        if (type === 'info') bgColor = 'var(--accent)';
+        const bgColors = {
+            'error': 'var(--error)',
+            'info': 'var(--accent)',
+            'success': 'var(--success)'
+        };
         
+        // Use GPU-accelerated transforms instead of expensive top/left animations
         toast.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
-            background: ${bgColor};
+            background: ${bgColors[type] || bgColors['success']};
             color: white;
             padding: 15px 20px;
             border-radius: 10px;
             z-index: 10000;
             box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-            animation: slideIn 0.3s ease;
+            transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            opacity: 0;
+            transform: translateY(-20px) scale(0.95);
+            pointer-events: none;
         `;
         
         toast.textContent = message;
         document.body.appendChild(toast);
         
+        // Trigger GPU render next frame
+        requestAnimationFrame(() => {
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateY(0) scale(1)';
+        });
+        
         setTimeout(() => {
-            toast.style.animation = 'slideOut 0.3s ease';
-            setTimeout(() => toast.remove(), 300);
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-20px) scale(0.95)';
+            setTimeout(() => toast.remove(), 300); // Wait for transition to finish
         }, 3000);
     }
 
     function showConfirmDialog(title, message, confirmText = 'Continue', cancelText = 'Cancel', type = 'warning', centered = false) {
         return createModal({
-            title,
-            message,
-            confirmText,
-            cancelText,
+            title, message, confirmText, cancelText,
             type: type === 'error' ? 'error' : 'info',
             icon: type === 'error' ? '⚠️' : '❓',
             centered
@@ -4255,182 +3684,150 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
         });
     }
 
-    // Unified Modal Builder
-    function createModal({ 
-        title, 
-        message = '', 
-        confirmText = 'OK', 
-        cancelText = null, 
-        onConfirm, 
-        onCancel, 
-        type = 'info', 
-        icon = '📋',
-        showVersion = null,
-        listItems = null,
-        bodyHTML = '',
-        centered = true,
-        compact = false,
-        maxWidth = null,
-    }) {
-        const dialog = document.createElement('div');
-        dialog.style.cssText = `position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.8); display:flex; justify-content:center; align-items:center; z-index:10001; backdrop-filter:blur(5px); animation:fadeIn 0.3s ease;`;
+    // Unified Modal Builder (Optimized layout rendering)
+    function createModal({ title, message = '', confirmText = 'OK', cancelText = null, onConfirm, onCancel, type = 'info', icon = '📋', showVersion = null, listItems = null, bodyHTML = '', centered = true, compact = false, maxWidth = null }) {
+        return new Promise((resolve) => {
+            const dialog = document.createElement('div');
+            dialog.style.cssText = `position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 10001; backdrop-filter: blur(5px); animation: fadeIn 0.2s ease;`;
 
-        let contentHTML = `
-            <div style="background: var(--panel); border-radius: 20px; padding: ${compact ? '15px' : '30px'}; max-width: ${maxWidth || (compact ? '400px' : '500px')}; width: 90%; border: 2px solid ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: left;">
-                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
-                    <span style="font-size: 40px;">${icon}</span>
-                    <div>
-                        <h2 style="color: ${type === 'error' ? 'var(--error)' : 'var(--accent)'}; margin: 0; font-size: 24px;">${title}</h2>
-                        ${showVersion ? `<p style="color: var(--dim); margin: 5px 0 0 0;">Version ${showVersion}</p>` : ''}
+            const color = type === 'error' ? 'var(--error)' : 'var(--accent)';
+            const align = centered ? 'text-align: center;' : 'text-align: left;';
+            const width = maxWidth || (compact ? '400px' : '500px');
+
+            const listHTML = (listItems && listItems.length) 
+                ? `<div style="margin-bottom: 25px; max-height: 400px; overflow-y: auto; ${align}">
+                    <ul style="list-style: none; padding: 0; margin: 0;">
+                        ${listItems.map(item => `<li style="margin-bottom: 8px; color: var(--text);">${item}</li>`).join('')}
+                    </ul>
+                   </div>` 
+                : '';
+
+            dialog.innerHTML = `
+                <div style="background: var(--panel); border-radius: 20px; padding: ${compact ? '15px' : '30px'}; max-width: ${width}; width: 90%; border: 2px solid ${color}; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: left;">
+                    <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
+                        <span style="font-size: 40px;">${icon}</span>
+                        <div>
+                            <h2 style="color: ${color}; margin: 0; font-size: 24px;">${title}</h2>
+                            ${showVersion ? `<p style="color: var(--dim); margin: 5px 0 0 0;">Version ${showVersion}</p>` : ''}
+                        </div>
+                    </div>
+                    ${message ? `<div style="color: var(--text); margin-bottom: 25px; line-height: 1.5; ${align}">${message}</div>` : ''}
+                    ${listHTML}
+                    ${bodyHTML ? `<div style="margin-bottom: 25px;">${bodyHTML}</div>` : ''}
+                    <div style="display: flex; gap: 15px; margin-top: 25px;">
+                        ${cancelText ? `<button id="modal-cancel" style="flex:1; padding:14px; background:var(--input); border:1px solid var(--border); color:var(--text); border-radius:12px; font-weight:600; cursor:pointer;">${cancelText}</button>` : ''}
+                        <button id="modal-confirm" style="flex:1; padding:14px; background:${color}; border:none; color:white; border-radius:12px; font-weight:800; cursor:pointer;">${confirmText}</button>
                     </div>
                 </div>
-        `;
+            `;
 
-        // Message – apply centering if requested
-        if (message) {
-            const msgStyle = centered ? 'text-align: center;' : '';
-            contentHTML += `<div style="color: var(--text); margin-bottom: 25px; line-height: 1.5; ${msgStyle}">${message}</div>`;
-        }
+            document.body.appendChild(dialog);
 
-        // List items – apply centering if requested
-        if (listItems && listItems.length) {
-            const listStyle = centered ? 'text-align: center;' : '';
-            contentHTML += `<div style="margin-bottom: 25px; max-height: 400px; overflow-y: auto; padding-right: 10px; ${listStyle}">
-                <ul style="list-style: none; padding: 0; margin: 0;">
-                    ${listItems.map(item => `<li style="margin-bottom: 8px; color: var(--text);">${item}</li>`).join('')}
-                </ul>
-            </div>`;
-        }
-
-        if (bodyHTML) {
-            contentHTML += `<div style="margin-bottom: 25px;">${bodyHTML}</div>`;
-        }
-
-        // Buttons
-        contentHTML += `<div style="display: flex; gap: 15px; margin-top: 25px;">`;
-        if (cancelText) {
-            contentHTML += `<button id="modal-cancel" style="flex:1; padding:14px; background:var(--input); border:1px solid var(--border); color:var(--text); border-radius:12px; font-weight:600; cursor:pointer;">${cancelText}</button>`;
-        }
-        contentHTML += `<button id="modal-confirm" style="flex:1; padding:14px; background:${type === 'error' ? 'var(--error)' : 'var(--accent)'}; border:none; color:white; border-radius:12px; font-weight:800; cursor:pointer; box-shadow:${type !== 'error' ? '0 5px 15px rgba(var(--accent-rgb), 0.3)' : 'none'};">${confirmText}</button></div>`;
-
-        contentHTML += `</div>`; // close outer div
-        dialog.innerHTML = contentHTML;
-        document.body.appendChild(dialog);
-
-        return new Promise((resolve) => {
-            const confirmBtn = dialog.querySelector('#modal-confirm');
-            const cancelBtn = dialog.querySelector('#modal-cancel');
-
-            confirmBtn.onclick = () => { if (onConfirm) onConfirm(); dialog.remove(); resolve(true); };
-            if (cancelBtn) {
-                cancelBtn.onclick = () => { dialog.remove(); if (onCancel) onCancel(); resolve(false); };
+            dialog.querySelector('#modal-confirm').onclick = () => { 
+                if (onConfirm) onConfirm(); 
+                dialog.remove(); 
+                resolve(true); 
+            };
+            
+            if (cancelText) {
+                dialog.querySelector('#modal-cancel').onclick = () => { 
+                    if (onCancel) onCancel(); 
+                    dialog.remove(); 
+                    resolve(false); 
+                };
             }
         });
     }
 
-    // Update upload button visibility
+    // Fast-path Overlay Manager
     async function updateUploadButtonVisibility() {
         const overlay = document.getElementById('upload-overlay');
+        if (!overlay) return;
+
         const activeSection = document.querySelector('.tool-section.active');
         const activeTabId = activeSection ? activeSection.id.replace('section-', '') : '';
-        
-        // Check if there are any OFPs in storage
-        let hasAnyOFP = false;
+        const hiddenTabs = new Set(['journey', 'sectors', 'settings', 'assigned']);
+
+        // Early return logic: If we are on a tab that hides the overlay, or OFP is loaded, hide instantly.
+        if (isOFPLoaded || hiddenTabs.has(activeTabId)) {
+            overlay.classList.add('hidden');
+            if (typeof updateEmptyStates === 'function') updateEmptyStates();
+            return;
+        }
+
+        // Only query database if absolutely necessary
         try {
             const count = await getOFPCount();
-            hasAnyOFP = count > 0;
+            if (count > 0) {
+                overlay.classList.add('hidden');
+            } else {
+                overlay.classList.remove('hidden');
+            }
         } catch (e) {
             console.warn('Failed to get OFP count', e);
         }
-
-        // Show overlay only when:
-        // 1. No OFP is loaded (i.e., isOFPLoaded === false)
-        // 2. There are no OFPs at all (hasAnyOFP === false)
-        // 3. Not on Journey, Sectors, or Settings tab
-        if (!isOFPLoaded && !hasAnyOFP && 
-            activeTabId !== 'journey' && activeTabId !== 'sectors' && activeTabId !== 'settings' && activeTabId !== 'assigned') {
-            overlay.classList.remove('hidden');
-        } else {
-            overlay.classList.add('hidden');
-        }
         
-        // Also handle empty states in specific tabs (optional)
-        updateEmptyStates();
+        if (typeof updateEmptyStates === 'function') updateEmptyStates();
     }
 
     window.goToAssignedAndActivate = function() {
         const assignedBtn = document.querySelector('.nav-btn[data-tab="assigned"], .nav-btn[onclick*="assigned"]');
         if (assignedBtn) {
-            if (typeof window.showTab === 'function') {
-                window.showTab('assigned', assignedBtn);
-            } else {
-                assignedBtn.click();
-            }
+            typeof window.showTab === 'function' ? window.showTab('assigned', assignedBtn) : assignedBtn.click();
         }
     };
 
+    // Optimized array allocation for coordinate grouping
     function buildRows(items) {
         const rows = {};
-        items.forEach(item => {
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
             const y = Math.round(item.transform[5]);
             if (!rows[y]) rows[y] = [];
             rows[y].push(item);
-        });
-        return Object.entries(rows).map(([y, items]) => ({
+        }
+        
+        return Object.keys(rows).map(y => ({
             y: parseFloat(y),
-            items: items.sort((a, b) => a.transform[4] - b.transform[4])
+            items: rows[y].sort((a, b) => a.transform[4] - b.transform[4])
         }));
     }
 
-    // Hides or makes OFP Upload button visible
     function setOFPLoadedState(loaded) {
         isOFPLoaded = loaded;
         updateUploadButtonVisibility();
         
-        // Update the Paper Flight Plan tab display
         if (loaded) {
             const pdfContainer = document.getElementById('pdf-render-container');
-            if (pdfFallbackElement) {
-                // Reset to original fallback content
-                pdfFallbackElement.innerHTML = `
-                    No OFP uploaded yet
-                `;
+            if (typeof pdfFallbackElement !== 'undefined' && pdfFallbackElement) {
+                pdfFallbackElement.innerHTML = `No OFP uploaded yet`;
                 pdfFallbackElement.style.display = 'flex';
             }
             if (pdfContainer) pdfContainer.style.display = 'block';
         }
     }
 
-    // Day/Night Mode
+    // Direct DOM Theme Toggler
     window.toggleTheme = function() {
         const html = document.documentElement;
         const themeButton = document.querySelector('.theme-toggle');
         
-        const currentTheme = html.getAttribute('data-theme');
+        const isDark = html.getAttribute('data-theme') === 'dark';
+        const newTheme = isDark ? 'light' : 'dark';
         
-        if (currentTheme === 'dark') {
-            // Going to light mode
-            html.setAttribute('data-theme', 'light');
-            if(themeButton) {
-                themeButton.textContent = 'Night Mode';
-            }
-            localStorage.setItem('data-theme', 'light');
-        } else {
-            // Going to dark mode
-            html.setAttribute('data-theme', 'dark');
-            if(themeButton) {
-                themeButton.textContent = 'Day Mode';
-            }
-            localStorage.setItem('data-theme', 'dark');
+        html.setAttribute('data-theme', newTheme);
+        localStorage.setItem('data-theme', newTheme);
+        
+        if (themeButton) {
+            themeButton.textContent = isDark ? 'Night Mode' : 'Day Mode';
         }
     };
 
-    // SECTORS TAB - Render the OFP table in the Sectors tab
     window.renderOFPMangerTable = async function() {
-        try {
-            const tbody = document.getElementById('ofp-manager-tbody');
-            if (!tbody) return;
+        const tbody = document.getElementById('ofp-manager-tbody');
+        if (!tbody) return;
 
+        try {
             const ofps = await getCachedOFPs();
             const filterText = document.getElementById('ofp-search-input')?.value.toLowerCase() || '';
             const activeId = localStorage.getItem('activeOFPId');
@@ -4442,11 +3839,8 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
 
             const filtered = ofps.filter(ofp => {
                 if (!filterText) return true;
-                const flight = (ofp.flight || '').toLowerCase();
-                const date = (ofp.date || '').toLowerCase();
-                const dep = (ofp.departure || '').toLowerCase();
-                const dest = (ofp.destination || '').toLowerCase();
-                return flight.includes(filterText) || date.includes(filterText) || dep.includes(filterText) || dest.includes(filterText);
+                const searchStr = `${ofp.flight || ''} ${ofp.date || ''} ${ofp.departure || ''} ${ofp.destination || ''}`.toLowerCase();
+                return searchStr.includes(filterText);
             });
 
             if (filtered.length === 0) {
@@ -4455,66 +3849,34 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
             }
 
             tbody.innerHTML = filtered.map(ofp => {
-                const flight = ofp.flight || '—';
-                const date = ofp.date || '—';
-                const dep = ofp.departure || '—';
-                const dest = ofp.destination || '—';
                 const isActive = String(ofp.id) === String(activeId);
+                const statusBadge = ofp.finalized 
+                    ? `<span class="status-badge status-finalized">✓ Finalized</span>`
+                    : `<span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">${isActive ? '✓ Active' : 'Inactive'}</span>`;
 
-                let statusBadge = '';
-                if (ofp.finalized) {
-                    statusBadge = `<span class="status-badge status-finalized">✓ Finalized</span>`;
-                } else {
-                    statusBadge = `<span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">
-                        ${isActive ? '✓ Active' : 'Inactive'}
-                    </span>`;
-                }
-
-                const activateDisabled = ofp.finalized || isActive;
-                const activateTitle = ofp.finalized 
-                    ? 'Cannot activate – OFP is finalized' 
-                    : (isActive ? 'Already active' : 'Activate this OFP');
+                const actionButtons = ofp.finalized 
+                    ? `<button onclick="downloadSavedOFP(${ofp.id})" class="btn-icon download" title="Download Logged OFP">⬇️</button>`
+                    : `<button class="btn-icon download" disabled style="opacity:0.3" title="Finalize OFP first">⬇️</button>`;
 
                 return `
                     <tr data-ofp-id="${ofp.id}" ${isActive ? 'class="active-ofp-row"' : ''}>
-                        <td><strong>${sanitizeHTML(flight)}</strong></td>
-                        <td>${sanitizeHTML(date)}</td>
-                        <td>${sanitizeHTML(dep)}</td>
-                        <td>${sanitizeHTML(dest)}</td>
+                        <td><strong>${sanitizeHTML(ofp.flight || '—')}</strong></td>
+                        <td>${sanitizeHTML(ofp.date || '—')}</td>
+                        <td>${sanitizeHTML(ofp.departure || '—')}</td>
+                        <td>${sanitizeHTML(ofp.destination || '—')}</td>
                         <td>${sanitizeHTML(ofp.tripTime || '—')}</td>
                         <td>${sanitizeHTML(ofp.maxSR || '—')}</td>
                         <td>${sanitizeHTML(ofp.requestNumber || '—')}</td>
                         <td>${statusBadge}</td>
                         <td style="white-space: nowrap;">
-                            
-                            ${ofp.finalized ? 
-                                `<button onclick="downloadSavedOFP(${ofp.id})" 
-                                        class="btn-icon download" 
-                                        title="Download Logged OFP">
-                                    ⬇️
-                                </button>` : 
-                                `<button class="btn-icon download" disabled style="opacity:0.3" 
-                                        title="Finalize OFP first">
-                                    ⬇️
-                                </button>`
-                            }
-                            
-                            <button onclick="deleteOFP(${ofp.id})" 
-                                    class="btn-icon delete" 
-                                    title="Delete OFP">
-                                🗑️
-                            </button>
+                            ${actionButtons}
+                            <button onclick="deleteOFP(${ofp.id})" class="btn-icon delete" title="Delete OFP">🗑️</button>
                         </td>
                     </tr>
                 `;
             }).join('');
         } catch (error) {
-            const tbody = document.getElementById('ofp-manager-tbody');
-            if (tbody) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 30px; color: var(--error);">
-                    Error loading OFPs: ${sanitizeHTML(error.message)}
-                </td></tr>`;
-            }
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 30px; color: var(--error);">Error loading OFPs: ${sanitizeHTML(error.message)}</td></tr>`;
         }
     };
 
@@ -4524,594 +3886,128 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
         const ofpContainer = document.getElementById('ofp-table-container');
         const journeyContainer = document.getElementById('journey-table-container');
 
-        if (!tabOfp || !tabJourney || !ofpContainer || !journeyContainer) {
-            console.warn('File Manager tab elements not found');
-            return;
-        }
+        if (!tabOfp || !tabJourney || !ofpContainer || !journeyContainer) return;
 
-        // Set initial state
-        ofpContainer.hidden = false;
-        journeyContainer.hidden = true;
+        // Prevent attaching listeners multiple times
+        if (tabOfp.dataset.initialized) return;
+        tabOfp.dataset.initialized = "true";
+
+        // Initial setup
+        ofpContainer.style.display = 'block';
+        journeyContainer.style.display = 'none';
         tabOfp.classList.add('active');
         tabJourney.classList.remove('active');
 
-        // Remove old listeners (clone & replace)
-        const newTabOfp = tabOfp.cloneNode(true);
-        const newTabJourney = tabJourney.cloneNode(true);
-        tabOfp.parentNode.replaceChild(newTabOfp, tabOfp);
-        tabJourney.parentNode.replaceChild(newTabJourney, tabJourney);
-
-        newTabOfp.addEventListener('click', () => {
-            newTabOfp.classList.add('active');
-            newTabJourney.classList.remove('active');
-            ofpContainer.hidden = false;
-            journeyContainer.hidden = true;
+        tabOfp.addEventListener('click', () => {
+            tabOfp.classList.add('active');
+            tabJourney.classList.remove('active');
+            ofpContainer.style.display = 'block';
+            journeyContainer.style.display = 'none';
             renderOFPMangerTable();
         });
 
-        newTabJourney.addEventListener('click', () => {
-            newTabJourney.classList.add('active');
-            newTabOfp.classList.remove('active');
-            ofpContainer.hidden = true;
-            journeyContainer.hidden = false;
-            renderJourneyLogTable();
+        tabJourney.addEventListener('click', () => {
+            tabJourney.classList.add('active');
+            tabOfp.classList.remove('active');
+            ofpContainer.style.display = 'none';
+            journeyContainer.style.display = 'block';
+            if (typeof renderJourneyLogTable === 'function') renderJourneyLogTable();
         });
     }
 
-    // Call it after DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initFileManagerTabs);
     } else {
         initFileManagerTabs();
     }
 
-    // SECTORS TAB - After deleting, renumber orders to be consecutive (1,2,3...)
+    // High-speed parallelized database rewrite
     async function renumberOFPOrders() {
         const db = await getDB();
         const tx = db.transaction("ofps", "readwrite");
         const store = tx.objectStore("ofps");
 
-        // Use a cursor to get only id and order
-        const ofpsLight = [];
-        await new Promise((resolve, reject) => {
-            const cursorReq = store.openCursor();
-            cursorReq.onsuccess = (e) => {
+        // 1. Scan lightweight metadata first
+        const ofpsLight = await new Promise((resolve, reject) => {
+            const items = [];
+            const req = store.openCursor();
+            req.onsuccess = (e) => {
                 const cursor = e.target.result;
                 if (cursor) {
-                    ofpsLight.push({
-                        id: cursor.value.id,
-                        order: cursor.value.order || 0
-                    });
+                    items.push({ id: cursor.value.id, order: cursor.value.order || 0 });
                     cursor.continue();
                 } else {
-                    resolve();
+                    resolve(items);
                 }
             };
-            cursorReq.onerror = (e) => reject(e);
+            req.onerror = () => reject(req.error);
         });
 
+        // 2. Sort accurately
         ofpsLight.sort((a, b) => a.order - b.order);
 
-        // Now update each record with the new order
-        for (let i = 0; i < ofpsLight.length; i++) {
-            const ofp = await new Promise((res, rej) => {
-                const req = store.get(ofpsLight[i].id);
-                req.onsuccess = () => res(req.result);
-                req.onerror = (e) => rej(e);
+        // 3. Process the heavy get/put operations concurrently 
+        await Promise.all(ofpsLight.map((item, index) => {
+            return new Promise((res, rej) => {
+                const getReq = store.get(item.id);
+                getReq.onsuccess = () => {
+                    const ofp = getReq.result;
+                    ofp.order = index + 1;
+                    const putReq = store.put(ofp);
+                    putReq.onsuccess = res;
+                    putReq.onerror = rej;
+                };
+                getReq.onerror = rej;
             });
-            ofp.order = i + 1;
-            store.put(ofp);
-        }
+        }));
 
         await new Promise((resolve, reject) => {
             tx.oncomplete = resolve;
-            tx.onerror = (e) => reject(e.target.error);
+            tx.onerror = () => reject(tx.error);
         });
-    }
-
-    // SECTORS TAB - Search function filtering
-    window.filterOFPs = function() {
-        renderOFPMangerTable();
-    };
-
-    // Handle changing tabs
-    window.showTab = window.showTab || function(id, btn) {
-        // Standard tab switching logic
-        document.querySelectorAll('.tool-section').forEach(s => s.classList.remove('active'));
-        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-        if(el('section-'+id)) el('section-'+id).classList.add('active');
-        if(btn) btn.classList.add('active');
-        
-        if (id === 'sectors') {
-            // Reset to OFP tab
-            const tabOfp = document.getElementById('tab-ofp');
-            const tabJourney = document.getElementById('tab-journey');
-            const ofpContainer = document.getElementById('ofp-table-container');
-            const journeyContainer = document.getElementById('journey-table-container');
-            
-            if (tabOfp && tabJourney && ofpContainer && journeyContainer) {
-                tabOfp.classList.add('active');
-                tabJourney.classList.remove('active');
-                ofpContainer.style.display = 'block';
-                journeyContainer.style.display = 'none';
-            }
-            
-            setTimeout(() => {
-                renderOFPMangerTable();
-                renderJourneyLogTable(); // preload journey logs but they stay hidden
-            }, 100);
-        }
-
-        if (id === 'assigned') {
-            loadAssignedFlights();
-        }
-
-        // Refresh ATIS/ATC mode
-        if (id === 'summary') {
-            const savedMode = document.body.getAttribute('data-atis-mode') || currentAtisInputMode || 'typing';
-            applyInputMode(savedMode);
-            setTimeout(() => {
-                if (currentAtisInputMode === 'writing') {
-                    if (!pads.atis.pad) initPad('atis');
-                    if (!pads.atc.pad) initPad('atc');
-                    // Ensure onEnd listeners
-                    if (pads.atis.pad) pads.atis.pad.onEnd = () => debouncedSave();
-                    if (pads.atc.pad) pads.atc.pad.onEnd = () => debouncedSave();
-
-                } else {
-                    // destroy pads if needed
-                    if (pads.atis.pad) { pads.atis.pad.off(); pads.atis.pad = null; }
-                    if (pads.atc.pad) { pads.atc.pad.off(); pads.atc.pad = null; }
-                }
-            }, 100);
-        }
-
-        // Confirm tab – restore signature from persistent storage
-        if (id === 'confirm') {
-            validateOFPInputs();
-            setTimeout(() => {
-                resizePad('main');
-                restorePadDrawing('main', 'signature');
-                updateEmptyStates(); 
-            }, 50);
-        }
-
-        if (id === 'flight-analysis') {
-            analyzeNotamsAndWeather();
-        }
-
-        // Update upload button visibility
-        updateUploadButtonVisibility();
-    };
-
-    // Handle Navigation Menu
-    function initializeTabNavigation() {
-        const buttons = document.querySelectorAll('.nav-btn');
-        
-        buttons.forEach(button => {
-            // Get the original onclick attribute
-            const originalOnClick = button.getAttribute('onclick');
-            
-            // If it has an onclick attribute with showTab, use that
-            if (originalOnClick && originalOnClick.includes('showTab')) {
-                // Extract the tab ID from the onclick
-                const match = originalOnClick.match(/showTab\('([^']+)'/);
-                if (match) {
-                    const tabId = match[1];
-                    button.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        window.showTab(tabId, this);
-                    });
-                }
-            } else {
-                // Fallback to data-tab attribute
-                const tabId = button.getAttribute('data-tab');
-                if (tabId) {
-                    button.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        if (window.showTab) {
-                            window.showTab(tabId, this);
-                        }
-                    });
-                }
-            }
-        });
-    }
-
-    // Update empty states in specific tabs
-    async function updateEmptyStates() {
-        const activeSection = document.querySelector('.tool-section.active');
-        if (!activeSection) return;
-
-        const activeTabId = activeSection.id.replace('section-', '');
-        
-        // --- ADD THIS LINE: Skip these tabs entirely for empty states ---
-        if (['assigned', 'sectors', 'settings', 'journey'].includes(activeTabId)) {
-            return; 
-        }
-
-        const container = activeSection.querySelector('.scrollable-content') || activeSection;
-        
-        if (!isOFPLoaded) {
-            // Check if there are any OFPs in the database
-            let hasAnyOFP = false;
-            try {
-                const count = await getOFPCount();
-                hasAnyOFP = count > 0;
-            } catch(e) {}
-
-            if (hasAnyOFP) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div style="font-size: 48px; margin-bottom: 20px;">📂</div>
-                        <h3>No Active OFP</h3>
-                        <p style="color: var(--dim); margin-bottom: 20px;">You have saved OFPs, but none are currently active.</p>
-                        <button onclick="window.showTab('sectors', document.querySelector('.nav-btn[data-tab=\\'sectors\\']'))" 
-                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
-                            Go to Sectors to Activate
-                        </button>
-                    </div>`;
-            } else {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div style="font-size: 48px; margin-bottom: 20px;">✈️</div>
-                        <h3>No Active OFP</h3>
-                        <p style="color: var(--dim); margin-bottom: 20px;">Upload an OFP or download one from Skyplan.</p>
-                        <button onclick="window.goToAssignedAndActivate()" 
-                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
-                            Check Assigned Flights
-                        </button>
-                    </div>`;
-            }
-        }
-    }
-    // Handler for 'Paper Flight Plan' Tab 
-    async function renderPDFPreview(pdfBytes) {
-        const container = document.getElementById('pdf-render-container');
-        const fallback = document.getElementById('pdf-fallback');
-        
-        if (!container || !pdfBytes) {
-            console.error("Missing container or PDF bytes");
-            return;
-        }
-        
-        // Show loading state
-        container.innerHTML = '';
-        container.style.display = 'none';
-        if (fallback) {
-            fallback.style.display = 'flex';
-            fallback.innerHTML = `
-                <span style="font-size:30px; margin-bottom:10px;">⏳</span>
-                <span>Loading PDF preview...</span>
-            `;
-        }
-        
-        try {
-            // Get PDF quality setting
-            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-            const pdfQuality = settings.pdfQuality || '1.0';
-
-            // Quality multipliers (relative to device pixel ratio)
-            const qualityMultipliers = {
-                '0.8': 1.0,   // Low = 1x device pixel ratio (standard sharpness)
-                '1.0': 1.5,   // Medium = 1.5x
-                '1.5': 2.0,   // High = 2x
-                '2.0': 3.0    // Maximum = 3x (very sharp, heavy memory)
-            };
-            const multiplier = qualityMultipliers[pdfQuality] || 1.5;
-
-            // Base scale: device pixel ratio (ensures 1:1 mapping between canvas pixels and screen pixels)
-            const deviceScale = window.devicePixelRatio || 1;
-            let scale = deviceScale * multiplier;
-
-            // Safety cap: limit the maximum scale to avoid enormous canvases (e.g., 4x for 4K screens)
-            const MAX_SCALE = 5.0;
-            scale = Math.min(scale, MAX_SCALE);
-
-            // Also ensure it's at least 1.0 for basic readability
-            scale = Math.max(scale, 1.0);
-
-            // Load PDF document
-            const pdf = await pdfjsLib.getDocument(pdfBytes).promise;
-            const totalPages = pdf.numPages;
-
-            // Hide fallback, show container
-            if (fallback) fallback.style.display = 'none';
-            container.innerHTML = '';
-            container.style.display = 'block';
-
-            // Wait a moment for container to be visible and have dimensions
-            await new Promise(resolve => setTimeout(resolve, 100));
-
-            // Create a loading progress indicator
-            const progressDiv = document.createElement('div');
-            progressDiv.style.cssText = `
-                position: sticky;
-                top: 0;
-                background: var(--accent);
-                color: white;
-                padding: 10px;
-                text-align: center;
-                font-size: 14px;
-                z-index: 100;
-                border-radius: 5px;
-                margin-bottom: 10px;
-            `;
-            progressDiv.textContent = `Loading pages: 0/${totalPages}`;
-            container.appendChild(progressDiv);
-
-            // Create a wrapper for all pages
-            const pagesWrapper = document.createElement('div');
-            pagesWrapper.style.cssText = `
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                gap: 10px;
-            `;
-            container.appendChild(pagesWrapper);
-
-            // Render pages sequentially with small delays to prevent UI freeze
-            for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-                try {
-                    // Update progress
-                    progressDiv.textContent = `Loading pages: ${pageNum}/${totalPages}`;
-
-                    // Small delay for UI responsiveness (50ms between pages)
-                    if (pageNum > 1) {
-                        await new Promise(resolve => setTimeout(resolve, 50));
-                    }
-
-                    const page = await pdf.getPage(pageNum);
-                    const viewport = page.getViewport({ scale: scale });
-
-                    // Create canvas for this page
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-
-                    // Set canvas internal resolution
-                    canvas.width = viewport.width;
-                    canvas.height = viewport.height;
-
-                    // Apply CSS for responsive sizing – always fill width
-                    canvas.style.cssText = `
-                        width: 100%;
-                        height: auto;
-                        margin-bottom: 20px;
-                        background: white;
-                        border: 1px solid #ccc;
-                        border-radius: 4px;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                        display: block;
-                    `;
-
-                    // Add page number label
-                    const pageLabel = document.createElement('div');
-                    pageLabel.style.cssText = `
-                        font-size: 12px;
-                        color: #666;
-                        text-align: center;
-                        margin-bottom: 5px;
-                        font-family: monospace;
-                        background: #f5f5f5;
-                        padding: 3px 10px;
-                        border-radius: 3px;
-                        display: inline-block;
-                    `;
-                    pageLabel.textContent = `Page ${pageNum}`;
-
-                    // Create page container
-                    const pageContainer = document.createElement('div');
-                    pageContainer.style.cssText = `
-                        text-align: center;
-                        margin-bottom: 20px;
-                        width: 100%;
-                    `;
-
-                    pageContainer.appendChild(pageLabel);
-                    pageContainer.appendChild(canvas);
-                    pagesWrapper.appendChild(pageContainer);
-
-                    // Render the page onto the canvas
-                    await page.render({ 
-                        canvasContext: context, 
-                        viewport: viewport 
-                    }).promise;
-
-                } catch (pageError) {
-                    console.warn(`Error rendering page ${pageNum}:`, pageError);
-
-                    // Add error placeholder for this page
-                    const errorDiv = document.createElement('div');
-                    errorDiv.style.cssText = `
-                        background: #fff3cd;
-                        border: 1px solid #ffeaa7;
-                        border-radius: 4px;
-                        padding: 20px;
-                        margin-bottom: 20px;
-                        color: #856404;
-                        text-align: center;
-                        width: 100%;
-                    `;
-                    errorDiv.innerHTML = `<strong>Page ${pageNum}:</strong> Failed to render`;
-                    pagesWrapper.appendChild(errorDiv);
-                }
-            }
-
-            // Remove progress indicator
-            progressDiv.remove();
-
-            // Add completion message with quality info
-            const summary = document.createElement('div');
-            summary.style.cssText = `
-                text-align: center;
-                color: #666;
-                font-size: 12px;
-                margin-top: 20px;
-                padding: 10px;
-                border-top: 1px solid #eee;
-            `;
-
-            const qualityLabels = {
-                '0.8': 'Low (Fast Rendering)',
-                '1.0': 'Medium (Standard)',
-                '1.5': 'High (Better Readability)',
-                '2.0': 'Maximum (Best Quality)'
-            };
-            const qualityLabel = qualityLabels[pdfQuality] || 'Medium (Standard)';
-            summary.textContent = `Rendered ${totalPages} page${totalPages !== 1 ? 's' : ''} at ${qualityLabel} (${(scale * 100).toFixed(0)}% scale)`;
-            pagesWrapper.appendChild(summary);
-
-        } catch (error) {
-            console.error("Critical error rendering PDF:", error);
-
-            if (container) {
-                container.style.display = 'none';
-                container.innerHTML = '';
-            }
-
-            if (fallback) {
-                fallback.style.display = 'flex';
-                fallback.innerHTML = `
-                    <div style="text-align: center;">
-                        <span style="font-size:30px; margin-bottom:10px;">❌</span>
-                        <h3 style="color: var(--error);">PDF Rendering Failed</h3>
-                        <p style="color: var(--dim); margin: 10px 0;">
-                            ${error.message || 'Unable to process PDF file'}
-                        </p>
-                        <button onclick="retryPDFRender()" style="
-                            margin-top: 15px;
-                            padding: 10px 20px;
-                            background: var(--accent);
-                            color: white;
-                            border: none;
-                            border-radius: 6px;
-                            cursor: pointer;
-                        ">
-                            Try Again
-                        </button>
-                    </div>
-                `;
-            }
-        }
-    }
-
-    window.retryPDFRender = async function() {
-        if (window.ofpPdfBytes) {
-            await renderPDFPreview(window.ofpPdfBytes);
-        } else {
-            alert("No PDF loaded. Please upload an OFP first.");
-        }
-    };
-
-    function updateUIAfterParsing() {
-        // Set PIC Block Fuel display
-        const elPic = document.getElementById('view-pic-block');
-        if (elPic) {
-            const val = blockFuelValue || 0;
-            if (elPic.tagName === 'INPUT') elPic.value = val;
-            else elPic.innerText = val;
-        }
-
-        runFlightLogCalculations();
-        renderFuelTable();
-        renderFlightLogTables();
     }
 
     function renderFuelTable() {
-        const tb = el('fuel-tbody');
-        if(!tb) return;
-            if(fuelData.length === 0) {
-                tb.innerHTML = '<tr><td colspan="4" style="text-align:center;">No Fuel Data</td></tr>';
-                return;
-            }
-            const order = ["ALTN", "FINAL RESERVE", "MIN DIVERSION", "CONTINGENCY", "MIN ADDITIONAL", "TOTAL RESERVE", "TRIP", "ENDURANCE", "TAXI", "EXTRA", "TANKERING", "BLOCK FUEL"];
-            const sorted = fuelData.filter(i => i.name !== "MINIMUM BLOCK").sort((a,b) => {
-                let ia = order.indexOf(a.name), ib = order.indexOf(b.name);
-                if(ia===-1) ia=99; if(ib===-1) ib=99;
-                return ia - ib;
-            });
-            
-            tb.innerHTML = sorted.map(i => `<tr><td>${sanitizeHTML(i.name)}</td><td>${sanitizeHTML(i.time)}</td><td>${sanitizeHTML(i.fuel)}</td><td>${sanitizeHTML(i.remarks)}</td></tr>`).join('');
-    }
-
-    function renderFlightLogTables(forceRedraw = false) {
-        // 1. Calculate the latest fuel/times
-        if(typeof runFlightLogCalculations === 'function') runFlightLogCalculations(); 
-
-        // 2. Incremental update check
-        const canIncrementalUpdate = !forceRedraw && 
-            typeof waypointTableCache !== 'undefined' &&
-            waypointTableCache.waypoints && 
-            waypointTableCache.waypoints.length === waypoints.length &&
-            waypointTableCache.alternateWaypoints.length === alternateWaypoints.length &&
-            (Date.now() - waypointTableCache.lastUpdate) < 1000;
+        const tb = document.getElementById('fuel-tbody');
+        if (!tb) return;
         
-        if (canIncrementalUpdate && typeof updateFlightLogTablesIncremental === 'function') {
-            updateFlightLogTablesIncremental();
-            updateAlternateTableIncremental();
+        if (!fuelData || fuelData.length === 0) {
+            tb.innerHTML = '<tr><td colspan="4" style="text-align:center;">No Fuel Data</td></tr>';
             return;
         }
 
-        // 3. Full render
-        const fill = (list, id, pre) => {
-            const tb = document.getElementById(id); 
-            if(!tb) return;
-            
-            if (list.length === 0) {
-                tb.innerHTML = '<tr><td colspan="13" style="text-align:center;color:gray;padding:20px">No waypoints found</td></tr>';
-                return;
-            }
-
-            let rowsHtml = '';
-            
-            list.forEach((wp, i) => {
-                // Pure 1:1 mapping. Index 0 is Waypoint 0 (Takeoff).
-                const index = i;
-                
-                // Standard render without any ETO shifting
-                rowsHtml += createWaypointRowHtml(wp, index, pre);
-            });
-            
-            tb.innerHTML = rowsHtml;
-
-        };
+        const orderMap = new Map(["ALTN", "FINAL RESERVE", "MIN DIVERSION", "CONTINGENCY", "MIN ADDITIONAL", "TOTAL RESERVE", "TRIP", "ENDURANCE", "TAXI", "EXTRA", "TANKERING", "BLOCK FUEL"].map((name, i) => [name, i]));
         
-        fill(waypoints, 'ofp-tbody', 'o'); 
-        fill(alternateWaypoints, 'altn-tbody', 'a');
-    
-        // Update DOM caches for fast access
-        waypointATOCache = Array.from(document.querySelectorAll('[id^="o-a-"]'));
-        alternateATOCache = Array.from(document.querySelectorAll('[id^="a-a-"]'));
-        takeoffFuelInput = document.getElementById('o-f-0');
-        waypointFuelCache = Array.from(document.querySelectorAll('[id^="o-f-"]'));
+        const sorted = fuelData.filter(i => i.name !== "MINIMUM BLOCK").sort((a, b) => {
+            const ia = orderMap.has(a.name) ? orderMap.get(a.name) : 99;
+            const ib = orderMap.has(b.name) ? orderMap.get(b.name) : 99;
+            return ia - ib;
+        });
         
-        waypointTableCache = {
-            waypoints: [...waypoints],
-            alternateWaypoints: [...alternateWaypoints],
-            lastUpdate: Date.now()
-        };
-        
-        if(typeof updateCruiseLevelForJourneyLog === 'function') updateCruiseLevelForJourneyLog();
+        // Single DOM injection
+        tb.innerHTML = sorted.map(i => `<tr><td>${sanitizeHTML(i.name)}</td><td>${sanitizeHTML(i.time)}</td><td>${sanitizeHTML(i.fuel)}</td><td>${sanitizeHTML(i.remarks)}</td></tr>`).join('');
     }
 
     async function renderJourneyLogTable() {
         const tbody = document.getElementById('journey-log-tbody');
         if (!tbody) return;
+        
         try {
             const logs = await getAllJourneyLogs();
             if (!logs || logs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px;">No finalized journey logs.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--dim);">No finalized journey logs.</td></tr>';
                 return;
             }
+            
             tbody.innerHTML = logs.map(log => `
                 <tr>
-                    <td>${sanitizeHTML(log.flight || '—')}</td>
+                    <td><strong>${sanitizeHTML(log.flight || '—')}</strong></td>
                     <td>${sanitizeHTML(log.date || '—')}</td>
                     <td>${log.legCount || '—'}</td>
-                    <td>${log.finalizedAt ? new Date(log.finalizedAt).toLocaleString() : '—'}</td>
+                    <td>${log.finalizedAt ? new Date(log.finalizedAt).toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—'}</td>
                     <td style="white-space: nowrap;">
-                        <button class="btn-icon download" onclick="downloadSavedJourneyLog(${log.id})" title="Download">⬇️</button>
-                        <button class="btn-icon delete" onclick="deleteJourneyLog(${log.id})" title="Delete">🗑️</button>
+                        <button class="btn-icon download" onclick="downloadSavedJourneyLog(${log.id})" title="Download Log">⬇️</button>
+                        <button class="btn-icon delete" onclick="deleteJourneyLog(${log.id})" title="Delete Log">🗑️</button>
                     </td>
                 </tr>
             `).join('');
@@ -5125,58 +4021,43 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
         const container = document.getElementById('notam-results');
         if (!container) return;
 
-        // Get airport codes from UI
-        const depAirport = (document.getElementById('view-dep')?.innerText || '').trim().toUpperCase();
-        const destAirport = (document.getElementById('view-dest')?.innerText || '').trim().toUpperCase();
-        const altnAirport = (document.getElementById('view-altn')?.innerText || '').trim().toUpperCase();
-        const altn2Airport = (document.getElementById('view-altn2')?.innerText || '').trim().toUpperCase();
-        const eraAirport = (document.getElementById('view-era-text')?.innerText || '').trim().toUpperCase();
-        const alternates = [altnAirport, altn2Airport, eraAirport].filter(code => code && /^[A-Z]{4}$/.test(code));
-        const uniqueAlternates = [...new Set(alternates)];
+        const getCleanStr = id => (document.getElementById(id)?.textContent || '').trim().toUpperCase();
+        
+        const depAirport = getCleanStr('view-dep');
+        const destAirport = getCleanStr('view-dest');
+        
+        // High-speed unique filtering
+        const uniqueAlternates = [...new Set([
+            getCleanStr('view-altn'), getCleanStr('view-altn2'), getCleanStr('view-era-text')
+        ].filter(code => code && /^[A-Z]{4}$/.test(code)))];
 
-        // Get stored METARs and runways
         const metars = window.airportMetars || {};
-        const runways = window.airportRunways || {};
+        const getCleanMetar = apt => apt && metars[apt] ? metars[apt].replace(/^METAR\s+[A-Z]{4}\s+/, '') : null;
 
-        // Helper to get cleaned METAR
-        const getCleanMetar = (apt) => {
-            if (!apt || !metars[apt]) return null;
-            return metars[apt].replace(/^METAR\s+[A-Z]{4}\s+/, '');
-        };
+        const depAlerts = [], destAlerts = [], altAlerts = {}, otherAlerts = [];
 
-        // Group alerts by role and by airport within role
-        const depAlertsByAirport = {};
-        const destAlertsByAirport = {};
-        const altAlertsByAirport = {};
-        const otherAlerts = []; // alerts with no airport or unknown airport
-
+        // O(n) Routing
         alerts.forEach(alert => {
-            const airport = alert.airport ? alert.airport.toString().trim().toUpperCase() : '';
+            const airport = alert.airport ? String(alert.airport).trim().toUpperCase() : '';
             if (!airport || !/^[A-Z]{4}$/.test(airport)) {
                 otherAlerts.push(alert);
-                return;
-            }
-            if (airport === depAirport) {
-                if (!depAlertsByAirport[airport]) depAlertsByAirport[airport] = [];
-                depAlertsByAirport[airport].push(alert);
+            } else if (airport === depAirport) {
+                depAlerts.push(alert);
             } else if (airport === destAirport) {
-                if (!destAlertsByAirport[airport]) destAlertsByAirport[airport] = [];
-                destAlertsByAirport[airport].push(alert);
+                destAlerts.push(alert);
             } else if (uniqueAlternates.includes(airport)) {
-                if (!altAlertsByAirport[airport]) altAlertsByAirport[airport] = [];
-                altAlertsByAirport[airport].push(alert);
+                if (!altAlerts[airport]) altAlerts[airport] = [];
+                altAlerts[airport].push(alert);
             } else {
                 otherAlerts.push(alert);
             }
         });
 
-        // Sorting function for alerts within an airport
-        const severityOrder = { critical: 0, warning: 1, info: 2 };
-        const sortAlerts = (a, b) => {
-            const sevA = severityOrder[(a.severity || '').toLowerCase()] ?? 3;
-            const sevB = severityOrder[(b.severity || '').toLowerCase()] ?? 3;
-            return sevA - sevB;
-        };
+        // Fast severity map
+        const severityOrder = { 'critical': 0, 'warning': 1, 'info': 2 };
+        const sortAlerts = (a, b) => (severityOrder[(a.severity || '').toLowerCase()] ?? 3) - (severityOrder[(b.severity || '').toLowerCase()] ?? 3);
+        
+        // (Next part of the NOTAM engine will resume here)
 
         // Helper to render a single airport's block (runways, METAR, alerts)
         const renderAirportBlock = (apt, alertsArray) => {
@@ -5256,129 +4137,390 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
         container.innerHTML = finalHtml || '<div class="info">No data.</div>';
     }
 
-    // DRAWING FUNCTIONS //
+    // Debounced search filtering to prevent UI lag while typing
+    window.filterOFPs = debounce(function() {
+        renderOFPMangerTable();
+    }, 250);
+
+    // Ultra-clean, reflow-optimized tab switcher
+    window.showTab = window.showTab || function(id, btn) {
+        // 1. Instantly swap active classes with a single DOM pass
+        document.querySelectorAll('.tool-section.active, .nav-btn.active').forEach(el => el.classList.remove('active'));
+        
+        const targetSection = document.getElementById(`section-${id}`);
+        if (targetSection) targetSection.classList.add('active');
+        if (btn) btn.classList.add('active');
+        
+        // 2. Route specific logic
+        switch(id) {
+            case 'sectors':
+                const tabOfp = document.getElementById('tab-ofp');
+                const tabJourney = document.getElementById('tab-journey');
+                const ofpContainer = document.getElementById('ofp-table-container');
+                const journeyContainer = document.getElementById('journey-table-container');
+                
+                if (tabOfp && tabJourney && ofpContainer && journeyContainer) {
+                    tabOfp.classList.add('active');
+                    tabJourney.classList.remove('active');
+                    ofpContainer.style.display = 'block';
+                    journeyContainer.style.display = 'none';
+                }
+                
+                // Allow CSS transition to fire before rendering heavy tables
+                requestAnimationFrame(() => {
+                    renderOFPMangerTable();
+                    if (typeof renderJourneyLogTable === 'function') renderJourneyLogTable();
+                });
+                break;
+
+            case 'assigned':
+                if (typeof loadAssignedFlights === 'function') loadAssignedFlights();
+                break;
+
+            case 'summary':
+                const savedMode = document.body.getAttribute('data-atis-mode') || (typeof currentAtisInputMode !== 'undefined' ? currentAtisInputMode : 'typing');
+                if (typeof applyInputMode === 'function') applyInputMode(savedMode);
+                
+                // Delay canvas init until container is fully visible
+                setTimeout(() => {
+                    if (savedMode === 'writing') {
+                        if (typeof pads !== 'undefined') {
+                            if (!pads.atis.pad && typeof initPad === 'function') initPad('atis');
+                            if (!pads.atc.pad && typeof initPad === 'function') initPad('atc');
+                            if (pads.atis.pad) pads.atis.pad.onEnd = () => typeof debouncedSave === 'function' && debouncedSave();
+                            if (pads.atc.pad) pads.atc.pad.onEnd = () => typeof debouncedSave === 'function' && debouncedSave();
+                        }
+                    } else if (typeof pads !== 'undefined') {
+                        if (pads.atis.pad) { pads.atis.pad.off(); pads.atis.pad = null; }
+                        if (pads.atc.pad) { pads.atc.pad.off(); pads.atc.pad = null; }
+                    }
+                }, 100);
+                break;
+
+            case 'confirm':
+                if (typeof validateOFPInputs === 'function') validateOFPInputs();
+                setTimeout(() => {
+                    if (typeof resizePad === 'function') resizePad('main');
+                    if (typeof restorePadDrawing === 'function') restorePadDrawing('main', 'signature');
+                    if (typeof updateEmptyStates === 'function') updateEmptyStates(); 
+                }, 50);
+                break;
+
+            case 'flight-analysis':
+                if (typeof analyzeNotamsAndWeather === 'function') analyzeNotamsAndWeather();
+                break;
+        }
+
+        // 3. Final UI cleanup
+        if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
+    };
+
+// ==========================================
+// 8. NAVIGATION MENU
+// ==========================================
+
+    function initializeTabNavigation() {
+        const buttons = document.querySelectorAll('.nav-btn');
+        
+        buttons.forEach(button => {
+            // High-speed native event router instead of regex parsing
+            const tabId = button.dataset.tab || button.getAttribute('onclick')?.match(/showTab\('([^']+)'/)?.[1];
+            
+            if (tabId) {
+                // Remove inline onclick to prevent double-firing
+                button.removeAttribute('onclick');
+                
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    if (typeof window.showTab === 'function') {
+                        window.showTab(tabId, this);
+                    }
+                });
+            }
+        });
+    }
+
+    async function updateEmptyStates() {
+        const activeSection = document.querySelector('.tool-section.active');
+        if (!activeSection) return;
+
+        const activeTabId = activeSection.id.replace('section-', '');
+        
+        // Fast exit for tabs that don't use empty states
+        if (['assigned', 'sectors', 'settings', 'journey'].includes(activeTabId)) return;
+
+        const container = activeSection.querySelector('.scrollable-content') || activeSection;
+        
+        if (!isOFPLoaded) {
+            let hasAnyOFP = false;
+            try {
+                // Lightweight count check without pulling PDF data
+                hasAnyOFP = (await getOFPCount()) > 0;
+            } catch(e) {}
+
+            if (hasAnyOFP) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px; margin-bottom: 20px;">📂</div>
+                        <h3>No Active OFP</h3>
+                        <p style="color: var(--dim); margin-bottom: 20px;">You have saved OFPs, but none are currently active.</p>
+                        <button onclick="window.showTab('sectors', document.querySelector('.nav-btn[data-tab=\\'sectors\\']'))" 
+                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
+                            Go to Sectors to Activate
+                        </button>
+                    </div>`;
+            } else {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px; margin-bottom: 20px;">✈️</div>
+                        <h3>No Active OFP</h3>
+                        <p style="color: var(--dim); margin-bottom: 20px;">Upload an OFP or download one from Skyplan.</p>
+                        <button onclick="window.goToAssignedAndActivate()" 
+                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
+                            Check Assigned Flights
+                        </button>
+                    </div>`;
+            }
+        }
+    }
+
+    async function renderPDFPreview(pdfBytes) {
+        const container = document.getElementById('pdf-render-container');
+        const fallback = document.getElementById('pdf-fallback');
+        
+        if (!container || !pdfBytes) return;
+        
+        // --- MEMORY LEAK FIX ---
+        // Explicitly clear old canvases to force garbage collection before destroying DOM
+        const oldCanvases = container.querySelectorAll('canvas');
+        oldCanvases.forEach(c => {
+            c.width = 0; 
+            c.height = 0;
+        });
+        container.innerHTML = '';
+        container.style.display = 'none';
+
+        if (fallback) {
+            fallback.style.display = 'flex';
+            fallback.innerHTML = `<span style="font-size:30px; margin-bottom:10px;">⏳</span><span>Loading PDF preview...</span>`;
+        }
+        
+        try {
+            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+            const pdfQuality = settings.pdfQuality || '1.0';
+
+            const qualityMultipliers = { '0.8': 1.0, '1.0': 1.5, '1.5': 2.0, '2.0': 3.0 };
+            const multiplier = qualityMultipliers[pdfQuality] || 1.5;
+
+            const deviceScale = window.devicePixelRatio || 1;
+            let scale = Math.max(Math.min(deviceScale * multiplier, 5.0), 1.0);
+
+            const pdf = await pdfjsLib.getDocument(pdfBytes).promise;
+            const totalPages = pdf.numPages;
+
+            if (fallback) fallback.style.display = 'none';
+            container.style.display = 'block';
+
+            const progressDiv = document.createElement('div');
+            progressDiv.style.cssText = `position: sticky; top: 0; background: var(--accent); color: white; padding: 10px; text-align: center; font-size: 14px; z-index: 100; border-radius: 5px; margin-bottom: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);`;
+            progressDiv.textContent = `Rendering page 1 of ${totalPages}...`;
+            container.appendChild(progressDiv);
+
+            const pagesWrapper = document.createElement('div');
+            pagesWrapper.style.cssText = `display: flex; flex-direction: column; align-items: center; gap: 15px;`;
+            container.appendChild(pagesWrapper);
+
+            for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+                try {
+                    progressDiv.textContent = `Rendering page ${pageNum} of ${totalPages}...`;
+                    
+                    // Allow UI thread to breathe to prevent iPad freezing
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+
+                    const page = await pdf.getPage(pageNum);
+                    const viewport = page.getViewport({ scale });
+
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    
+                    canvas.style.cssText = `width: 100%; height: auto; margin-bottom: 5px; background: white; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); display: block;`;
+
+                    const pageContainer = document.createElement('div');
+                    pageContainer.style.cssText = `text-align: center; width: 100%;`;
+                    
+                    const pageLabel = document.createElement('div');
+                    pageLabel.style.cssText = `font-size: 12px; color: #666; font-family: monospace; background: #f5f5f5; padding: 3px 10px; border-radius: 3px; display: inline-block; margin-bottom: 5px;`;
+                    pageLabel.textContent = `Page ${pageNum}`;
+
+                    pageContainer.appendChild(pageLabel);
+                    pageContainer.appendChild(canvas);
+                    pagesWrapper.appendChild(pageContainer);
+
+                    await page.render({ canvasContext: context, viewport }).promise;
+                } catch (pageError) {
+                    console.warn(`Error rendering page ${pageNum}:`, pageError);
+                    const errorDiv = document.createElement('div');
+                    errorDiv.style.cssText = `background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; color: #856404; text-align: center; width: 100%; border-radius: 4px;`;
+                    errorDiv.innerHTML = `<strong>Page ${pageNum}:</strong> Failed to render`;
+                    pagesWrapper.appendChild(errorDiv);
+                }
+            }
+
+            progressDiv.remove();
+
+            const summary = document.createElement('div');
+            summary.style.cssText = `text-align: center; color: var(--dim); font-size: 12px; padding: 15px; border-top: 1px solid var(--border); width: 100%; margin-top: 10px;`;
+            const qualityLabels = { '0.8': 'Low', '1.0': 'Medium', '1.5': 'High', '2.0': 'Maximum' };
+            summary.textContent = `Rendered ${totalPages} pages at ${qualityLabels[pdfQuality] || 'Medium'} Quality (${(scale * 100).toFixed(0)}% scale)`;
+            pagesWrapper.appendChild(summary);
+
+        } catch (error) {
+            console.error("Critical error rendering PDF:", error);
+            container.style.display = 'none';
+            if (fallback) {
+                fallback.style.display = 'flex';
+                fallback.innerHTML = `
+                    <div style="text-align: center;">
+                        <span style="font-size:30px; margin-bottom:10px;">❌</span>
+                        <h3 style="color: var(--error);">Rendering Failed</h3>
+                        <p style="color: var(--dim); margin: 10px 0;">${error.message || 'Unable to process PDF'}</p>
+                        <button onclick="retryPDFRender()" style="padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; margin-top: 10px;">Try Again</button>
+                    </div>`;
+            }
+        }
+    }
+
+    window.retryPDFRender = async function() {
+        if (window.ofpPdfBytes) {
+            await renderPDFPreview(window.ofpPdfBytes);
+        } else {
+            showToast("No PDF loaded. Please upload an OFP first.", "error");
+        }
+    };
+
+    function updateUIAfterParsing() {
+        const val = blockFuelValue || 0;
+        safeSet('view-pic-block', val); // Uses smart DOM logic
+        
+        if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+        renderFuelTable();
+        if (typeof renderFlightLogTables === 'function') renderFlightLogTables();
+    }
+
+    
+// ==========================================
+// 8. DRAWING PAD ENGINE
+// ==========================================
+    
+    // Attaches the save listener natively
     function attachPadOnEnd(pad, name) {
         if (!pad) return;
-        const canvas = pad.canvas;
-        if (!canvas) {
-            console.warn(`attachPadOnEnd: canvas not found for pad ${name}`);
-            return;
-        }
 
-        // Remove any existing pointer listener to avoid duplicates
-        if (pad._pointerUpListener) {
-            canvas.removeEventListener('pointerup', pad._pointerUpListener);
-        }
-
-        // Save function that also triggers validation for main pad
-        const saveFunc = () => {
-            saveState();
-            if (name === 'main') {
-                validateOFPInputs(); // updates button state
+        // Rely solely on SignaturePad's native 'onEnd' event. 
+        // No custom pointerup events are needed (prevents double-saving).
+        pad.onEnd = () => {
+            if (typeof debouncedSave === 'function') debouncedSave();
+            if (name === 'main' && typeof validateOFPInputs === 'function') {
+                validateOFPInputs();
             }
         };
-
-        // Primary: library's onEnd
-        pad.onEnd = saveFunc;
-
-        // Fallback: direct pointerup event
-        const onPointerUp = (e) => {
-            setTimeout(() => {
-                if (pad && !pad.isEmpty()) {
-                    saveFunc();
-                }
-            }, 10);
-        };
-        canvas.addEventListener('pointerup', onPointerUp);
-        pad._pointerUpListener = onPointerUp;
     }
 
     function initPad(name) {
         const p = pads[name];
         if (!p) return;
+        
         const canvas = document.getElementById(p.canvasId);
         if (!canvas) return;
 
+        // Force a layout reflow to guarantee we have exact dimensions
+        const computed = window.getComputedStyle(canvas);
+        const containerWidth = canvas.offsetWidth || parseInt(computed.width) || 200;
+        const containerHeight = canvas.offsetHeight || parseInt(computed.height) || 80;
+
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        const containerWidth = canvas.offsetWidth;
-        const containerHeight = canvas.offsetHeight;
 
-        // Fallback if hidden
-        let width, height;
-        if (containerWidth === 0 || containerHeight === 0) {
-            const computed = getComputedStyle(canvas);
-            width = parseInt(computed.width) || 200;
-            height = parseInt(computed.height) || 80;
-        } else {
-            width = containerWidth;
-            height = containerHeight;
-        }
-
-        canvas.width = width * ratio;
-        canvas.height = height * ratio;
+        // Set actual internal dimensions for Retina crispness
+        canvas.width = containerWidth * ratio;
+        canvas.height = containerHeight * ratio;
+        
+        // CSS dimensions dictate physical size
+        canvas.style.width = `${containerWidth}px`;
+        canvas.style.height = `${containerHeight}px`;
 
         const ctx = canvas.getContext('2d');
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(ratio, ratio);
+
+        // Fetch user's CSS accent color dynamically
+        const penColor = window.getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#007aff';
 
         p.pad = new SignaturePad(canvas, {
             backgroundColor: 'rgba(0,0,0,0)',
-            penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+            penColor: penColor,
+            minWidth: 1,
+            maxWidth: 3
         });
 
-        // Attach onEnd and direct pointerup listener
         attachPadOnEnd(p.pad, name);
 
-        // Restore saved drawing if any
-        if (name === 'main') {
-            restorePadDrawing('main', 'signature');
-        } else if (name === 'atis') {
-            restorePadDrawing('atis', 'front-atis-drawing');
-        } else if (name === 'atc') {
-            restorePadDrawing('atc', 'front-atc-drawing');
-        }
+        // Restore saved drawings mapping
+        const saveKeys = {
+            'main': 'signature',
+            'atis': 'front-atis-drawing',
+            'atc': 'front-atc-drawing'
+        };
+        
+        if (saveKeys[name]) restorePadDrawing(name, saveKeys[name]);
 
-        p.lastWidth = width;
-        p.lastHeight = height;
+        p.lastWidth = containerWidth;
+        p.lastHeight = containerHeight;
         p.lastRatio = ratio;
 
         return p.pad;
     }
 
+    // Debounced Resize prevents iPad rotation stretching bugs
     function resizePad(name) {
         const p = pads[name];
         if (!p || !p.pad) return;
+        
         const canvas = p.pad.canvas;
-        if (!canvas) return;
+        if (!canvas || canvas.offsetWidth === 0) return;
 
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
         const containerWidth = canvas.offsetWidth;
         const containerHeight = canvas.offsetHeight;
 
+        // Only resize if physical dimensions actually changed
         if (containerWidth === p.lastWidth && containerHeight === p.lastHeight && ratio === p.lastRatio) {
             return;
         }
 
+        // Cache the current drawing data before wiping the canvas
         const currentData = p.pad.isEmpty() ? null : p.pad.toDataURL();
 
+        // Re-scale internal resolution
         canvas.width = containerWidth * ratio;
         canvas.height = containerHeight * ratio;
 
         const ctx = canvas.getContext('2d');
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(ratio, ratio);
 
+        // Re-initialize pad to recalculate bounding boxes
+        const penColor = window.getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
         p.pad = new SignaturePad(canvas, {
             backgroundColor: 'rgba(0,0,0,0)',
-            penColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+            penColor: penColor,
+            minWidth: 1,
+            maxWidth: 3
         });
 
-        // Re‑attach onEnd
         attachPadOnEnd(p.pad, name);
 
-        if (currentData) {
-            p.pad.fromDataURL(currentData, { ratio });
-        }
+        // Restore drawing, telling SignaturePad to rescale it to the new ratio
+        if (currentData) p.pad.fromDataURL(currentData, { ratio: ratio });
 
         p.lastWidth = containerWidth;
         p.lastHeight = containerHeight;
@@ -5390,15 +4532,18 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
         if (!activeId) return;
 
         try {
+            // First check the database for the active flight
             const userData = await loadOFPUserData(Number(activeId));
-            if (!userData || !userData.userInputs) return;
+            let data = userData?.userInputs?.[drawingKey];
 
-            let data = userData.userInputs[drawingKey];
+            // If not found, check the temporary legacy fallback in LocalStorage
             if (!data) {
-                const backupKey = `drawing_backup_${activeId}_${drawingKey === 'front-atis-drawing' ? 'atis' : drawingKey === 'front-atc-drawing' ? 'atc' : 'signature'}`;
+                const legacyMap = { 'front-atis-drawing': 'atis', 'front-atc-drawing': 'atc', 'signature': 'signature' };
+                const backupKey = `drawing_backup_${activeId}_${legacyMap[drawingKey]}`;
                 data = localStorage.getItem(backupKey);
             }
 
+            // Only attempt to load valid, non-empty base64 PNGs
             if (!data || !data.startsWith('data:image/png;base64,') || data.length < 100) return;
 
             const pad = pads[padName]?.pad;
@@ -5407,441 +4552,222 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
                 return;
             }
 
-            // Check if canvas is visible and has dimensions
             const canvas = pad.canvas;
             if (canvas.offsetWidth === 0 || canvas.offsetHeight === 0) {
-                // Canvas not ready – retry later
                 setTimeout(() => restorePadDrawing(padName, drawingKey), 200);
                 return;
             }
 
-            try {
-                await pad.fromDataURL(data);
-                resizePad(padName);
-            } catch (e) {
-                console.warn(`Signature restore failed for ${padName}:`, e);
-            }
+            await pad.fromDataURL(data);
+            
+            // Force a quick resize check to ensure the aspect ratio matches current rotation
+            resizePad(padName);
+            
         } catch (e) {
-            console.error(`Failed to restore ${drawingKey}:`, e);
+            console.error(`Failed to restore ${drawingKey} to ${padName}:`, e);
         }
     }
 
     function clearPad(padName) {
         const pad = pads[padName]?.pad;
-        if (pad) {
-            pad.clear();
-            if (padName === 'main') {
-                validateOFPInputs();
-            }
-            // Remove backup from localStorage
-            const activeId = localStorage.getItem('activeOFPId');
-            if (activeId) {
-                let backupKey;
-                if (padName === 'main') backupKey = `drawing_backup_${activeId}_signature`;
-                else if (padName === 'atis') backupKey = `drawing_backup_${activeId}_atis`;
-                else if (padName === 'atc') backupKey = `drawing_backup_${activeId}_atc`;
-                if (backupKey) localStorage.removeItem(backupKey);
-            }
-            debouncedSave(); // save cleared state
+        if (!pad) return;
+        
+        pad.clear();
+        
+        if (padName === 'main' && typeof validateOFPInputs === 'function') {
+            validateOFPInputs();
         }
+
+        const activeId = localStorage.getItem('activeOFPId');
+        if (activeId) {
+            const legacyMap = { 'main': 'signature', 'atis': 'atis', 'atc': 'atc' };
+            localStorage.removeItem(`drawing_backup_${activeId}_${legacyMap[padName]}`);
+        }
+
+        if (typeof debouncedSave === 'function') debouncedSave();
     }
 
-    // Toggle UI and (re)create canvases
+    // Toggle UI between Text Inputs and Drawing Canvases
     function applyInputMode(mode) {
-        // If already in this mode, skip
-        if (mode === currentAtisInputMode) {
-            return;
-        }
+        if (mode === currentAtisInputMode) return;
         currentAtisInputMode = mode;
-        const atisInput = document.getElementById('front-atis');
-        const atcInput = document.getElementById('front-atc');
-        const atisCanvas = document.getElementById('front-atis-canvas');
-        const atcCanvas = document.getElementById('front-atc-canvas');
+
+        const uiElements = {
+            atis: { input: document.getElementById('front-atis'), canvas: document.getElementById('front-atis-canvas') },
+            atc: { input: document.getElementById('front-atc'), canvas: document.getElementById('front-atc-canvas') }
+        };
 
         if (mode === 'typing') {
-            // Cancel any pending debounced save
-            debouncedSave.cancel();
-            // Save any pending drawing immediately
-            saveState();
+            // Save state and kill any active debounces
+            if (typeof debouncedSave === 'function') debouncedSave.cancel();
+            if (typeof saveState === 'function') saveState();
 
-            // Show inputs, hide canvases
-            if (atisInput) {
-                atisInput.style.display = '';
-                atisInput.style.visibility = 'visible';
-            }
-            if (atcInput) {
-                atcInput.style.display = '';
-                atcInput.style.visibility = 'visible';
-            }
-            if (atisCanvas) {
-                atisCanvas.style.display = 'none';
-                atisCanvas.style.visibility = 'hidden';
-            }
-            if (atcCanvas) {
-                atcCanvas.style.display = 'none';
-                atcCanvas.style.visibility = 'hidden';
-            }
-            // Destroy pads
-            if (pads.atis.pad) { pads.atis.pad.off(); pads.atis.pad = null; }
-            if (pads.atc.pad) { pads.atc.pad.off(); pads.atc.pad = null; }
-        } else { // writing mode
-            // Hide inputs, show canvases
-            if (atisInput) {
-                atisInput.style.display = 'none';
-                atisInput.style.visibility = 'hidden';
-            }
-            if (atcInput) {
-                atcInput.style.display = 'none';
-                atcInput.style.visibility = 'hidden';
-            }
-            if (atisCanvas) {
-                atisCanvas.style.display = 'block';
-                atisCanvas.style.visibility = 'visible';
-            }
-            if (atcCanvas) {
-                atcCanvas.style.display = 'block';
-                atcCanvas.style.visibility = 'visible';
-            }
+            ['atis', 'atc'].forEach(key => {
+                if (uiElements[key].input) uiElements[key].input.style.display = 'block';
+                if (uiElements[key].canvas) uiElements[key].canvas.style.display = 'none';
+                
+                // Explicitly memory-wipe the pad
+                if (pads[key].pad) {
+                    pads[key].pad.off();
+                    pads[key].pad = null;
+                }
+            });
+
+        } else { // 'writing' mode
+            ['atis', 'atc'].forEach(key => {
+                if (uiElements[key].input) uiElements[key].input.style.display = 'none';
+                if (uiElements[key].canvas) uiElements[key].canvas.style.display = 'block';
+            });
 
             const activeSection = document.querySelector('.tool-section.active');
             if (activeSection && activeSection.id === 'section-summary') {
+                // Wait for CSS reflow to finish before grabbing canvas width
                 requestAnimationFrame(() => {
                     setTimeout(() => {
-                        if (!pads.atis.pad) {
-                            initPad('atis');
-                        } else {
-                            // Re‑attach onEnd (already attached, but double‑check)
-                            attachPadOnEnd(pads.atis.pad, 'atis');
-                        }
-                        if (!pads.atc.pad) {
-                            initPad('atc');
-                        } else {
-                            attachPadOnEnd(pads.atc.pad, 'atc');
-                            console.log('✍️ ATC pad onEnd re‑attached');
-                        }
+                        if (!pads.atis.pad) initPad('atis');
+                        if (!pads.atc.pad) initPad('atc');
                     }, 50);
                 });
             }
         }
+        
         document.body.setAttribute('data-atis-mode', mode);
     }
 
-    // INCREMENTAL UPDATE //
-    function updateFlightLogTablesIncremental() {
-        const table = el('ofp-tbody');
-        if (!table) return;
-        
-        const rows = table.querySelectorAll('tr[data-type="o"]');
-        
-        waypoints.forEach((wp, i) => {
-            const row = rows[i];
-            if (!row) return;
-            
-            // Update ETO cell
-            const etoCell = row.querySelector(`#o-eto-${i}`);
-            if (etoCell) {
-                const newEto = wp.eto || "--";
-                if (etoCell.textContent !== newEto) {
-                    etoCell.textContent = newEto;
-                }
-            }
-            
-            // Update calculated fuel cell
-            const fuelCell = row.querySelector(`#o-calcfuel-${i}`);
-            if (fuelCell) {
-                const newFuel = Math.round(wp.fuel) || "-";
-                if (fuelCell.textContent !== String(newFuel)) {
-                    fuelCell.textContent = newFuel;
-                }
-            }
-        });
-    }
 
-    function updateAlternateTableIncremental() {
-        const table = el('altn-tbody');
-        if (!table) return;
-        
-        const rows = table.querySelectorAll('tr[data-type="a"]');
-        
-        alternateWaypoints.forEach((wp, i) => {
-            const row = rows[i];
-            if (!row) return;
-            
-            // Update ETO cell
-            const etoCell = row.querySelector(`#a-eto-${i}`);
-            if (etoCell) {
-                const newEto = wp.eto || "--";
-                if (etoCell.textContent !== newEto) {
-                    etoCell.textContent = newEto;
-                }
-            }
-            
-            // Update calculated fuel cell
-            const fuelCell = row.querySelector(`#a-calcfuel-${i}`);
-            if (fuelCell) {
-                const newFuel = Math.round(wp.fuel) || "-";
-                if (fuelCell.textContent !== String(newFuel)) {
-                    fuelCell.textContent = newFuel;
-                }
-            }
-        });
-    }
-
-    window.updateTakeoffTime = function(v) {
-        try {
-            const validated = validateTimeInputs(v, 'Takeoff Time');
-            if(el('ofp-atd-in')) el('ofp-atd-in').value = validated.value;
-            if(el('j-off')) el('j-off').value = validated.value;
-            debouncedFullRecalc();
-        } catch (error) {
-            alert(error.message);
-            // Revert to previous value
-            const current = el('ofp-atd-in')?.value || '';
-            if(el('ofp-atd-in')) el('ofp-atd-in').value = current;
-            if(el('j-off')) el('j-off').value = current;
-        }
-    };
-
-    window.updateAlternateETOs = function() {
-        if (waypoints.length === 0 || alternateWaypoints.length === 0) return;
-
-        const lastPrimaryIdx = waypoints.length - 1;
-        
-        // 1. Determine Base Time (Destination Arrival)
-        let baseTimeStr = waypointATOCache[lastPrimaryIdx]?.value;
-        if (!baseTimeStr) {
-             // Fallback to ETO
-             const destEto = waypoints[lastPrimaryIdx].eto; 
-             if(destEto && destEto.length === 4) {
-                 baseTimeStr = destEto.substring(0,2) + ":" + destEto.substring(2,4);
-             }
-        }
-
-        if (!baseTimeStr) return; // No time to calc from
-
-        // 2. Calculate Alternate Times
-        const [bh, bm] = baseTimeStr.includes(':') 
-            ? baseTimeStr.split(':').map(Number) 
-            : [parseInt(baseTimeStr.substring(0,2)), parseInt(baseTimeStr.substring(2,4))];
-        
-        const baseDate = new Date(Date.UTC(2000,0,1,bh,bm));
-        
-        // We calculate the delta from the Destination (OFP totalMins is cumulative from Takeoff)
-        const destMins = waypoints[lastPrimaryIdx].totalMins;
-
-        alternateWaypoints.forEach((wp, i) => {
-            let delta = wp.totalMins - destMins;
-            // Handle cases where alternate mins might reset to 0 in OFP
-            if (delta < 0) delta = wp.totalMins; 
-
-            const target = new Date(baseDate.getTime() + (delta * 60000));
-            const newEto = target.getUTCHours().toString().padStart(2,'0') + 
-                           target.getUTCMinutes().toString().padStart(2,'0');
-            
-            // 3. Update Data & UI
-            wp.eto = newEto; // Update internal data for PDF
-            const cell = el(`a-eto-${i}`); // Update visual table
-            if (cell) cell.innerText = newEto;
-        });
-    };
+// ==========================================
+// 9. Journey Log
+// ==========================================
 
     function updateFloatingButtonVisibility() {
-        const floatingBtn = document.getElementById('floating-upload-btn');
-        const floatingGroup = document.getElementById('floating-btn-group');
+        const floatingBtn = el('floating-upload-btn');
+        const floatingGroup = el('floating-btn-group');
         if (!floatingBtn || !floatingGroup) return;
         
-        // Get current active tab
         const activeSection = document.querySelector('.tool-section.active');
-        if (!activeSection) return;
+        const isJourney = activeSection && activeSection.id === 'section-journey';
         
-        const activeTabId = activeSection.id.replace('section-', '');
-        
-        // Hide on Journey Log tab OR if OFP is already loaded
-        if (activeTabId === 'journey' || isOFPLoaded) {
-            floatingBtn.classList.add('hidden');
-            floatingGroup.classList.add('hidden');
-        } else {
-            floatingBtn.classList.remove('hidden');
-            floatingGroup.classList.remove('hidden');
-        }
+        // Collapse the logic: Hide if on Journey tab OR if OFP is loaded
+        const action = (isJourney || isOFPLoaded) ? 'add' : 'remove';
+        floatingBtn.classList[action]('hidden');
+        floatingGroup.classList[action]('hidden');
     }
 
-    // Helper function to create HTML for a single row
     function createWaypointRowHtml(wp, i, pre) {
-        const timeInput = `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px">`;
+        const timeInput = `<input type="time" id="${pre}-a-${i}" class="input" style="padding:8px" inputmode="numeric" pattern="[0-9]*">`;
         const actFuelInput = `<input type="number" id="${pre}-f-${i}" class="input" style="width:70px; padding:8px; background:rgba(255,255,255,0.05); border:1px solid var(--border); color:var(--text); text-align:center;">`;
         const actFlInput = `<input type="number" id="${pre}-agl-${i}" class="input" maxlength="3" style="width:50px;padding:8px;text-align:center;color:var(--accent)">`;
         const notesInput = `<input type="text" id="${pre}-n-${i}" class="input" style="padding:8px; width:100%" placeholder="...">`;
 
         return `<tr data-index="${i}" data-type="${pre}">
-            <td style="font-weight:bold">${wp.name}</td>
-            <td style="font-size:12px">${wp.awy || "-"}</td>
-            <td style="font-size:12px">${wp.sr || "-"}</td> 
-            <td style="font-size:12px; font-weight:bold; color:var(--text)">${wp.level || "-"}</td>
-            <td style="font-size:12px">${wp.track || "-"}</td>
-            <td style="font-size:12px">${wp.wind || "-"}</td>
-            <td style="font-size:12px">${wp.tas || "-"}</td>
-            <td style="font-size:12px">${wp.gs || "-"}</td>
+            <td style="font-weight:bold">${sanitizeHTML(wp.name)}</td>
+            <td style="font-size:12px">${sanitizeHTML(wp.awy || "-")}</td>
+            <td style="font-size:12px">${sanitizeHTML(wp.sr || "-")}</td> 
+            <td style="font-size:12px; font-weight:bold; color:var(--text)">${sanitizeHTML(wp.level || "-")}</td>
+            <td style="font-size:12px">${sanitizeHTML(wp.track || "-")}</td>
+            <td style="font-size:12px">${sanitizeHTML(wp.wind || "-")}</td>
+            <td style="font-size:12px">${sanitizeHTML(wp.tas || "-")}</td>
+            <td style="font-size:12px">${sanitizeHTML(wp.gs || "-")}</td>
             <td>${notesInput}</td>
-            <td id="${pre}-eto-${i}" class="eto-cell">${wp.eto || "--"}</td>
+            <td id="${pre}-eto-${i}" class="eto-cell">${sanitizeHTML(wp.eto || "--")}</td>
             <td>${timeInput}</td>
-            <td id="${pre}-calcfuel-${i}" class="fuel-cell">${Math.round(wp.fuel) || "-"}</td>
+            <td id="${pre}-calcfuel-${i}" class="fuel-cell">${wp.fuel ? Math.round(wp.fuel) : "-"}</td>
             <td>${actFuelInput}</td>
             <td>${actFlInput}</td>
         </tr>`;
     }
 
-    // JOURNEY LOG TAB //
     window.renderJourneyList = function() {
         const tb = el('journey-list-body');
-        if(!tb) return;
+        if (!tb) return;
 
-        if(dailyLegs.length === 0) {
-            tb.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 15px; color: #888;">No legs added.</td></tr>';
-        } else {
-            tb.innerHTML = dailyLegs.map((l, i) => {
-                const canMoveUp = i > 0; 
-                const canMoveDown = i < dailyLegs.length - 1;
-                return `
-                <tr>
-                    <td style="text-align:center; font-weight:bold;">${i+1}</td>
-                    <td>${sanitizeHTML(l['j-flt'])}</td>
-                    <td>${sanitizeHTML(l['j-dep'])} - ${sanitizeHTML(l['j-dest'])}</td>
-                    <td style="white-space: nowrap; text-align: right;">
-                        <button onclick="moveLeg(${i}, -1)" class="btn-icon" ${!canMoveUp ? 'disabled style="opacity:0.3"' : ''} title="Move Up">
-                            ▲
-                        </button>
-                        <button onclick="moveLeg(${i}, 1)" class="btn-icon" ${!canMoveDown ? 'disabled style="opacity:0.3"' : ''} title="Move Down">
-                            ▼
-                        </button>
-                        <button onclick="modifyLeg(${i})" class="btn-action modify" style="margin-left: 8px;">
-                            Edit
-                        </button>
-                        <button onclick="removeLeg(${i})" class="btn-action delete" style="margin-left: 5px;">
-                            Delete
-                        </button>
-                    </td>
-                </tr>
-                `;
-            }).join('');
+        if (!dailyLegs || dailyLegs.length === 0) {
+            tb.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 15px; color: var(--dim);">No legs added.</td></tr>';
+            return;
         }
+
+        tb.innerHTML = dailyLegs.map((l, i) => {
+            const canMoveUp = i > 0; 
+            const canMoveDown = i < dailyLegs.length - 1;
+            return `
+            <tr>
+                <td style="text-align:center; font-weight:bold;">${i + 1}</td>
+                <td>${sanitizeHTML(l['j-flt'])}</td>
+                <td>${sanitizeHTML(l['j-dep'])} - ${sanitizeHTML(l['j-dest'])}</td>
+                <td style="white-space: nowrap; text-align: right;">
+                    <button onclick="moveLeg(${i}, -1)" class="btn-icon" ${!canMoveUp ? 'disabled style="opacity:0.3"' : ''} title="Move Up">▲</button>
+                    <button onclick="moveLeg(${i}, 1)" class="btn-icon" ${!canMoveDown ? 'disabled style="opacity:0.3"' : ''} title="Move Down">▼</button>
+                    <button onclick="modifyLeg(${i})" class="btn-action modify" style="margin-left: 8px;">Edit</button>
+                    <button onclick="removeLeg(${i})" class="btn-action delete" style="margin-left: 5px;">Delete</button>
+                </td>
+            </tr>`;
+        }).join('');
     };
 
     function clearJourneyInputs(transferFuel = "") {
-        // 1. Clear Times
-        ['j-out', 'j-off', 'j-on', 'j-in', 'j-night'].forEach(id => safeSet(id, ''));
+        ['j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-ldg-detail',
+         'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2', 'j-adl', 
+         'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw', 'j-std', 'j-sta'].forEach(id => safeSet(id, ''));
         
-        // 2. Clear Landing Type and ID
-        ['j-to', 'j-ldg', 'j-ldg-type', 'j-ldg-detail'].forEach(id => safeSet(id, ''));
+        safeSet('j-init', transferFuel || '');
         
-        // 3. Clear Fuel/Load
-        ['j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw'].forEach(id => safeSet(id, ''));
-        
-        // 4. Transfer 'Shutdown Fuel' to 'Inital Fuel' on the next leg
-        if (transferFuel) {
-            safeSet('j-init', transferFuel);
-        } else {
-            safeSet('j-init', '');
-        }
-
-        safeSet('j-std', '');
-        safeSet('j-sta', '');
-
-        // Reset Calculated Displays
         ['j-flight','j-block'].forEach(id => safeSet(id, '00:00'));
         ['j-calc-ramp','j-burn','j-disc'].forEach(id => safeSet(id, '0'));
     }
 
     window.addLeg = function() {
-        // If Destination is empty, stop immediately
         const dest = el('j-dest')?.value;
         const dep = el('j-dep')?.value;
-        if (!dest || !dep) {
-            return alert("No legs to insert");
-        }
+        if (!dest || !dep) return showToast("No legs to insert", "error");
+        if (dailyLegs.length >= 4) return showToast("Max 4 legs allowed.", "error");
 
-        // Allow only maximum 4 legs
-        if(dailyLegs.length >= 4) return alert("Max 4 legs.");
+        const form = el('leg-input-form');
+        if (form) form.style.setProperty("display", "none", "important");
 
-        // 1. Force hide tab
-        const form = document.getElementById('leg-input-form');
-        if (form) {
-            form.style.setProperty("display", "none", "important");
-        }
-
-        // 2. Auto-calculate duty (Only on first leg)
+        // Duty calculation for first leg
         if (dailyLegs.length === 0) {
-            // Check if user has ALREADY entered a manual time
             const currentFC = el('j-duty-start')?.value;
             const currentCC = el('j-cc-duty-start')?.value;
 
-            // Only auto-calculate if fields are empty or "00:00"
             if (!currentFC || currentFC === "00:00" || !currentCC || currentCC === "00:00") {
+                const dutyValues = calculateDutyValues(el('j-std')?.value || "", el('j-flt')?.value || "", dep, dest);
                 
-                const std = el('j-std')?.value || "";
-                const flt = el('j-flt')?.value || "";
-                
-                const dutyValues = calculateDutyValues(std, flt, dep, dest);
-                
-                // Only overwrite if the specific field was empty
                 if (!currentFC || currentFC === "00:00") safeSet('j-duty-start', dutyValues.fc);
                 if (!currentCC || currentCC === "00:00") safeSet('j-cc-duty-start', dutyValues.cc);
+                if (!el('j-max-fdp')?.value || el('j-max-fdp')?.value === "00:00") safeSet('j-max-fdp', dutyValues.max);
                 
-                // Always calc Max FDP if it's empty
-                if (!el('j-max-fdp')?.value || el('j-max-fdp')?.value === "00:00") {
-                    safeSet('j-max-fdp', dutyValues.max);
-                }
-                
-                // Set the hidden cabin crew max FDP
                 setCCMaxFDP(dutyValues.ccMax);
             }
-            
-            // Ensure the global variable is synced with whatever ended up in the box
-            dutyStartTime = parseTimeString(el('j-duty-start')?.value);
+            dutyStartTime = parseTimeStr(el('j-duty-start')?.value);
         }
 
-        // 3. Auto-calculate night block
+        // Night Block calculation
         const offBlock = el('j-off')?.value;
         const onBlock = el('j-in')?.value;
-        
         if (offBlock && onBlock) {
-            // Calculate night block time and display it in j-night-calc for reference
-            const nightBlockTime = calculateNightDuty(parseTimeString(offBlock), parseTimeString(onBlock));
+            const nightBlockTime = calculateNightDuty(parseTimeStr(offBlock), parseTimeStr(onBlock));
             safeSet('j-night-calc', nightBlockTime);
-            
-            // If j-night is empty, we can auto-fill it with the calculated value
-            if (!el('j-night')?.value) {
-                safeSet('j-night', nightBlockTime);
-            }
+            if (!el('j-night')?.value) safeSet('j-night', nightBlockTime);
         } else {
             safeSet('j-night-calc', '00:00');
         }
 
-        // 4. Save current leg data
+        // Optimized data collection
         const d = {};
-        const getValue = (id) => {
-            const e = el(id);
-            if (!e) return "";
-            return (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA') 
-                    ? e.value : (e.innerText || e.textContent);
-        };
-
-        // --- EXPANDED KEYS LIST (Captures all form and view fields) ---
         const keysToSave = [
             'j-date', 'j-std', 'j-sta', 'j-flt', 'j-reg', 'j-dep', 'j-dest', 'j-altn', 'j-out', 'j-off', 'j-on', 'j-in', 
-            'j-block', 'j-flight', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 
-            'j-ldg-detail', 'j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 
-            'j-burn', 'j-uplift-vol', 'j-slip', 'j-slip-2', 'j-disc', 'j-adl', 'j-chl', 
-            'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw', 'j-date', 'j-std', 'j-sta',
-            // View / Display Elements
+            'j-block', 'j-flight', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail', 'j-init', 
+            'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 'j-burn', 'j-uplift-vol', 'j-slip', 'j-slip-2', 'j-disc', 
+            'j-adl', 'j-chl', 'j-inf', 'j-cargo', 'j-mail', 'j-bag', 'j-zfw',
             'view-date', 'view-reg', 'view-dep', 'view-arr', 'view-std-text', 'view-sta-text'
         ];
 
         keysToSave.forEach(k => {
-            d[k] = getValue(k);
+            const e = el(k);
+            d[k] = e ? (e.tagName === 'INPUT' || e.tagName === 'SELECT' || e.tagName === 'TEXTAREA' ? e.value : (e.innerText || e.textContent)) : "";
         });
 
-        // Cross-map keys so both 'j-' and 'view-' references exist inside the saved object
+        // Cross-map keys safely
         d['view-date'] = d['view-date'] || d['j-date'];
         d['view-reg'] = d['view-reg'] || d['j-reg'];
         d['view-dep'] = d['view-dep'] || d['j-dep'];
@@ -5851,73 +4777,41 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
 
         d['j-date'] = d['j-date'] || d['view-date'];
         d['j-arr'] = d['j-arr'] || d['view-arr'] || d['j-dest'];
-        d['j-atd'] = d['j-out'];                         // ATD = actual off-block time
-        d['j-sta'] = d['view-sta-text'] || d['j-sta'];   // STA = scheduled arrival (from view)
-
-        // Get the nightTime value from the j-night input
-        const nightTime = d['j-night'] || "00:00";
-        d.nightTime = nightTime; 
+        d['j-atd'] = d['j-out']; 
+        d['j-sta'] = d['view-sta-text'] || d['j-sta']; 
+        d.nightTime = d['j-night'] || "00:00"; 
         
         dailyLegs.push(d);
         
-        // 6. Recalculate Maximum FDP
-        setTimeout(() => {
-            if (typeof recalcMaxFDP === 'function') {
-                recalcMaxFDP();
-            }
-        }, 100);
+        if (typeof recalcMaxFDP === 'function') requestAnimationFrame(recalcMaxFDP);
 
-        // 7. Prepare next Leg
         renderJourneyList();
-        const nextInitFuel = d['j-shut'];
-        clearJourneyInputs(nextInitFuel);
-        safeSet('j-dep', '');   
-        safeSet('j-dest', '');
+        clearJourneyInputs(d['j-shut']);
+        ['j-dep', 'j-dest'].forEach(id => safeSet(id, ''));
         
-        // 8. Auto-save
         saveState();
     };
 
     window.moveLeg = function(index, direction) {
         const newIndex = index + direction;
-        
-        // Safety check boundaries
         if (newIndex < 0 || newIndex >= dailyLegs.length) return;
 
-        // 1. Swap the elements in the array
-        const temp = dailyLegs[index];
-        dailyLegs[index] = dailyLegs[newIndex];
-        dailyLegs[newIndex] = temp;
+        // Swap array elements
+        [dailyLegs[index], dailyLegs[newIndex]] = [dailyLegs[newIndex], dailyLegs[index]];
 
-        // 2. Recalculate duty logic
-        if (dailyLegs.length > 0) {
+        // Recalculate duty if first leg changed
+        if (index === 0 || newIndex === 0) {
             const firstLeg = dailyLegs[0];
-
-            // 2.1 Calculate new Duty Start/Max based on the NEW first leg's data
-            const newDutyValues = calculateDutyValues(
-                firstLeg['j-std'], 
-                firstLeg['j-flt'], 
-                firstLeg['j-dep'], 
-                firstLeg['j-dest']
-            );
-
-            // 2.2 Update the screen inputs
+            const newDutyValues = calculateDutyValues(firstLeg['j-std'], firstLeg['j-flt'], firstLeg['j-dep'], firstLeg['j-dest']);
+            
             safeSet('j-duty-start', newDutyValues.fc);
             safeSet('j-cc-duty-start', newDutyValues.cc);
             safeSet('j-max-fdp', newDutyValues.max);
-
-            // 2.3 Update the global variable used for calculations
-            dutyStartTime = parseTimeString(newDutyValues.fc);
-            const maxLimitMins = parseTimeString(newDutyValues.max);
-
-            // 2.4 Update hidden cabin crew max FDP
-            const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
-            if (ccMaxHidden) {
-                ccMaxHidden.value = newDutyValues.ccMax;
-            }
+            setCCMaxFDP(newDutyValues.ccMax);
+            
+            dutyStartTime = parseTimeStr(newDutyValues.fc);
         }
 
-        // 3. Recalculate both max FDPs
         if (typeof recalcMaxFDP === 'function') recalcMaxFDP();
         renderJourneyList();
         saveState();
@@ -5927,145 +4821,100 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
         const leg = dailyLegs[index];
         if (!leg) return;
 
-        // 1. Load data back into inputs
-        Object.keys(leg).forEach(key => {
-            const e = el(key);
-            if (e) {
-                if (e.tagName === 'INPUT' || e.tagName === 'SELECT') e.value = leg[key];
-                else e.innerText = leg[key];
-            }
-        });
+        Object.keys(leg).forEach(key => safeSet(key, leg[key]));
 
-        // 2. Remove from list so "Add Leg" updates it instead of duplicating
         dailyLegs.splice(index, 1);
-        
         renderJourneyList();
         
-        // 3. Reset duty logic if we are editing the first leg
         if (index === 0) {
-            safeText('j-duty-start', '00:00'); 
+            safeSet('j-duty-start', '00:00'); 
             dutyStartTime = null; 
         }
 
-        // 4. Show the Journey form and scroll to the form so the user sees it
-        document.getElementById('leg-input-form').style.display = 'block';
-        document.getElementById('leg-input-form').scrollIntoView({ behavior: 'smooth' });
-        
-        alert("Leg loaded. Make changes and click '+ Add Leg'.");
+        const form = el('leg-input-form');
+        if (form) {
+            form.style.display = 'block';
+            form.scrollIntoView({ behavior: 'smooth' });
+        }
+        showToast("Leg loaded for editing. Click '+ Add Leg' when finished.", "info");
     };
 
     window.removeLeg = function(i) {
-        dailyLegs.splice(i,1);
+        dailyLegs.splice(i, 1);
         
-        // If we deleted the last leg, reset the duty fields
-        if(dailyLegs.length === 0) { 
-            safeSet('j-duty-start', "00:00");
-            safeSet('j-cc-duty-start', "00:00");
-            safeSet('j-max-fdp', "00:00");
-            const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
-            if (ccMaxHidden) {
-                ccMaxHidden.value = "00:00";
-            }
+        if (dailyLegs.length === 0) { 
+            ['j-duty-start', 'j-cc-duty-start', 'j-max-fdp'].forEach(id => safeSet(id, "00:00"));
+            setCCMaxFDP("00:00");
             dutyStartTime = null;
-            // Show the Input form again
-            const legForm = document.getElementById('leg-input-form');
-            if(legForm) legForm.style.display = 'block';
+            
+            const form = el('leg-input-form');
+            if (form) form.style.display = 'block';
         }
+        
         renderJourneyList(); 
         saveState();
     };
 
-    // Update Cruise Level for Journey Leg
     window.updateCruiseLevelForJourneyLog = function() {
         let finalLevel = "";
-        // 1. Default: Find Planned Level from OFP
-        if(waypoints.length > 0) {
+        
+        // Default: Planned from OFP
+        if (waypoints && waypoints.length > 0) {
             const cruiseWP = waypoints.find(w => /^\d{3}$/.test(w.level) && w.level !== "000");
-            if(cruiseWP) finalLevel = "FL" + cruiseWP.level;
+            if (cruiseWP) finalLevel = "FL" + cruiseWP.level;
         }
 
-        // 2. Priority: Check if User entered an Actual Level
+        // O(1) Check Actual Levels via precise IDs instead of querySelectorAll
         let maxAct = 0;
-        const inputs = document.querySelectorAll('[id^="o-agl-"]'); // Select all Flight Log FL inputs
-        inputs.forEach(input => {
-            const val = parseInt(input.value);
-            if(val && val > maxAct) maxAct = val;
-        });
-
-        if(maxAct > 0) {
-            finalLevel = "FL" + maxAct;
+        if (waypoints && waypoints.length > 0) {
+            for (let i = 0; i < waypoints.length; i++) {
+                const input = el(`o-agl-${i}`);
+                if (input && input.value) {
+                    const val = parseInt(input.value);
+                    if (val > maxAct) maxAct = val;
+                }
+            }
         }
 
-        // 3. Update the Journey Log FL
+        if (maxAct > 0) finalLevel = "FL" + maxAct;
         safeSet('j-flt-alt', finalLevel);
     };
 
-    // Transfer Last Waypoint for current Leg
     window.syncLastWaypoint = function() {
-        if(waypoints.length === 0) return;
+        if (!waypoints || waypoints.length === 0) return;
         const lastIdx = waypoints.length - 1;
         const wp = waypoints[lastIdx];
 
-        // 1. Handle Landing Time (ATO or ETO)
-        const lastATO = waypointATOCache[lastIdx]?.value;
+        const lastATO = el(`o-a-${lastIdx}`)?.value;
         const currentETO = wp.eto ? (wp.eto.substring(0,2) + ":" + wp.eto.substring(2,4)) : "";
         
-        // Priority: Actual Time > Calculated Estimate
         const finalTime = lastATO || currentETO;
-        if(finalTime && el('j-on')) el('j-on').value = finalTime;
+        if (finalTime) safeSet('j-on', finalTime);
 
-        // 2. Handle Shutdown Fuel (AFOB or EFOB)
-        const lastFuel = waypointFuelCache[lastIdx]?.value;
+        const lastFuel = el(`o-f-${lastIdx}`)?.value;
         const currentEFOB = Math.round(wp.fuel) || "";
 
-        // Priority: Actual Fuel > Calculated Estimate
         const finalFuel = lastFuel || currentEFOB;
-        if(finalFuel && el('j-shut')) el('j-shut').value = finalFuel;
+        if (finalFuel) safeSet('j-shut', finalFuel);
 
-        // 3. Trigger Journey Log math
         calculateTripTimeForJourneyLog(); 
         calculateFuelForJourneyLog();
     };
 
-    // Helper to set hidden CC max FDP
-    function setCCMaxFDP(value) {
-        const ccMaxHidden = document.getElementById('j-cc-max-fdp-hidden');
-        if (ccMaxHidden) {
-            ccMaxHidden.value = value || "00:00";
-        }
-    }
-
 // ==========================================
 // 11. Download Managment
 // ==========================================
-    
-    function generateOFPDFilename(flight, date, suffix = '') {
-        // Clean flight: remove any non‑alphanumeric except hyphen
-        let cleanFlight = (flight || 'OFP').replace(/[^a-zA-Z0-9-]/g, '');
-        if (cleanFlight === '') cleanFlight = 'OFP';
-        
-        // Clean date: replace / with - and remove invalid chars
-        let cleanDate = (date || '').replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '');
-        if (cleanDate === '') cleanDate = 'nodate';
-        
-        let filename = `${cleanFlight}_${cleanDate}`;
-        if (suffix) filename += `_${suffix}`;
-        return filename + '.pdf';
-    }
 
-    // Share PDF
     async function sharePdf(pdfBytes, filename, subject, body) {
-        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-        const file = new File([blob], filename, { type: 'application/pdf' });
+        // Create Blob and File in one clean line
+        const file = new File([new Blob([pdfBytes], { type: 'application/pdf' })], filename, { type: 'application/pdf' });
 
-        // Optional: copy email to clipboard (silent fail if not possible)
-        try {
-            await navigator.clipboard.writeText("ofp@airastana.com");
-        } catch (err) {
-            console.log("Clipboard write failed", err);
+        // Fire-and-forget clipboard copy (silently handles failure if permissions are denied)
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText("ofp@airastana.com").catch(() => {});
         }
 
-        // Try native share if supported and files can be shared
+        // Try native iOS/iPadOS Share Sheet
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
             try {
                 await navigator.share({
@@ -6073,922 +4922,559 @@ async function parsePDFData(pdfBytes, isAutoLoad) {
                     title: subject,
                     text: body || subject
                 });
-                return; // success, exit
+                return; // Native share successful
             } catch (err) {
-                console.log("Share cancelled or failed, falling back to download", err);
-                // fall through to download
+                console.warn("Share cancelled or failed, falling back to download.");
+                // Let it fall through to downloadBlob
             }
         }
-        // Fallback: direct download
+        
+        // Fallback for Desktop browsers or unsupported devices
         downloadBlob(pdfBytes, filename);
     }
 
-    // Download PDF
+    // High-performance download with Memory Leak protection
     function downloadBlob(bytes, name) {
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(new Blob([bytes], {type:'application/pdf'}));
+        link.href = url;
         link.download = name;
+        
+        // Modern DOM appending and clicking
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        link.remove(); 
+        
+        // CRITICAL: Release the memory back to the iPad after a short delay
+        setTimeout(() => URL.revokeObjectURL(url), 100);
     }
-
 
 // ==========================================
 // 9. Journey Log Download
 // ==========================================
 
-    // Loads the built-in template from the app's folder, bypassing cache
     async function loadBuiltInTemplate() {
         try {
-            // The '?v=' + timestamp forces the browser to fetch the newest file
-            const response = await fetch('./journey_log_template.pdf?v=' + new Date().getTime(), {
-                cache: 'no-store' // Prevents caching
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
+            const response = await fetch(`./journey_log_template.pdf?v=${Date.now()}`, { cache: 'no-store' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             return await response.arrayBuffer();
         } catch (error) {
             console.error("Failed to load built-in template:", error);
-            alert("Could not load the built-in Journey Log template. Ensure 'journey_log_template.pdf' is in the app folder.");
+            if (typeof showToast === 'function') showToast("Could not load Journey Log template.", "error");
             return null;
         }
     }
 
-    async function findTextInPDF(pdfBytes, searchText) {
-        const loadingTask = pdfjsLib.getDocument(pdfBytes);
-        const pdf = await loadingTask.promise;
-        const page = await pdf.getPage(1);
-        const textContent = await page.getTextContent();
-        
-        for (const item of textContent.items) {
-            if (item.str && item.str.toLowerCase().includes(searchText.toLowerCase())) {
-                return item.transform; // [scaleX, skewX, skewY, scaleY, x, y]
-            }
-        }
-        return null; // not found
+    // High-speed array scanner (O(N) instead of parsing the whole PDF)
+    function findAnchor(textItems, searchText) {
+        if (!textItems || !searchText) return null;
+        const searchTarget = searchText.toLowerCase();
+        const found = textItems.find(item => item.str && item.str.toLowerCase().includes(searchTarget));
+        return found ? found.transform : null; // Returns [scaleX, skewX, skewY, scaleY, x, y]
     }
 
-    async function requestJourneyLogTemplate() {
-        const confirmed = await createModal({
-            title: 'Journey Log Template Required',
-            message: '<div style="text-align:center;">Please select the blank Journey Log PDF template.<br><br>This is the official form that will be filled with your leg data.</div>',
-            confirmText: 'Select Template',
-            cancelText: 'Cancel',
-            type: 'info',
-            icon: '📄',
-            centered: true
-        });
+    window.downloadJourneyLog = async function(mode = 'download') {
+        if (!dailyLegs || dailyLegs.length === 0) return showToast("No legs to print.", "error");
 
-        if (!confirmed) return null;
-
-        return new Promise((resolve) => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = 'application/pdf';
-            input.style.display = 'none';
-            document.body.appendChild(input);
-
-            input.addEventListener('change', async () => {
-                const file = input.files[0];
-                
-                // CLEANUP IMMEDIATELY to free DOM reference
-                if (document.body.contains(input)) {
-                    document.body.removeChild(input);
-                }
-
-                if (file) {
-                    try {
-
-                        await saveJourneyTemplateToDB(file);
-                        const buffer = await file.arrayBuffer();
-                        resolve(buffer); 
-                    } catch (e) {
-                        alert("Error saving file: " + e.message);
-                        resolve(null);
-                    }
-                } else {
-                    resolve(null);
-                }
-            });
-
-            input.click();
-        });
-    }
-
-window.downloadJourneyLog = async function(mode = 'download') {
-    try {
-        await logSecurityEvent('JOURNEY_LOG_GENERATE', {
-            mode: mode,
-            legCount: dailyLegs.length,
-            timestamp: new Date().toISOString()
-        });
-        
-        // If no template is loaded, load the built-in one
-        if (!journeyLogTemplateBytes || journeyLogTemplateBytes.byteLength === 0) {
-            const templateBuffer = await loadBuiltInTemplate();
-            if (!templateBuffer) {
-                if (typeof isFinalizingJourneyLog !== 'undefined') isFinalizingJourneyLog = false;
-                return; // user cancelled or failed to load
+        try {
+            if (typeof logSecurityEvent === 'function') {
+                await logSecurityEvent('JOURNEY_LOG_GENERATE', { mode, legCount: dailyLegs.length });
             }
-            journeyLogTemplateBytes = templateBuffer; 
-        }
 
-        const debugSearches = ['STA', 'ATD', 'ATA', 'STD', 'Blk', 'Flt', 'MA', 'DETAIL', 'DUTY'];
-for (const s of debugSearches) {
-    const res = await findTextInPDF(journeyLogTemplateBytes, s);
-    console.log(`findTextInPDF("${s}"):`, res ? `Found at X=${res[4]}, Y=${res[5]}` : 'NOT FOUND');
-}
-        if (dailyLegs.length === 0) return alert("No legs to print.");
+            if (!journeyLogTemplateBytes || journeyLogTemplateBytes.byteLength === 0) {
+                journeyLogTemplateBytes = await loadBuiltInTemplate();
+                if (!journeyLogTemplateBytes) {
+                    if (typeof isFinalizingJourneyLog !== 'undefined') isFinalizingJourneyLog = false;
+                    return; 
+                }
+            }
 
-        // Generate PDF
-        const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
-        const page = pdfDoc.getPages()[0];
-        const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
-        
-        const isIpadMode = el('chk-ipad-mode') ? el('chk-ipad-mode').checked : false;
-        if(!isIpadMode) page.setRotation(PDFLib.degrees(0));
+            // 1. EXTRACT TEXT ITEMS
+            const loadingTask = pdfjsLib.getDocument({ data: journeyLogTemplateBytes });
+            const textPdf = await loadingTask.promise;
+            const textPage = await textPdf.getPage(1);
+            const textContent = await textPage.getTextContent();
+            const textItems = textContent.items;
 
-        // DYNAMIC OFFSET CALCULATION
-        const templateRows = parseInt(document.getElementById('j-template-rows')?.value || "4");
-        const standardRows = 4;
-        const rowGap = JOURNEY_CONFIG?.rowGap || 15; 
-        const nameFontSize = JOURNEY_CONFIG?.fontSize || 8; 
+            // 2. SETUP DRAWING CANVAS
+            const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
+            const page = pdfDoc.getPages()[0];
+            const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+            
+            const isIpadMode = document.getElementById('chk-ipad-mode')?.checked;
+            if (!isIpadMode) page.setRotation(PDFLib.degrees(0));
 
-        let FUEL_OFFSET = (standardRows - templateRows) * rowGap;
-        let CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
+            const templateRows = parseInt(document.getElementById('j-template-rows')?.value || "4");
+            const rowGap = JOURNEY_CONFIG?.rowGap || 15; 
+            const nameFontSize = JOURNEY_CONFIG?.fontSize || 8; 
 
-        // --- POPULATE CREW NAMES DYNAMICALLY BEFORE DRAWING HEADERS ---
-        const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-        const shouldHideAll = settings.hideAllDuty === true;
-        
-        if ((!window.crewData || window.crewData.length === 0) && !shouldHideAll) {
-            try {
-                const token = await getValidSkyplanToken();
-                if (token) {
-                    let extId = window.currentExternalFlightId;
-                    if (!extId) {
-                        const fltRaw = el('j-flt')?.value || '';
-                        const dateRaw = el('j-date')?.value || '';
-                        const depRaw = dailyLegs[0] ? dailyLegs[0]['j-dep'] : '';
+            // 3. FETCH CREW IF NEEDED
+            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+            const shouldHideAll = settings.hideAllDuty === true;
+            
+            if ((!window.crewData || window.crewData.length === 0) && !shouldHideAll) {
+                try {
+                    const token = typeof getValidSkyplanToken === 'function' ? await getValidSkyplanToken() : null;
+                    if (token) {
+                        let extId = window.currentExternalFlightId;
+                        if (!extId && dailyLegs[0]) {
+                            const fltRaw = el('j-flt')?.value || '';
+                            const dateRaw = el('j-date')?.value || '';
+                            const depRaw = dailyLegs[0]['j-dep'] || '';
+                            if (fltRaw && dateRaw && depRaw && typeof fetchFlightIdFromRoster === 'function') {
+                                extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
+                                window.currentExternalFlightId = extId;
+                            }
+                        }
                         
-                        if (fltRaw && dateRaw && depRaw) {
-                            extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
-                            window.currentExternalFlightId = extId;
+                        if (extId) {
+                            const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ FlightIDs: [extId] })
+                            });
+                            if (resp.ok) {
+                                const data = await resp.json();
+                                const members = data.FlightsCrewMembers?.[0]?.CrewMembers || [];
+                                const flightDeck = members.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
+                                const cabinCrew = members.filter(m => !flightDeck.includes(m));
+                                window.crewData = [...flightDeck, ...cabinCrew];
+                            }
                         }
                     }
-                    
-                    if (extId) {
-                        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                            body: JSON.stringify({ FlightIDs: [extId] })
-                        });
-                        if (resp.ok) {
-                            const data = await resp.json();
-                            const members = data.FlightsCrewMembers?.[0]?.CrewMembers || [];
-                            
-                            const flightDeck = members.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
-                            const cabinCrew = members.filter(m => !flightDeck.includes(m));
-                            window.crewData = [...flightDeck, ...cabinCrew];
-                        }
-                    }
+                } catch(e) {
+                    console.warn("Failed to fetch crew manifest:", e);
                 }
-            } catch(e) {
-                console.error("Failed to fetch crew manifest for PDF printing:", e);
             }
-        }
-        
-        const activeCrewList = window.crewData || [];
-        // --------------------------------------------------------------
+            const activeCrewList = window.crewData || [];
 
-        // HEADERS (L/T & Captain Name)
-        const { width, height } = page.getSize();
-        const catAnchor = await findTextInPDF(journeyLogTemplateBytes, "L/T");
-        if (catAnchor) {
-            const [sx, , , , catX, catY] = catAnchor;
-            page.drawText("75/125", { x: catX - 30, y: catY, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
-        }
+            // 4. DRAW STATIC HEADERS
+            const catAnchor = findAnchor(textItems, "L/T");
+            if (catAnchor) page.drawText("75/125", { x: catAnchor[4] - 30, y: catAnchor[5], size: nameFontSize, font });
 
-        let captainNameStr = localStorage.getItem('efb_captain_name') || "";
-        if (!captainNameStr && activeCrewList.length > 0) {
-            const cap = activeCrewList.find(m => m.Position === 'CP');
-            if (cap) captainNameStr = `${cap.FirstName || ''} ${cap.LastName || ''}`.trim().toUpperCase();
-        }
+            let captainNameStr = localStorage.getItem('efb_captain_name') || activeCrewList.find(m => m.Position === 'CP') 
+                ? `${activeCrewList.find(m => m.Position === 'CP').FirstName || ''} ${activeCrewList.find(m => m.Position === 'CP').LastName || ''}`.trim().toUpperCase() 
+                : "";
 
-        if (captainNameStr) {
-            const capAnchor = await findTextInPDF(journeyLogTemplateBytes, "Captain/KBC:");
-            if (capAnchor) {
-                const [sx, , , , capX, capY] = capAnchor;
-                page.drawText(captainNameStr, { x: capX + 30, y: capY, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
-            } else {
-                page.drawText(captainNameStr, { x: width - 600, y: height - 40, size: 10, font: font, color: PDFLib.rgb(0,0,0) });
+            if (captainNameStr) {
+                const capAnchor = findAnchor(textItems, "Captain/KBC:");
+                if (capAnchor) {
+                    page.drawText(captainNameStr, { x: capAnchor[4] + 30, y: capAnchor[5], size: nameFontSize, font });
+                }
             }
-        }
 
-        const headers = JOURNEY_CONFIG?.headers || {};
-        Object.keys(headers).forEach(id => {
-            const val = el(id)?.value;
-            const cfg = headers[id];
-            if(val && cfg) page.drawText(String(val).toUpperCase(), { x: cfg.x, y: cfg.y, size: JOURNEY_CONFIG.fontSize, font: font, color: PDFLib.rgb(0,0,0) });
-        });
-
-
-        // ====================================================================
-        // 1. FULLY DYNAMIC TOP HEADERS (Date, Flight, Reg, Dep, Arr, STD, STA)
-        // ====================================================================
-        const dynamicHeaders = [
-            { idName: 'date', search: 'Date', shiftX: -10, keys: ['j-date'] },
-            { idName: 'flt', search: 'flight', shiftX: -8, keys: ['j-flt'] },
-            { idName: 'reg', search: 'Ac.Reg', shiftX: -5, keys: ['j-reg'] },
-            { idName: 'dep', search: 'Dep', shiftX: -5, keys: ['j-dep'] },
-            { idName: 'arr', search: 'Arr', shiftX: -5, keys: ['j-arr'] },
-            { idName: 'std', search: 'STD', shiftX: -5, keys: ['j-std'] },
-            { idName: 'sta', search: 'STA', shiftX: -5, keys: ['j-sta'] }
-        ];
-
-        const headerDrop = 16; 
-
-        for (const header of dynamicHeaders) {
-            const textAnchor = await findTextInPDF(journeyLogTemplateBytes, header.search) || 
-                               await findTextInPDF(journeyLogTemplateBytes, header.search.toUpperCase()) ||
-                               await findTextInPDF(journeyLogTemplateBytes, header.search.charAt(0).toUpperCase() + header.search.slice(1));
-
-            if (textAnchor) {
-                const [,,,, anchorX, anchorY] = textAnchor;
+            // 5. DRAW DYNAMIC HEADERS & LEGS
+            const headerDrop = 16; 
+            const drawLegData = (anchor, shiftX, keys, baselineY, isFuelCol = false) => {
+                if (!anchor) return;
+                const colX = anchor[4] + shiftX;
+                const baseY = baselineY ?? (anchor[5] - headerDrop);
 
                 dailyLegs.forEach((leg, idx) => {
                     if (idx >= templateRows) return;
-
-                    let val = undefined;
-                    for (const key of header.keys) {
-                        if (leg[key] !== undefined && leg[key] !== null && leg[key] !== "") {
-                            val = leg[key];
-                            break;
-                        }
-                    }
-
-                    if ((val === undefined || val === null || val === "") && idx === 0) {
-                        for (const key of header.keys) {
+                    
+                    let val = keys.map(k => leg[k]).find(v => v !== undefined && v !== null && v !== "");
+                    
+                    if (!val && idx === 0) { // Fallback to DOM for first leg
+                        for (const key of keys) {
                             const domEl = document.getElementById(key);
                             if (domEl) {
-                                val = domEl.value !== undefined ? domEl.value : (domEl.innerText || domEl.textContent);
+                                val = domEl.value || domEl.textContent;
                                 if (val) break;
                             }
                         }
                     }
 
-                    if (val !== undefined && val !== null && String(val).trim() !== "") {
-                        const printX = anchorX + header.shiftX;
-                        const printY = anchorY - headerDrop - (idx * JOURNEY_CONFIG.rowGap);
-                        
+                    if (val && String(val).trim() !== "") {
                         page.drawText(String(val).trim().toUpperCase(), { 
-                            x: printX, 
-                            y: printY, 
-                            size: JOURNEY_CONFIG.fontSize || 8, 
-                            font: font, 
-                            color: PDFLib.rgb(0,0,0) 
+                            x: colX, 
+                            y: baseY - (idx * rowGap), 
+                            size: nameFontSize, 
+                            font 
                         });
                     }
                 });
-            }
-        }
+            };
 
+            // Top Headers
+            [
+                { search: 'Date', shiftX: -10, keys: ['j-date'] },
+                { search: 'flight', shiftX: -8, keys: ['j-flt'] },
+                { search: 'Ac.Reg', shiftX: -5, keys: ['j-reg'] },
+                { search: 'Dep', shiftX: -5, keys: ['j-dep'] },
+                { search: 'Arr', shiftX: -5, keys: ['j-arr'] },
+                { search: 'STD', shiftX: -5, keys: ['j-std'] },
+                { search: 'STA', shiftX: -5, keys: ['j-sta'] }
+            ].forEach(h => drawLegData(findAnchor(textItems, h.search), h.shiftX, h.keys));
 
-        // ====================================================================
-        // 2. FULLY DYNAMIC FLIGHT LOG & FUEL COLUMNS (using logColumnDefs)
-        // ====================================================================
-        const logColumnDefs = [
-            // Main
-            { search: 'ATD',        keys: ['j-atd'],        shiftX: -5,  category: 'main' },
-            { search: 'ATA',        keys: ['j-in'],         shiftX: -5,  category: 'main' },
-            { search: 'Off-Block',  keys: ['j-out'],        shiftX: -5,  category: 'main' },
-            { search: 'TKOF',       keys: ['j-off'],        shiftX: -5,  category: 'main' },
-            { search: 'TDWN',       keys: ['j-on'],         shiftX: -5,  category: 'main' },
-            { search: 'Blk',        keys: ['j-block'],      shiftX: -5,  category: 'main' },
-            { search: 'Flt',        keys: ['j-flight'],     shiftX: -5,  category: 'main' },
-            { search: 'NtBLK',      keys: ['j-night'],      shiftX: -5,  category: 'main' },
-            { search: 'TO',         keys: ['j-to'],         shiftX: -5,  category: 'main' },
-            { search: 'LD',        keys: ['j-ldg'],        shiftX: -5,  category: 'main' },
-            { search: 'MA',         keys: ['j-ldg-type'],   shiftX: -5,  category: 'main' },
-            { search: 'FlAlt',      keys: ['j-flt-alt'],    shiftX: -5,  category: 'main' },
-            { search: 'DETAIL',     keys: ['j-ldg-detail'], shiftX: -5,  category: 'main' },
-            // Fuel
-            { search: 'Init',       keys: ['j-init'],       shiftX: -5,  category: 'fuel' },
-            { search: 'UplfW',      keys: ['j-uplift-w'],   shiftX: -5,  category: 'fuel' },
-            { search: 'UplfV',      keys: ['j-uplift-vol'], shiftX: -5,  category: 'fuel' },
-            { search: 'Calc Ramp',  keys: ['j-calc-ramp'],  shiftX: -2,  category: 'fuel' },
-            { search: 'Act Ramp',   keys: ['j-act-ramp'],   shiftX: -2,  category: 'fuel' },
-            { search: 'Stdn',       keys: ['j-shut'],       shiftX: -5,  category: 'fuel' },
-            { search: 'Burn',       keys: ['j-burn'],       shiftX: -5,  category: 'fuel' },
-            { search: 'Fuel Disc',  keys: ['j-disc'],       shiftX: -2,  category: 'fuel' },
-            { search: 'Slip 1',     keys: ['j-slip'],       shiftX: -5,  category: 'fuel' },
-            { search: 'Slip 2',     keys: ['j-slip-2'],     shiftX: -5,  category: 'fuel' },
-            // Loadsheet
-            { search: 'ADL',     keys: ['j-adl'],     shiftX: -5,  category: 'fuel' },
-            { search: 'CHL',     keys: ['j-chl'],     shiftX: -5,  category: 'fuel' },
-            { search: 'INF',     keys: ['j-inf'],     shiftX: -5,  category: 'fuel' },
-            { search: 'Cargo',   keys: ['j-cargo'],     shiftX: -5,  category: 'fuel' },
-            { search: 'Mail',    keys: ['j-mail'],     shiftX: -5,  category: 'fuel' },
-            { search: 'BAG',    keys: ['j-bag'],     shiftX: -5,  category: 'fuel' },
-            { search: 'ZFW',    keys: ['j-zfw'],     shiftX: -5,  category: 'fuel' },
-        ];
+            // Main & Fuel Tables
+            const mainRefY = (findAnchor(textItems, 'ATD') || findAnchor(textItems, 'TKOF') || [0,0,0,0,0, 680 + headerDrop])[5] - headerDrop;
+            const fuelRefY = (findAnchor(textItems, 'Init') || findAnchor(textItems, 'UplfW') || [0,0,0,0,0, 480 + headerDrop])[5] - headerDrop;
 
-        const crewColumnDefs = [
-            { search: 'DUTY',      key: 'j-duty-operating' },
-            { search: 'Duty time',     key: 'j-duty-time' },
-            { search: 'Night duty',   key: 'j-duty-night' },
-            { search: 'Alwd. time', key: 'j-duty-allowed' },
-            { search: 'LEGS', key: 'sectors-total' },
-        ];
+            const logColumnDefs = [
+                { search: 'ATD', keys: ['j-atd'], shiftX: -5, category: 'main' },
+                { search: 'ATA', keys: ['j-in'], shiftX: -5, category: 'main' },
+                { search: 'Off-Block', keys: ['j-out'], shiftX: -5, category: 'main' },
+                { search: 'TKOF', keys: ['j-off'], shiftX: -5, category: 'main' },
+                { search: 'TDWN', keys: ['j-on'], shiftX: -5, category: 'main' },
+                { search: 'Blk', keys: ['j-block'], shiftX: -5, category: 'main' },
+                { search: 'Flt', keys: ['j-flight'], shiftX: -5, category: 'main' },
+                { search: 'NtBLK', keys: ['j-night'], shiftX: -5, category: 'main' },
+                { search: 'TO', keys: ['j-to'], shiftX: -5, category: 'main' },
+                { search: 'LD', keys: ['j-ldg'], shiftX: -5, category: 'main' },
+                { search: 'MA', keys: ['j-ldg-type'], shiftX: -5, category: 'main' },
+                { search: 'FlAlt', keys: ['j-flt-alt'], shiftX: -5, category: 'main' },
+                { search: 'DETAIL', keys: ['j-ldg-detail'], shiftX: -5, category: 'main' },
+                { search: 'Init', keys: ['j-init'], shiftX: -5, category: 'fuel' },
+                { search: 'UplfW', keys: ['j-uplift-w'], shiftX: -5, category: 'fuel' },
+                { search: 'UplfV', keys: ['j-uplift-vol'], shiftX: -5, category: 'fuel' },
+                { search: 'Calc Ramp', keys: ['j-calc-ramp'], shiftX: -2, category: 'fuel' },
+                { search: 'Act Ramp', keys: ['j-act-ramp'], shiftX: -2, category: 'fuel' },
+                { search: 'Stdn', keys: ['j-shut'], shiftX: -5, category: 'fuel' },
+                { search: 'Burn', keys: ['j-burn'], shiftX: -5, category: 'fuel' },
+                { search: 'Fuel Disc', keys: ['j-disc'], shiftX: -2, category: 'fuel' },
+                { search: 'Slip 1', keys: ['j-slip'], shiftX: -5, category: 'fuel' },
+                { search: 'Slip 2', keys: ['j-slip-2'], shiftX: -5, category: 'fuel' },
+                { search: 'ADL', keys: ['j-adl'], shiftX: -5, category: 'fuel' },
+                { search: 'CHL', keys: ['j-chl'], shiftX: -5, category: 'fuel' },
+                { search: 'INF', keys: ['j-inf'], shiftX: -5, category: 'fuel' },
+                { search: 'Cargo', keys: ['j-cargo'], shiftX: -5, category: 'fuel' },
+                { search: 'Mail', keys: ['j-mail'], shiftX: -5, category: 'fuel' },
+                { search: 'BAG', keys: ['j-bag'], shiftX: -5, category: 'fuel' },
+                { search: 'ZFW', keys: ['j-zfw'], shiftX: -5, category: 'fuel' }
+            ];
 
-        // --- Find crew column positions ---
-        const crewCols = {};
-        for (const cDef of crewColumnDefs) {
-            const anchor = await findTextInPDF(journeyLogTemplateBytes, cDef.search) ||
-                        await findTextInPDF(journeyLogTemplateBytes, cDef.search.toUpperCase());
-            if (anchor) {
-                const [, , , , crewX] = anchor;
-                crewCols[cDef.key] = crewX;
-            }
-        }
-
-        // Determine Y baselines for main and fuel groups
-        let mainBaselineY = null;
-        let fuelBaselineY = null;
-
-        const mainRefAnchor = await findTextInPDF(journeyLogTemplateBytes, 'ATD') ||
-                              await findTextInPDF(journeyLogTemplateBytes, 'TKOF') ||
-                              await findTextInPDF(journeyLogTemplateBytes, 'Off-Block');
-        if (mainRefAnchor) {
-            const [, , , , , mainY] = mainRefAnchor;
-            mainBaselineY = mainY - headerDrop;
-        }
-
-        const fuelRefAnchor = await findTextInPDF(journeyLogTemplateBytes, 'Init') ||
-                              await findTextInPDF(journeyLogTemplateBytes, 'UplfW') ||
-                              await findTextInPDF(journeyLogTemplateBytes, 'UplfV');
-        if (fuelRefAnchor) {
-            const [, , , , , fuelY] = fuelRefAnchor;
-            fuelBaselineY = fuelY - headerDrop;
-        }
-
-        // Fallback Y positions if nothing found (adjust these to your template)
-        if (mainBaselineY === null) mainBaselineY = 680;
-        if (fuelBaselineY === null) fuelBaselineY = 480;
-
-        // Draw each dynamic column for every leg
-        for (const colDef of logColumnDefs) {
-            const anchor = await findTextInPDF(journeyLogTemplateBytes, colDef.search) ||
-                           await findTextInPDF(journeyLogTemplateBytes, colDef.search.toUpperCase());
-            if (!anchor) continue;   // skip columns not found in the PDF
-
-            const [, , , , headerX, headerY] = anchor;
-            const colX = headerX + (colDef.shiftX || 0);
-            const baselineY = colDef.category === 'fuel' ? fuelBaselineY : mainBaselineY;
-            if (baselineY === null) continue;
-
-            dailyLegs.forEach((leg, idx) => {
-                if (idx >= templateRows) return;
-
-                let val;
-                for (const key of colDef.keys) {
-                    if (leg[key] !== undefined && leg[key] !== null && leg[key] !== "") {
-                        val = leg[key];
-                        break;
-                    }
-                }
-                // First leg fallback to DOM if missing
-                if ((val === undefined || val === null || val === "") && idx === 0) {
-                    const domEl = document.getElementById(colDef.keys[0]);
-                    if (domEl) {
-                        val = domEl.value !== undefined ? domEl.value : (domEl.innerText || domEl.textContent);
-                    }
-                }
-
-                if (val !== undefined && val !== null && String(val).trim() !== "") {
-                    const rowY = baselineY - (idx * JOURNEY_CONFIG.rowGap);
-                    page.drawText(String(val).trim().toUpperCase(), {
-                        x: colX,
-                        y: rowY,
-                        size: JOURNEY_CONFIG.fontSize || 8,
-                        font: font,
-                        color: PDFLib.rgb(0,0,0)
-                    });
-                }
+            logColumnDefs.forEach(col => {
+                drawLegData(findAnchor(textItems, col.search), col.shiftX, col.keys, col.category === 'fuel' ? fuelRefY : mainRefY);
             });
-        }
 
-        // ====================================================================
-        // 3. SIGNATURE
-        // ====================================================================
-        const sigAnchor = await findTextInPDF(journeyLogTemplateBytes, "Captain's Signature");
-
-        if (sigAnchor) {
-            const [sx, , , , x, y] = sigAnchor; 
-            const sigX = x + 120; 
-            const sigY = y - 15;  
-
-            if (pads?.main?.pad && !pads.main.pad.isEmpty()) {
+            // 6. DRAW SIGNATURE
+            const sigAnchor = findAnchor(textItems, "Captain's Signature");
+            if (sigAnchor && pads?.main?.pad && !pads.main.pad.isEmpty()) {
                 try {
-                    const sigImageBase64 = pads.main.pad.toDataURL();
-                    const sigImage = await pdfDoc.embedPng(sigImageBase64);
-                    page.drawImage(sigImage, {
-                        x: sigX,
-                        y: sigY,
-                        width: 200,
-                        height: 50,
-                    });
-                } catch (sigError) {
-                    console.warn("Signature embedding skipped/failed:", sigError);
+                    const sigImage = await pdfDoc.embedPng(pads.main.pad.toDataURL());
+                    page.drawImage(sigImage, { x: sigAnchor[4] + 120, y: sigAnchor[5] - 15, width: 200, height: 50 });
+                } catch (e) { console.warn("Signature skipped"); }
+            }
+
+            // 7. DRAW CREW DUTY
+            if (!shouldHideAll) {
+                const crewCols = {};
+                ['DUTY', 'Duty time', 'Night duty', 'Alwd. time', 'LEGS'].forEach(k => {
+                    const a = findAnchor(textItems, k);
+                    if (a) crewCols[k] = a[4];
+                });
+
+                let crewBaselineY = (findAnchor(textItems, 'DUTY') || findAnchor(textItems, 'OP') || [0,0,0,0,0, 333 + headerDrop])[5] - headerDrop;
+                
+                const numFC = parseInt(el('j-fc-count')?.value || 2);
+                const numCC = parseInt(el('j-cc-count')?.value || 7);
+                const sectorsString = 'x'.repeat(dailyLegs.filter(l => l['j-flt'] || l['j-dep']).length);
+
+                const getFDP = (startMins) => {
+                    const onBlocksMins = dailyLegs[dailyLegs.length-1] ? (typeof parseTimeString === 'function' ? parseTimeString(dailyLegs[dailyLegs.length-1]['j-in']) : 0) : null;
+                    if (onBlocksMins == null) return "";
+                    let diff = onBlocksMins - startMins;
+                    if (diff < 0) diff += 1440;
+                    return typeof minsToTime === 'function' ? minsToTime(diff) : "";
+                };
+
+                const fcStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-duty-start')?.value) : 0;
+                const ccStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-cc-duty-start')?.value) : 0;
+                
+                for(let i = 0; i < (numFC + numCC); i++) {
+                    const y = crewBaselineY - (i * (JOURNEY_CONFIG?.rowGap || 17));
+                    const isFC = (i < numFC);
+                    const myStart = isFC ? fcStartMins : ccStartMins;
+
+                    const member = activeCrewList[i];
+                    if (member && crewCols['DUTY']) {
+                        const opX = crewCols['DUTY'];
+                        page.drawText(String(member.EmployeeID || '').toUpperCase(), { x: opX - 175, y, size: nameFontSize, font });
+                        page.drawText(String(member.Position || '').toUpperCase(), { x: opX - 140, y, size: nameFontSize, font });
+                        page.drawText(`${member.FirstName || ''} ${member.LastName || ''}`.trim().toUpperCase(), { x: opX - 125, y, size: nameFontSize, font });
+                        page.drawText("OP", { x: opX, y, size: nameFontSize, font });
+                    }
+                    
+                    if (crewCols['Duty time']) page.drawText(getFDP(myStart), { x: crewCols['Duty time'], y, size: nameFontSize, font });
+                    if (crewCols['Night duty']) page.drawText(typeof getNightDutyForCrew === 'function' ? getNightDutyForCrew(myStart) : '', { x: crewCols['Night duty'], y, size: nameFontSize, font });
+                    if (crewCols['Alwd. time']) page.drawText(isFC ? (el('j-max-fdp')?.value || '') : (el('j-cc-max-fdp-hidden')?.value || ''), { x: crewCols['Alwd. time'], y, size: nameFontSize, font });
+                    if (crewCols['LEGS']) page.drawText(sectorsString, { x: crewCols['LEGS'], y, size: nameFontSize, font });
                 }
             }
-        }
 
-        // ====================================================================
-        // 4. CREW DUTY & NAME DATA
-        // ====================================================================
-        // ---- Find the Y position of the crew header row ----
-        let crewBaselineY = null;
-        const crewHeaderAnchor =
-            await findTextInPDF(journeyLogTemplateBytes, 'DUTY') ||
-            await findTextInPDF(journeyLogTemplateBytes, 'OP')   ||
-            await findTextInPDF(journeyLogTemplateBytes, 'Name');
-        if (crewHeaderAnchor) {
-            const [, , , , , headerY] = crewHeaderAnchor;
-            crewBaselineY = headerY - headerDrop;   // first data row right below the header
-        }
+            // 8. FINAL SAVE AND EXPORT
+            const outBytes = await pdfDoc.save();
+            const fltStr = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
+            const filename = `JOURNEY_LOG_${fltStr}.pdf`;
 
-        if (crewBaselineY === null) crewBaselineY = 333;
-
-        const crewStart = crewBaselineY;
-        const crewGap = JOURNEY_CONFIG?.rowGap || 17;   // use the same gap as the other tables    
-        
-        const numFC = parseInt(el('j-fc-count')?.value || 2);
-        const numCC = parseInt(el('j-cc-count')?.value || 4);
-        const totalRows = numFC + numCC;
-        // Filter out any empty rows just in case, then count the remaining valid legs
-        const validLegsCount = dailyLegs.filter(leg => leg['j-flt'] || leg['j-dep']).length;
-
-        // Create a string that repeats 'x' for every valid leg (e.g., 4 legs = "xxxx")
-        const sectorsTotalString = 'x'.repeat(validLegsCount);
-
-        const fcDutyStartStr = el('j-duty-start')?.value || "00:00";
-        const ccDutyStartStr = el('j-cc-duty-start')?.value || "00:00";
-        const fcMaxFDPStr = el('j-max-fdp')?.value || "00:00"; 
-        const ccMaxFDPInput = document.getElementById('j-cc-max-fdp-hidden');
-        const ccMaxFDPStr = ccMaxFDPInput ? ccMaxFDPInput.value : "00:00";
-        const fcStartMins = parseTimeString(fcDutyStartStr);
-        const ccStartMins = parseTimeString(ccDutyStartStr);
-        const lastLeg = dailyLegs[dailyLegs.length - 1];
-        const onBlocksMins = lastLeg ? parseTimeString(lastLeg['j-in']) : 0;
-
-        const getFDP = (startMins) => {
-            if(!onBlocksMins && onBlocksMins !== 0) return ""; 
-            let diff = onBlocksMins - startMins;
-            if(diff < 0) diff += 1440; 
-            return minsToTime(diff);
-        };
-
-        // DRAW CREW ROWS (DUTY + NAMES)
-        for(let i = 0; i < totalRows; i++) {
-            if (shouldHideAll) continue;
-
-            const y = crewStart - (i * crewGap);
-            const isFlightCrew = (i < numFC);
-            const myStart = isFlightCrew ? fcStartMins : ccStartMins;
-            const myMaxFDP = isFlightCrew ? fcMaxFDPStr : ccMaxFDPStr;
-            const myFDP = getFDP(myStart);
-            const myNightDuty = getNightDutyForCrew(myStart);
-
-            // Print Crew Data: ID, Position, Name
-            const member = activeCrewList[i];
-            if (member && crewCols['j-duty-operating']) {
-                const opX = crewCols['j-duty-operating'];
-                
-                const empId = String(member.EmployeeID || member.employeeId || '').toUpperCase();
-                const pos = String(member.Position || member.position || '').toUpperCase();
-                const fullName = `${member.FirstName || member.firstName || ''} ${member.LastName || member.lastName || ''}`.trim().toUpperCase();
-
-                const nameX = opX - 125;
-                const posX = opX - 140; 
-                const idX = opX - 175;
-
-                page.drawText(empId, { x: idX, y: y, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
-                page.drawText(pos, { x: posX, y: y, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
-                page.drawText(fullName, { x: nameX, y: y, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
+            if (mode === 'email' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+                await sharePdf(outBytes, filename, `Journey Log: ${fltStr}`, "Journey Log attached.");
+            } else {
+                if (typeof downloadBlob === 'function') downloadBlob(outBytes, filename);
             }
 
-            if(crewCols['j-duty-operating']) 
-                page.drawText("OP", { x: crewCols['j-duty-operating'], y: y, size: JOURNEY_CONFIG.fontSize || 8, font: font, color: PDFLib.rgb(0,0,0) });
+            const userChoice = await showConfirmDialog('Journey Log Generated', '<div style="text-align:center;">Save this log and start a new day?<br>Click <strong>Save Log</strong> to store it permanently and clear leg data.<br>Click <strong>Keep Data</strong> to make changes and generate again.</div>', 'Save Log', 'Keep Data', 'info', true);
 
-            if(myFDP && crewCols['j-duty-time']) 
-                page.drawText(myFDP, { x: crewCols['j-duty-time'], y: y, size: JOURNEY_CONFIG.fontSize || 8, font: font, color: PDFLib.rgb(0,0,0) });
-
-            if(crewCols['j-duty-night']) {
-                page.drawText(myNightDuty, { x: crewCols['j-duty-night'], y: y, size: JOURNEY_CONFIG.fontSize || 8, font: font, color: PDFLib.rgb(0,0,0) });
+            if (userChoice) {
+                const blob = new Blob([outBytes], { type: 'application/pdf' });
+                if (typeof saveJourneyLog === 'function') await saveJourneyLog(blob, { flight: fltStr, date: el('j-date')?.value || new Date().toISOString().slice(0,10), legCount: dailyLegs.length });
+                if (typeof showToast !== 'undefined') showToast('Journey log saved', 'success');
+                if (typeof performDataReset === 'function') await performDataReset(false, false);
             }
 
-            if(myMaxFDP && crewCols['j-duty-allowed']) 
-                page.drawText(myMaxFDP, { x: crewCols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize || 8, font: font, color: PDFLib.rgb(0,0,0) });
-
-            if (crewCols['sectors-total']) {
-                page.drawText(sectorsTotalString, { 
-                    x: crewCols['sectors-total'], 
-                    y: y, 
-                    size: JOURNEY_CONFIG.fontSize || 8, 
-                    font: font, 
-                    color: PDFLib.rgb(0,0,0) 
-                });
-            }
+        } catch (e) {
+            console.error("Log Gen Error:", e);
+            if (typeof logSecurityEvent === 'function') await logSecurityEvent('JOURNEY_LOG_ERROR', { error: e.message, mode });
+            alert("Error generating Log: " + e.message);
         }
+    };
 
-        // SAVE & DOWNLOAD
-        const out = await pdfDoc.save();
-        const flt = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
-        const date = el('j-date')?.value || new Date().toISOString().slice(0,10);
-        const filename = `JOURNEY_LOG_${flt}.pdf`;
-        
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        if (mode === 'email' && isMobile) {
-            const subject = `Journey Log: ${flt}`;
-            await sharePdf(out, filename, subject, "Journey Log attached.");
-        } else {
-            downloadBlob(out, filename);
-        }
-        
-        const userChoice = await showConfirmDialog(
-            'Journey Log Generated',
-            '<div style="text-align:center;">Save this log and start a new day?<br>Click <strong>Save Log</strong> to store it permanently and clear leg data.<br>Click <strong>Keep Data</strong> to make changes and generate again.</div>',
-            'Save Log',
-            'Keep Data',
-            'info',
-            true
-        );
 
-        if (userChoice) {
-            const blob = new Blob([out], { type: 'application/pdf' });
-            await saveJourneyLog(blob, { flight: flt, date, legCount: dailyLegs.length });
-            if (typeof showToast !== 'undefined') showToast('Journey log saved', 'success');
-
-            await performDataReset(false, false);
-        }
-
-    } catch(e) { 
-        console.error("Journey Log Generation Error:", e); 
-        await logSecurityEvent('JOURNEY_LOG_ERROR', {
-            error: e.message,
-            mode: mode
-        });
-        alert("Error generating Log: " + e.message); 
-    }
-};
 // ==========================================
 // 10. OFP Download
 // ==========================================
+    
+    function generateOFPDFilename(flight, date, suffix = '') {
+        // Condensed regex and fallback logic
+        const cleanFlight = (flight || 'OFP').replace(/[^a-zA-Z0-9-]/g, '') || 'OFP';
+        const cleanDate = (date || '').replace(/\//g, '-').replace(/[^a-zA-Z0-9-]/g, '') || 'nodate';
+        
+        return `${cleanFlight}_${cleanDate}${suffix ? '_' + suffix : ''}.pdf`;
+    }
 
     window.DownloadOFP = async function(mode = 'download') {
-        // 1. SAFETY CHECK
         const container = document.getElementById('download-progress-container');
         if (container) container.style.display = 'block';
 
-            try {
+        try {
+            if (typeof logSecurityEvent === 'function') {
                 await logSecurityEvent('OFP_DOWNLOAD', { mode, fileName: window.originalFileName, timestamp: new Date().toISOString() });
+            }
 
-                // Early return – hide container first
-                if (!window.ofpPdfBytes) {
-                    if (container) container.style.display = 'none';
-                    return alert("Please Upload the OFP PDF first.");
-                }
+            if (!window.ofpPdfBytes) {
+                if (container) container.style.display = 'none';
+                return alert("Please Upload the OFP PDF first.");
+            }
 
-                try {
-                    // 2. Load the SOURCE using PDF.js
-                    const loadingTask = pdfjsLib.getDocument(window.ofpPdfBytes);
-                    const sourceDoc = await loadingTask.promise;
-                    const totalPages = sourceDoc.numPages;
-                
-                    // 3. Create a NEW, CLEAN PDF
-                    const newPdf = await PDFLib.PDFDocument.create();
+            // 1. Load the original vector PDF directly (Keeps file size tiny!)
+            const sourcePdfDoc = await PDFLib.PDFDocument.load(window.ofpPdfBytes);
+            const totalPages = sourcePdfDoc.getPageCount();
 
-                    // 4. Determine Cutoff
-                    let lastPageIndex = totalPages - 1; 
-                    const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
+            // 2. Create the output PDF
+            const newPdf = await PDFLib.PDFDocument.create();
 
-                    if (cutoff > 2 && cutoff < totalPages - 1) {
-                        lastPageIndex = cutoff;
-                    }
+            // 3. Determine Cutoff
+            const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
+            const lastPageIndex = (cutoff > 2 && cutoff < totalPages - 1) ? cutoff : totalPages - 1;
 
-                    // 5. PROCESS PAGES AS IMAGES
-                    const SCALE = 2.0; 
-
-                    for (let i = 1; i <= lastPageIndex + 1; i++) {
-                        // 5.1. Render Page to Canvas
-                        const page = await sourceDoc.getPage(i);
-                        const viewport = page.getViewport({ scale: SCALE });
-                        
-                        const canvas = document.createElement('canvas');
-                        const context = canvas.getContext('2d');
-                        canvas.width = viewport.width;
-                        canvas.height = viewport.height;
-
-                        await page.render({
-                            canvasContext: context,
-                            viewport: viewport
-                        }).promise;
-
-                        // 5.2 Convert to Image
-                        const imgData = canvas.toDataURL('image/jpeg', 0.80);
-                        const img = await newPdf.embedJpg(imgData);
-
-                        // 5.3 Add Page to PDF
-                        const widthPoints = viewport.width / SCALE;
-                        const heightPoints = viewport.height / SCALE;
-                        
-                        const newPage = newPdf.addPage([widthPoints, heightPoints]);
-
-                        // 5.4 Draw the background image to fill the page
-                        newPage.drawImage(img, {
-                            x: 0,
-                            y: 0,
-                            width: widthPoints,
-                            height: heightPoints
-                        });
-
-                        const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
-                        const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
-
-                        // 5.5 Front Page Overlays
-                        if (i === 1) {
-                            // ATIS/ATC – only if in typing mode
-                            if (currentAtisInputMode === 'typing') {
-                                const lineHeight = 16;   // spacing between lines (font size 12 + 2)
-                                const maxCharsPerLine = 50;
-
-                                // Helper to draw a field with optional wrapping
-                                const drawWrappedField = (id, offset, coord) => {
-                                    const rawText = el(id)?.value;
-                                    if (!coord || !rawText) return;
-
-                                    const fullText = rawText.toUpperCase();
-                                    const lines = fullText.match(new RegExp(`.{1,${maxCharsPerLine}}`, 'g')) || [fullText];
-                                    const baseX = coord.transform[4] + offset;
-                                    let baseY = coord.transform[5] + V_LIFT;
-
-                                    lines.forEach((line, idx) => {
-                                        newPage.drawText(line.trim(), {
-                                            x: baseX,
-                                            y: baseY - idx * lineHeight,
-                                            size: 12,
-                                            font: fontB,
-                                            color: PDFLib.rgb(0, 0, 0)
-                                        });
-                                    });
-                                };
-
-                                // ATIS – wrap after 50 chars
-                                drawWrappedField('front-atis', 40, frontCoords.atis);
-
-                                // ATC – single line (no wrapping)
-                                const atcText = el('front-atc')?.value;
-                                if (frontCoords.atcLabel && atcText) {
-                                    newPage.drawText(atcText.toUpperCase(), {
-                                        x: frontCoords.atcLabel.transform[4] + 50,
-                                        y: frontCoords.atcLabel.transform[5] + V_LIFT,
-                                        size: 12,
-                                        font: fontB,
-                                        color: PDFLib.rgb(0, 0, 0)
-                                    });
-                                }
-                            }
-                            // ATIS/ATC – only if in drawing mode
-                            if (currentAtisInputMode === 'writing') {
-                                // ATIS canvas
-                                if (pads.atis.pad && !pads.atis.pad.isEmpty()) {
-                                    try {
-                                        const atisData = pads.atis.pad.toDataURL();
-                                        const atisImg = await newPdf.embedPng(atisData);
-                                        const atisCoord = frontCoords.atis;
-                                        if (atisCoord) {
-                                            newPage.drawImage(atisImg, {
-                                                x: atisCoord.transform[4] + 40,
-                                                y: atisCoord.transform[5] - 15, 
-                                                width: 150,
-                                                height: 40
-                                            });
-                                        }
-                                    } catch(e) { console.error('ATIS drawing error', e); }
-                                }
-                                // ATC canvas 
-                                if (pads.atc.pad && !pads.atc.pad.isEmpty()) {
-                                    try {
-                                        const atcData = pads.atc.pad.toDataURL();
-                                        const atcImg = await newPdf.embedPng(atcData);
-                                        const atcCoord = frontCoords.atcLabel;
-                                        if (atcCoord) {
-                                            newPage.drawImage(atcImg, {
-                                                x: atcCoord.transform[4] + 50,
-                                                y: atcCoord.transform[5] - 15, 
-                                                width: 150,
-                                                height: 40
-                                            });
-                                        }
-                                    } catch(e) { console.error('ATC drawing error', e); }
-                                }
-                            }
-
-                            // PIC Block
-                            const picBlockText = el('view-pic-block')?.innerText || "";
-                            if(frontCoords.picBlockLabel && picBlockText && picBlockText !== '-') {
-                                newPage.drawText(picBlockText, { x: frontCoords.picBlockLabel.transform[4] + 65, y: frontCoords.picBlockLabel.transform[5] + V_LIFT, size: 12, font: fontB });
-                            }
-
-                            // Reason
-                            const reasonText = el('front-extra-reason')?.value || "";
-                            if(frontCoords.reasonLabel && reasonText) {
-                                newPage.drawText(reasonText.toUpperCase(), { x: frontCoords.reasonLabel.transform[4] + 175, y: frontCoords.reasonLabel.transform[5] + V_LIFT, size: 12, font: fontB });
-                            }
-
-                            // Altimeters
-                            ['altm1','stby','altm2'].forEach(k => {
-                                const v = el('front-'+k)?.value;
-                                const coord = frontCoords[k];
-                                if(coord && v) newPage.drawText(v, { x: coord.transform[4] + (k==='stby'?40:50), y: coord.transform[5] + V_LIFT, size: 12, font: fontB });
-                            });
-
-                            // Signature
-                            if (pads.main.pad && !pads.main.pad.isEmpty() && frontCoords.reasonLabel) {
-                                try {
-                                    const sigData = pads.main.pad.toDataURL();
-                                    const sigImg = await newPdf.embedPng(sigData);
-                                    newPage.drawImage(sigImg, {
-                                        x: frontCoords.reasonLabel.transform[4],
-                                        y: frontCoords.reasonLabel.transform[5] + 40,
-                                        width: 100,
-                                        height: 35
-                                    });
-                                } catch(e) {
-                                    console.error('Failed to embed signature', e);
-                                }
-                            }
-                        }
-                        const pageIndex = i - 1;
+            // 4. Copy the vector pages (Fast and clean)
+            const pagesToCopy = Array.from({ length: lastPageIndex + 1 }, (_, i) => i);
+            const copiedPages = await newPdf.copyPages(sourcePdfDoc, pagesToCopy);
             
-                        const drawWp = (list, pre) => {
-                            list.forEach((wp, idx) => {
-                                if (wp.page === pageIndex && !wp.isTakeoff) {
-                                    const mainY = wp.y_anchor;
-                                    const a = el(`${pre}-a-${idx}`)?.value.replace(':','') || "";
-                                    const f = el(`${pre}-f-${idx}`)?.value || "";
-                                    const n = el(`${pre}-n-${idx}`)?.value || "";
-                                    const agl = el(`${pre}-agl-${idx}`)?.value || "";
+            const fontB = await newPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+            const fontR = await newPdf.embedFont(PDFLib.StandardFonts.Helvetica);
 
-                                    // ETO (Blue text)
-                                    if(wp.eto) newPage.drawText(wp.eto, { x: TIME_X, y: mainY + LINE_HEIGHT + V_LIFT, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
-                                    // ATO (Regular font)
-                                    if(a) newPage.drawText(a, { x: ATO_X, y: mainY + V_LIFT, size: 12, font: fontR });
-                                    // Fuel
-                                    if(f) newPage.drawText(f, { x: FOB_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                                    // Notes
-                                    if(n) newPage.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                                    // AGL
-                                    if(agl) newPage.drawText(agl, { x: 115, y: mainY - LINE_HEIGHT + V_LIFT, size: 10, font: fontB });
-                                }
+            copiedPages.forEach((page, i) => {
+                newPdf.addPage(page);
+                
+                // Front Page Overlays
+                if (i === 0) {
+                    if (typeof currentAtisInputMode !== 'undefined' && currentAtisInputMode === 'typing') {
+                        const lineHeight = 16;
+                        
+                        const drawWrappedField = (id, offset, coord) => {
+                            const rawText = document.getElementById(id)?.value;
+                            if (!coord || !rawText) return;
+
+                            const lines = rawText.toUpperCase().match(/.{1,50}/g) || [rawText.toUpperCase()];
+                            const baseX = coord.transform[4] + offset;
+                            let baseY = coord.transform[5] + (typeof V_LIFT !== 'undefined' ? V_LIFT : 0);
+
+                            lines.forEach((line, idx) => {
+                                page.drawText(line.trim(), {
+                                    x: baseX, y: baseY - (idx * lineHeight), size: 12, font: fontB
+                                });
                             });
                         };
-                        drawWp(waypoints, 'o');
-                        drawWp(alternateWaypoints, 'a');
+
+                        drawWrappedField('front-atis', 40, typeof frontCoords !== 'undefined' ? frontCoords.atis : null);
+
+                        const atcText = document.getElementById('front-atc')?.value;
+                        if (typeof frontCoords !== 'undefined' && frontCoords.atcLabel && atcText) {
+                            page.drawText(atcText.toUpperCase(), {
+                                x: frontCoords.atcLabel.transform[4] + 50,
+                                y: frontCoords.atcLabel.transform[5] + (typeof V_LIFT !== 'undefined' ? V_LIFT : 0),
+                                size: 12, font: fontB
+                            });
+                        }
                     }
 
-                    // 6. SAVE
-                    const bytes = await newPdf.save();
-                    const flight = el('view-flt')?.innerText || el('j-flt')?.value || 'OFP';
-                    const date = el('view-date')?.innerText || el('j-date')?.value || '';
-                    let filename = generateOFPDFilename(flight, date);
-                    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                    window.lastGeneratedOFPPdfBytes = bytes;
-
-                    if (mode === 'email' && isMobile) {
-                        const flt = el('j-flt')?.value || "FLT";
-                        const date = el('j-date')?.value || "DATE";
-                        const subject = `OFP: ${flt} ${date}`;
-                        await sharePdf(bytes, filename, subject, "Please find attached the OFP for flight ${flt} on ${date}");
-                    } else {
-                        downloadBlob(bytes, filename);
+                    if (typeof currentAtisInputMode !== 'undefined' && currentAtisInputMode === 'writing' && typeof pads !== 'undefined') {
+                        const embedPad = async (padName, coord, xOffset, yOffset, width, height) => {
+                            if (pads[padName]?.pad && !pads[padName].pad.isEmpty() && coord) {
+                                try {
+                                    const img = await newPdf.embedPng(pads[padName].pad.toDataURL());
+                                    page.drawImage(img, {
+                                        x: coord.transform[4] + xOffset,
+                                        y: coord.transform[5] + yOffset,
+                                        width, height
+                                    });
+                                } catch (e) { console.error(`${padName} drawing error`, e); }
+                            }
+                        };
+                        
+                        if (typeof frontCoords !== 'undefined') {
+                            embedPad('atis', frontCoords.atis, 40, -15, 150, 40);
+                            embedPad('atc', frontCoords.atcLabel, 50, -15, 150, 40);
+                        }
                     }
-                    
-                    if(typeof resetOFPAfterSend === 'function') await resetOFPAfterSend();
 
-                } catch (error) {
-                    window.lastGeneratedOFPPdfBytes = null;
-                    console.error("Download Error:", error);
-                    alert("Error generating PDF: " + error.message);
-                } finally {
-                    // Hide container after processing (success or inner error)
-                    if (container) container.style.display = 'none';
+                    // PIC Block, Reason, Altimeters
+                    if (typeof frontCoords !== 'undefined') {
+                        const vLift = typeof V_LIFT !== 'undefined' ? V_LIFT : 0;
+                        const drawTextSafely = (id, coord, shiftX) => {
+                            const val = document.getElementById(id)?.value || document.getElementById(id)?.innerText || "";
+                            if (coord && val && val !== '-') {
+                                page.drawText(val.toUpperCase(), { x: coord.transform[4] + shiftX, y: coord.transform[5] + vLift, size: 12, font: fontB });
+                            }
+                        };
+
+                        drawTextSafely('view-pic-block', frontCoords.picBlockLabel, 65);
+                        drawTextSafely('front-extra-reason', frontCoords.reasonLabel, 175);
+                        drawTextSafely('front-altm1', frontCoords.altm1, 50);
+                        drawTextSafely('front-stby', frontCoords.stby, 40);
+                        drawTextSafely('front-altm2', frontCoords.altm2, 50);
+
+                        // Signature
+                        if (typeof pads !== 'undefined' && pads.main?.pad && !pads.main.pad.isEmpty() && frontCoords.reasonLabel) {
+                            newPdf.embedPng(pads.main.pad.toDataURL()).then(sigImg => {
+                                page.drawImage(sigImg, {
+                                    x: frontCoords.reasonLabel.transform[4],
+                                    y: frontCoords.reasonLabel.transform[5] + 40,
+                                    width: 100, height: 35
+                                });
+                            }).catch(e => console.warn('Failed to embed signature', e));
+                        }
+                    }
                 }
-            } catch (error) {
-                // Outer catch – also hide container
-                if (container) container.style.display = 'none';
-            await logSecurityEvent('OFP_DOWNLOAD_ERROR', {
-                error: error.message,
-                mode: mode
+
+                // Flight Log Overlays
+                const drawWp = (list, pre) => {
+                    if (!list) return;
+                    const vLift = typeof V_LIFT !== 'undefined' ? V_LIFT : 0;
+                    const lHeight = typeof LINE_HEIGHT !== 'undefined' ? LINE_HEIGHT : 12;
+                    
+                    list.forEach((wp, idx) => {
+                        if (wp.page === i && !wp.isTakeoff) {
+                            const mainY = wp.y_anchor;
+                            const getVal = id => document.getElementById(id)?.value || "";
+                            
+                            const a = getVal(`${pre}-a-${idx}`).replace(':','');
+                            const f = getVal(`${pre}-f-${idx}`);
+                            const n = getVal(`${pre}-n-${idx}`);
+                            const agl = getVal(`${pre}-agl-${idx}`);
+
+                            if (wp.eto && typeof TIME_X !== 'undefined') page.drawText(wp.eto, { x: TIME_X, y: mainY + lHeight + vLift, size: 12, font: fontB, color: PDFLib.rgb(0,0,0.5) });
+                            if (a && typeof ATO_X !== 'undefined') page.drawText(a, { x: ATO_X, y: mainY + vLift, size: 12, font: fontR });
+                            if (f && typeof FOB_X !== 'undefined') page.drawText(f, { x: FOB_X, y: mainY - lHeight + vLift, size: 10, font: fontB });
+                            if (n && typeof NOTES_X !== 'undefined') page.drawText(n.toUpperCase(), { x: NOTES_X, y: mainY - lHeight + vLift, size: 10, font: fontB });
+                            if (agl) page.drawText(agl, { x: 115, y: mainY - lHeight + vLift, size: 10, font: fontB });
+                        }
+                    });
+                };
+
+                if (typeof waypoints !== 'undefined') drawWp(waypoints, 'o');
+                if (typeof alternateWaypoints !== 'undefined') drawWp(alternateWaypoints, 'a');
             });
+
+            // 5. Save and Export
+            const bytes = await newPdf.save();
+            const flt = document.getElementById('view-flt')?.innerText || document.getElementById('j-flt')?.value || 'OFP';
+            const date = document.getElementById('view-date')?.innerText || document.getElementById('j-date')?.value || '';
+            const filename = typeof generateOFPDFilename === 'function' ? generateOFPDFilename(flt, date) : `OFP_${flt}.pdf`;
+            
+            window.lastGeneratedOFPPdfBytes = bytes;
+
+            if (mode === 'email' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+                const subject = `OFP: ${flt} ${date}`;
+                if (typeof sharePdf === 'function') await sharePdf(bytes, filename, subject, `Please find attached the OFP for flight ${flt} on ${date}`);
+            } else {
+                if (typeof downloadBlob === 'function') downloadBlob(bytes, filename);
+            }
+            
+            if (typeof resetOFPAfterSend === 'function') await resetOFPAfterSend();
+
+        } catch (error) {
+            window.lastGeneratedOFPPdfBytes = null;
+            console.error("Download Error:", error);
+            if (typeof logSecurityEvent === 'function') await logSecurityEvent('OFP_DOWNLOAD_ERROR', { error: error.message, mode });
+            alert("Error generating PDF: " + error.message);
+        } finally {
+            if (container) container.style.display = 'none';
         }
     };
 
     async function resetOFPAfterSend() {
-        // 1. Popup Confirmation (unchanged)
-        const userConfirmed = await showConfirmDialog(
-            'OFP Generated Successfully',
-            '<div style="text-align:center;">Click Finalize to wipe the form for the next flight.<br>' +
-            'Click Modify if you need to make changes.</div>',
-            'Finalize',
-            'Modify',
-            true
-        );
+        const userConfirmed = typeof showConfirmDialog === 'function' 
+            ? await showConfirmDialog('OFP Generated', '<div style="text-align:center;">Click Finalize to wipe the form.<br>Click Modify to make changes.</div>', 'Finalize', 'Modify', 'info', true)
+            : confirm("Finalize and wipe the form?");
 
         if (!userConfirmed) {
             window.lastGeneratedOFPPdfBytes = null;
             return;
         }
 
-        // 2. Save logged PDF to the active OFP (unchanged)
         try {
             const activeId = localStorage.getItem('activeOFPId');
             if (activeId && window.lastGeneratedOFPPdfBytes) {
                 const loggedBlob = new Blob([window.lastGeneratedOFPPdfBytes], { type: 'application/pdf' });
-                await updateOFP(activeId, {
-                    finalized: true,
-                    isActive: false,
-                    loggedPdfData: loggedBlob,
-                    finalizedAt: new Date().toISOString()
-                });
-                showToast("OFP finalized", 'success');
+                if (typeof updateOFP === 'function') {
+                    await updateOFP(activeId, { finalized: true, isActive: false, loggedPdfData: loggedBlob, finalizedAt: new Date().toISOString() });
+                }
+                if (typeof showToast !== 'undefined') showToast("OFP finalized", 'success');
             }
         } catch (error) {
             console.error("Failed to save logged OFP:", error);
-            showToast("Failed to save finalized OFP", 'error');
         } finally {
             window.lastGeneratedOFPPdfBytes = null;
         }
 
-        // 3. Reset UI but do NOT show upload overlay yet (unchanged)
-        await performDataReset(true, false);
+        if (typeof performDataReset === 'function') await performDataReset(true, false);
 
-        // 4. Get settings (unchanged)
         const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-        const autoActivate = settings.autoActivateNext !== false; // default true
+        const autoActivate = settings.autoActivateNext !== false;
 
-        // 5. Refresh cache and get all OFPs
-        const allOFPs = await getCachedOFPs(true); // force refresh
+        const allOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
         const nonFinalizedOFPs = allOFPs.filter(ofp => !ofp.finalized);
 
         if (nonFinalizedOFPs.length === 0) {
-            showToast("Do not forget to send your Journey Log", 'info');
+            if (typeof showToast !== 'undefined') showToast("Do not forget to send your Journey Log", 'info');
             const journeyBtn = document.querySelector('.nav-btn[data-tab="journey"], .nav-btn[onclick*="journey"]');
-            if (journeyBtn) {
-                if (typeof window.showTab === 'function') {
-                    window.showTab('journey', journeyBtn);
-                } else {
-                    journeyBtn.click();
-                }
-            }
+            if (journeyBtn) (typeof window.showTab === 'function') ? window.showTab('journey', journeyBtn) : journeyBtn.click();
             return;
         }
 
-        // THERE ARE NON‑FINALIZED OFPs → PROCEED WITH AUTO‑ACTIVATION (if enabled)
-        const currentActiveId = localStorage.getItem('activeOFPId');
         let nextOFP = null;
-
         if (autoActivate && allOFPs.length > 0) {
+            const currentActiveId = localStorage.getItem('activeOFPId');
             if (currentActiveId) {
                 const currentIndex = allOFPs.findIndex(o => o.id === Number(currentActiveId));
-                if (currentIndex !== -1 && currentIndex < allOFPs.length - 1) {
-                    nextOFP = allOFPs[currentIndex + 1];
-                }
+                if (currentIndex !== -1 && currentIndex < allOFPs.length - 1) nextOFP = allOFPs[currentIndex + 1];
             }
-            if (!nextOFP && nonFinalizedOFPs.length > 0) {
-                nextOFP = nonFinalizedOFPs[0];
-            }
+            if (!nextOFP && nonFinalizedOFPs.length > 0) nextOFP = nonFinalizedOFPs[0];
         }
 
         if (nextOFP) {
-            await activateOFP(nextOFP.id);
+            if (typeof activateOFP === 'function') await activateOFP(nextOFP.id);
         } else {
-            // No OFP to activate – show upload overlay
-            setOFPLoadedState(false);
+            if (typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
             localStorage.removeItem('activeOFPId');
-
-            // Force empty state update after a short delay
             setTimeout(() => {
-                updateEmptyStates();
-                // Also refresh the current tab's content (clear any lingering data)
-                const activeTab = document.querySelector('.tool-section.active');
-                if (activeTab) {
-                    // Force re-evaluation of OFP-related UI (e.g., summary fields)
+                if (typeof updateEmptyStates === 'function') updateEmptyStates();
+                if (document.querySelector('.tool-section.active')) {
                     if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
                     if (typeof validateOFPInputs === 'function') validateOFPInputs();
                 }
@@ -6998,7 +5484,9 @@ for (const s of debugSearches) {
 
     window.downloadSavedOFP = async function(id) {
         try {
-            const db = await getDB();
+            const db = await (typeof getDB === 'function' ? getDB() : null);
+            if (!db) return;
+            
             const tx = db.transaction("ofps", "readonly");
             const store = tx.objectStore("ofps");
             const request = store.get(Number(id));
@@ -7009,19 +5497,21 @@ for (const s of debugSearches) {
                     const url = URL.createObjectURL(ofp.loggedPdfData);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = generateOFPDFilename(ofp.flight, ofp.date);
+                    a.download = typeof generateOFPDFilename === 'function' ? generateOFPDFilename(ofp.flight, ofp.date) : `OFP_${ofp.flight}.pdf`;
+                    
                     document.body.appendChild(a);
                     a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    showToast("Logged OFP downloaded", 'success');
+                    a.remove();
+                    
+                    setTimeout(() => URL.revokeObjectURL(url), 100); // Memory leak fix
+                    if (typeof showToast !== 'undefined') showToast("Logged OFP downloaded", 'success');
                 } else {
-                    showToast("No logged version found", 'error');
+                    if (typeof showToast !== 'undefined') showToast("No logged version found", 'error');
                 }
             };
         } catch (error) {
             console.error("Error downloading logged OFP:", error);
-            showToast("Download failed", 'error');
+            if (typeof showToast !== 'undefined') showToast("Download failed", 'error');
         }
     };
 
@@ -7036,171 +5526,124 @@ for (const s of debugSearches) {
         'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2',
         'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw',
         'j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count','j-report-type', 'front-extra-reason',
-        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block',
+        'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'view-pic-block'
     ];
 
-    // 1. SAVE FUNCTION 
+    // 1. HIGH-SPEED SAVE FUNCTION 
     async function saveState() {
         if (!isAppLoaded) return;
 
         const activeId = localStorage.getItem('activeOFPId');
-        if (!activeId) {
-            return;
-        }
+        if (!activeId) return;
 
-        // Capture waypoint user inputs
-        const userWaypoints = waypoints.map((wp, i) => ({
+        // O(n) Waypoint Extractor
+        const userWaypoints = waypoints.map((_, i) => ({
             ato: el(`o-a-${i}`)?.value || "",
             fuel: el(`o-f-${i}`)?.value || "",
             notes: el(`o-n-${i}`)?.value || "",
             agl: el(`o-agl-${i}`)?.value || ""
         }));
 
-        // Prepare combined user inputs (persistent fields + drawings + signature)
         const combinedInputs = {};
-
-        // Persistent text inputs
-        PERSISTENT_INPUT_IDS.forEach(id => {
-            const el = document.getElementById(id);
-            if (el) combinedInputs[id] = el.value;
-        });
-
-        // Helper to validate data URL
-        function isValidDataURL(data) {
-            return data && typeof data === 'string' && data.startsWith('data:image/png;base64,') && data.length > 100;
+        
+        // Grab persistent text inputs instantly
+        if (typeof PERSISTENT_INPUT_IDS !== 'undefined') {
+            PERSISTENT_INPUT_IDS.forEach(id => {
+                const element = el(id);
+                if (element) combinedInputs[id] = element.value;
+            });
         }
 
-        // ATIS/ATC drawings
-        if (currentAtisInputMode === 'writing') {
-            if (pads.atis.pad && !pads.atis.pad.isEmpty()) {
-                const data = pads.atis.pad.toDataURL();
-                if (isValidDataURL(data)) {
-                    combinedInputs['front-atis-drawing'] = data;
-                    localStorage.setItem(`drawing_backup_${activeId}_atis`, data);
-                } else {
-                    combinedInputs['front-atis-drawing'] = null;
+        // Helper to extract Canvas data cleanly without blocking UI
+        const extractPadData = (padDef, backupKey) => {
+            if (padDef?.pad && !padDef.pad.isEmpty()) {
+                const data = padDef.pad.toDataURL();
+                if (typeof data === 'string' && data.startsWith('data:image/png') && data.length > 100) {
+                    localStorage.setItem(`drawing_backup_${activeId}_${backupKey}`, data);
+                    return data;
                 }
-            } else {
-                combinedInputs['front-atis-drawing'] = null;
             }
+            return null;
+        };
 
-            if (pads.atc.pad && !pads.atc.pad.isEmpty()) {
-                const data = pads.atc.pad.toDataURL();
-                if (isValidDataURL(data)) {
-                    combinedInputs['front-atc-drawing'] = data;
-                    localStorage.setItem(`drawing_backup_${activeId}_atc`, data);
-                } else {
-                    combinedInputs['front-atc-drawing'] = null;
-                }
-            } else {
-                combinedInputs['front-atc-drawing'] = null;
-            }
+        // Extract Drawings
+        if (currentAtisInputMode === 'writing') {
+            combinedInputs['front-atis-drawing'] = extractPadData(pads.atis, 'atis');
+            combinedInputs['front-atc-drawing'] = extractPadData(pads.atc, 'atc');
         } else {
             combinedInputs['front-atis-drawing'] = null;
             combinedInputs['front-atc-drawing'] = null;
         }
+        
+        combinedInputs.signature = extractPadData(pads.main, 'signature');
 
-        // Main signature
-        if (pads.main.pad && !pads.main.pad.isEmpty()) {
-            const data = pads.main.pad.toDataURL();
-            if (isValidDataURL(data)) {
-                combinedInputs.signature = data;
-                localStorage.setItem(`drawing_backup_${activeId}_signature`, data);
-            } else {
-                combinedInputs.signature = null;
-            }
-        } else {
-            combinedInputs.signature = null;
+        // Fire-and-forget IndexedDB save
+        if (typeof saveOFPUserData === 'function') {
+            saveOFPUserData(Number(activeId), userWaypoints, combinedInputs).catch(e => console.warn('Failed to save user data', e));
         }
 
-        // Save to the new store
-        try {
-            await saveOFPUserData(Number(activeId), userWaypoints, combinedInputs);
-        } catch (e) {
-            console.warn('Failed to save user data', e);
-        }
-
-        // Save non‑OFP state to localStorage (encrypted + fallback) – unchanged
+        // Build base app state
         const state = {
             inputs: {},
-            dailyLegs: dailyLegs,
+            dailyLegs: dailyLegs || [],
             dutyStartTime: dutyStartTime,
-            version: APP_VERSION,
+            version: typeof APP_VERSION !== 'undefined' ? APP_VERSION : '1.0',
             timestamp: new Date().toISOString(),
-            savedTaxiValue: fuelData.find(x => x.name === "TAXI")?.fuel || 200
+            savedTaxiValue: (typeof fuelData !== 'undefined' ? fuelData.find(x => x.name === "TAXI")?.fuel : null) || 200
         };
 
         SAVE_IDS.forEach(id => {
-            const e = el(id);
-            if (e) state.inputs[id] = e.value;
+            const element = el(id);
+            if (element) state.inputs[id] = element.value;
         });
 
-        // Fallback sync save
+        // Save Fallback Sync
         try {
             localStorage.setItem('efb_log_state_fallback', JSON.stringify(state));
         } catch (e) {
             console.error('Storage full or error:', e);
         }
 
-        // Encrypted async save
-        try {
-            if (typeof encryptData === 'function') {
-                const encryptedState = await encryptData(state);
-                localStorage.setItem('efb_log_state', encryptedState);
-            }
-        } catch (error) {
-            console.warn('Encryption save failed, relying on fallback.', error);
+        // Save Encrypted Async
+        if (typeof encryptData === 'function') {
+            encryptData(state)
+                .then(encryptedState => localStorage.setItem('efb_log_state', encryptedState))
+                .catch(err => console.warn('Encryption save failed, relying on fallback.', err));
         }
     }
 
-    // 2. LOAD FUNCTION 
+    // 2. STREAMLINED LOAD FUNCTION 
     async function loadState() {
-        // Try encrypted first, then fallback
         let raw = localStorage.getItem('efb_log_state');
-        let isEncrypted = true;
-
-        if (!raw) {
-            raw = localStorage.getItem('efb_log_state_fallback');
-            isEncrypted = false;
-
-            if (!raw) {
-                raw = localStorage.getItem('efb_log_state_plain');
-            }
-
-            if (!raw) {
-                console.log("No saved data found.");
-                isAppLoaded = true;
-                return;
-            }
-        }
+        let state = null;
 
         try {
-            let state;
-
-            if (isEncrypted) {
+            // 1. Try Encrypted First
+            if (raw && typeof decryptData === 'function') {
                 try {
                     state = await decryptData(raw);
-                } catch (decryptError) {
-                    console.error("Decryption failed, switching to fallback.");
-                    raw = localStorage.getItem('efb_log_state_fallback');
-                    if (raw) {
-                        state = JSON.parse(raw);
-                        isEncrypted = false;
-                    } else {
-                        raw = localStorage.getItem('efb_log_state_plain');
-                        if (raw) state = JSON.parse(raw);
-                        else throw new Error("Decryption failed and no fallback found.");
-                    }
+                } catch (e) {
+                    console.warn("Decryption failed, falling back to plain storage.");
                 }
-            } else {
-                state = JSON.parse(raw);
             }
 
-            // Restore non‑OFP‑specific state (safe)
+            // 2. Try Fallbacks
+            if (!state) {
+                raw = localStorage.getItem('efb_log_state_fallback') || localStorage.getItem('efb_log_state_plain');
+                if (raw) state = JSON.parse(raw);
+            }
+
+            // 3. Exit if empty
+            if (!state) {
+                console.log("No saved app state found.");
+                return;
+            }
+
+            // 4. Restore Data
             if (state.inputs) {
                 Object.keys(state.inputs).forEach(id => {
                     const val = state.inputs[id];
-                    if (val !== "" && val !== null) safeSet(id, val);
+                    if (val != null && val !== "") safeSet(id, val);
                 });
             }
 
@@ -7214,7 +5657,7 @@ for (const s of debugSearches) {
                 if (typeof calcDutyLogic === 'function') calcDutyLogic();
             }
 
-            // Recalculate dependent values
+            // 5. Trigger Calculations
             if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
             if (typeof syncLastWaypoint === 'function') syncLastWaypoint();
 
@@ -7233,22 +5676,17 @@ for (const s of debugSearches) {
     function getDB() {
         if (!dbPromise) {
             dbPromise = new Promise((resolve, reject) => {
-                const request = indexedDB.open("EFB_PDF_DB", 11); // Version 11
+                const request = indexedDB.open("EFB_PDF_DB", 11);
 
                 request.onupgradeneeded = function(e) {
                     const db = e.target.result;
                     const oldVersion = e.oldVersion;
                     const tx = e.target.transaction;
 
-                    // --- ofp_user_data store (added in v10) ---
                     if (!db.objectStoreNames.contains("ofp_user_data")) {
                         db.createObjectStore("ofp_user_data", { keyPath: "ofpId" });
-                        console.log('Created ofp_user_data store (upgrade to v10)');
                     }
-
-                    // --- ofps store (main OFP records) ---
                     if (!db.objectStoreNames.contains("ofps")) {
-                        console.warn(`getDB: creating ofps store (oldVersion=${oldVersion})`);
                         const ofpStore = db.createObjectStore("ofps", { keyPath: "id", autoIncrement: true });
                         ofpStore.createIndex("flight", "flight", { unique: false });
                         ofpStore.createIndex("date", "date", { unique: false });
@@ -7256,99 +5694,67 @@ for (const s of debugSearches) {
                         ofpStore.createIndex("isActive", "isActive", { unique: false });
                         ofpStore.createIndex("order", "order", { unique: false });
                     }
-
-                    // --- legacy files store (v2) ---
-                    if (oldVersion < 2) {
-                        if (!db.objectStoreNames.contains("files")) {
-                            db.createObjectStore("files");
-                        }
+                    if (oldVersion < 2 && !db.objectStoreNames.contains("files")) {
+                        db.createObjectStore("files");
                     }
-
-                    // --- v4 migration (finalized / loggedPdfData) ---
                     if (oldVersion < 4 && oldVersion >= 3) {
                         const store = tx.objectStore("ofps");
-                        const getAll = store.getAll();
-                        getAll.onsuccess = () => {
-                            getAll.result.forEach(ofp => {
+                        store.openCursor().onsuccess = (evt) => {
+                            const cursor = evt.target.result;
+                            if (cursor) {
+                                const ofp = cursor.value;
                                 let needsUpdate = false;
                                 if (ofp.finalized === undefined) { ofp.finalized = false; needsUpdate = true; }
                                 if (ofp.loggedPdfData === undefined) { ofp.loggedPdfData = null; needsUpdate = true; }
-                                if (needsUpdate) store.put(ofp);
-                            });
+                                if (needsUpdate) cursor.update(ofp);
+                                cursor.continue();
+                            }
                         };
                     }
-
-                    // --- v5 migration (order index & default order) ---
                     if (oldVersion < 5) {
                         const store = tx.objectStore("ofps");
-                        if (!store.indexNames.contains("order")) {
-                            store.createIndex("order", "order", { unique: false });
-                        }
-                        const getAll = store.getAll();
-                        getAll.onsuccess = () => {
-                            const ofps = getAll.result;
-                            ofps.sort((a, b) => new Date(a.uploadTime) - new Date(b.uploadTime));
-                            ofps.forEach((ofp, index) => {
-                                if (ofp.order === undefined) {
-                                    ofp.order = index + 1;
-                                    store.put(ofp);
-                                }
-                            });
-                        };
+                        if (!store.indexNames.contains("order")) store.createIndex("order", "order", { unique: false });
                     }
-
-                    // --- v6 migration (tripTime / maxSR) ---
                     if (oldVersion < 6) {
                         const store = tx.objectStore("ofps");
-                        const getAll = store.getAll();
-                        getAll.onsuccess = () => {
-                            getAll.result.forEach(ofp => {
+                        store.openCursor().onsuccess = (evt) => {
+                            const cursor = evt.target.result;
+                            if (cursor) {
+                                const ofp = cursor.value;
                                 let needsUpdate = false;
                                 if (ofp.tripTime === undefined) { ofp.tripTime = ''; needsUpdate = true; }
                                 if (ofp.maxSR === undefined) { ofp.maxSR = ''; needsUpdate = true; }
-                                if (needsUpdate) store.put(ofp);
-                            });
+                                if (needsUpdate) cursor.update(ofp);
+                                cursor.continue();
+                            }
                         };
                     }
-
-                    // --- v7 migration (requestNumber) ---
                     if (oldVersion < 7) {
                         const store = tx.objectStore("ofps");
-                        const getAll = store.getAll();
-                        getAll.onsuccess = () => {
-                            getAll.result.forEach(ofp => {
-                                if (ofp.requestNumber === undefined) {
+                        store.openCursor().onsuccess = (evt) => {
+                            const cursor = evt.target.result;
+                            if (cursor) {
+                                if (cursor.value.requestNumber === undefined) {
+                                    const ofp = cursor.value;
                                     ofp.requestNumber = '';
-                                    store.put(ofp);
+                                    cursor.update(ofp);
                                 }
-                            });
+                                cursor.continue();
+                            }
                         };
                     }
-
-                    // --- v8 migration (ofp_orders store) ---
-                    if (oldVersion < 8) {
-                        if (!db.objectStoreNames.contains("ofp_orders")) {
-                            const orderStore = db.createObjectStore("ofp_orders", { keyPath: "id" });
-                            // Copy existing orders from ofps store
-                            const ofpsStore = tx.objectStore("ofps");
-                            const ordersStore = tx.objectStore("ofp_orders");
-                            const getAllReq = ofpsStore.getAll();
-                            getAllReq.onsuccess = () => {
-                                const ofps = getAllReq.result;
-                                ofps.forEach(ofp => {
-                                    ordersStore.put({ id: ofp.id, order: ofp.order || 0 });
-                                });
-                            };
-                        }
+                    if (oldVersion < 8 && !db.objectStoreNames.contains("ofp_orders")) {
+                        const orderStore = db.createObjectStore("ofp_orders", { keyPath: "id" });
+                        tx.objectStore("ofps").openCursor().onsuccess = (evt) => {
+                            const cursor = evt.target.result;
+                            if (cursor) {
+                                orderStore.put({ id: cursor.value.id, order: cursor.value.order || 0 });
+                                cursor.continue();
+                            }
+                        };
                     }
-
-                    // --- v9 migration (ofp_user_data – already added at top) ---
-                    // (nothing extra needed here, store already created)
-
-                    // --- v11 migration (journey_logs store) ---
                     if (!db.objectStoreNames.contains("journey_logs")) {
                         db.createObjectStore("journey_logs", { keyPath: "id", autoIncrement: true });
-                        console.log('Created journey_logs store (upgrade to v11)');
                     }
                 };
 
@@ -7359,7 +5765,41 @@ for (const s of debugSearches) {
         return dbPromise;
     }
 
-    // Save OFP with metadata to the new store
+    // High-speed Metadata Extractor (Prevents mass RAM spikes)
+    async function getAllOFPMetadata() {
+        const db = await getDB();
+        if (!db.objectStoreNames.contains('ofps')) return [];
+
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(["ofps", "ofp_orders"], "readonly");
+            const ofpsStore = tx.objectStore("ofps");
+            const ordersStore = tx.objectStore("ofp_orders");
+            
+            const metadata = [];
+            const orderMap = {};
+
+            ordersStore.getAll().onsuccess = (e) => {
+                e.target.result.forEach(o => { orderMap[o.id] = o.order; });
+                
+                // Use a cursor to strip Blobs instantly before they accumulate in RAM
+                const req = ofpsStore.openCursor();
+                req.onsuccess = (evt) => {
+                    const cursor = evt.target.result;
+                    if (cursor) {
+                        const { data, loggedPdfData, userWaypoints, userInputs, ...rest } = cursor.value;
+                        rest.order = orderMap[rest.id] || 0;
+                        metadata.push(rest);
+                        cursor.continue();
+                    } else {
+                        metadata.sort((a, b) => a.order - b.order);
+                        resolve(metadata);
+                    }
+                };
+                req.onerror = (err) => reject(err);
+            };
+        });
+    }
+
     async function saveOFPToDB(fileBlob, metadata, activate = true) {
         const db = await getDB();
         return new Promise((resolve, reject) => {
@@ -7367,144 +5807,98 @@ for (const s of debugSearches) {
             const ofpsStore = tx.objectStore("ofps");
             const ordersStore = tx.objectStore("ofp_orders");
 
-            // Get next order number from orders store
-            const getAllRequest = ordersStore.getAll();
-            getAllRequest.onsuccess = () => {
-                const orders = getAllRequest.result;
-                const maxOrder = orders.length > 0 ? Math.max(...orders.map(o => o.order || 0)) : 0;
-                const nextOrder = maxOrder + 1;
+            ordersStore.getAll().onsuccess = (e) => {
+                const orders = e.target.result;
+                const nextOrder = (orders.length > 0 ? Math.max(...orders.map(o => o.order || 0)) : 0) + 1;
 
-                // Deactivate active OFP if needed
-                const deactivateAll = async () => {
-                    if (activate) {
-                        const allOfps = await new Promise((res) => {
-                            const req = ofpsStore.getAll();
-                            req.onsuccess = () => res(req.result);
-                        });
-                        for (let rec of allOfps) {
-                            if (rec.isActive) {
-                                rec.isActive = false;
-                                ofpsStore.put(rec);
+                // O(1) Active Toggling: Only update the exact ID that was previously active
+                if (activate) {
+                    const prevActiveId = localStorage.getItem('activeOFPId');
+                    if (prevActiveId) {
+                        const prevReq = ofpsStore.get(Number(prevActiveId));
+                        prevReq.onsuccess = () => {
+                            if (prevReq.result) {
+                                prevReq.result.isActive = false;
+                                ofpsStore.put(prevReq.result);
                             }
-                        }
+                        };
                     }
+                }
+
+                const ofpRecord = {
+                    ...metadata,
+                    data: fileBlob,
+                    loggedPdfData: null,
+                    finalized: false,
+                    isActive: activate,
+                    order: nextOrder,
+                    uploadTime: new Date().toISOString(),
+                    fileName: fileBlob.name || "Unknown",
+                    tripTime: metadata.tripTime || '',
+                    maxSR: metadata.maxSR || '',
+                    requestNumber: metadata.requestNumber || ''
                 };
 
-                deactivateAll().then(() => {
-                    const ofpRecord = {
-                        ...metadata,
-                        data: fileBlob,
-                        loggedPdfData: null,
-                        finalized: false,
-                        isActive: activate,
-                        order: nextOrder, // keep for backward compatibility
-                        uploadTime: new Date().toISOString(),
-                        fileName: fileBlob.name || "Unknown",
-                        tripTime: metadata.tripTime || '',
-                        maxSR: metadata.maxSR || '',
-                        requestNumber: metadata.requestNumber || '',
-
-                    };
-
-                    const addRequest = ofpsStore.add(ofpRecord);
-                    addRequest.onsuccess = (e) => {
-                        const newId = e.target.result;
-                        // Add order record
-                        ordersStore.put({ id: newId, order: nextOrder });
-
-                        if (activate) {
-                            localStorage.setItem('activeOFPId', newId);
-                        }
-
-                        tx.oncomplete = () => resolve(newId);
-                    };
-                    addRequest.onerror = (e) => reject(e.target.error);
-                }).catch(reject);
+                const addReq = ofpsStore.add(ofpRecord);
+                addReq.onsuccess = (evt) => {
+                    const newId = evt.target.result;
+                    ordersStore.put({ id: newId, order: nextOrder });
+                    if (activate) localStorage.setItem('activeOFPId', newId);
+                    
+                    tx.oncomplete = () => resolve(newId);
+                };
+                addReq.onerror = (err) => reject(err.target.error);
             };
-            getAllRequest.onerror = (e) => reject(e.target.error);
-
-            tx.onerror = (e) => reject(e.target.error);
+            tx.onerror = (err) => reject(err.target.error);
         });
     }
 
-    // Emergency fallback: save PDF to old store + create/update minimal ofps record
     async function emergencySaveOFP(blob, metadata, existingOFP = null) {
-        const results = {
-            pdfSaved: false,
-            ofpsRecordCreated: false,
-            recordId: null
-        };
+        const results = { pdfSaved: false, ofpsRecordCreated: false, recordId: null };
 
-        // 1. Always try to save PDF to old files store (legacy)
         try {
             await savePdfToDB(blob);
             results.pdfSaved = true;
-            console.log('Emergency: PDF saved to old files store');
-        } catch (e) {
-            console.error('Emergency: failed to save PDF to files store', e);
-        }
+        } catch (e) { console.error('Emergency PDF save failed', e); }
 
-        // 2. Create or update minimal ofps record (without PDF blob)
         try {
             const minimalMetadata = {
-                flight: metadata.flight || 'N/A',
-                date: metadata.date || 'N/A',
-                departure: metadata.departure || 'N/A',
-                destination: metadata.destination || 'N/A',
-                tripTime: metadata.tripTime || '',
-                maxSR: metadata.maxSR || '',
-                requestNumber: metadata.requestNumber || ''
+                flight: metadata.flight || 'N/A', date: metadata.date || 'N/A',
+                departure: metadata.departure || 'N/A', destination: metadata.destination || 'N/A',
+                tripTime: metadata.tripTime || '', maxSR: metadata.maxSR || '', requestNumber: metadata.requestNumber || ''
             };
 
-            if (existingOFP && existingOFP.id) {
-                // Update existing record (preserve ID, isActive, order)
-                const updates = {
-                    ...minimalMetadata,
-                    data: null,
-                    loggedPdfData: null,
-                    finalized: false,
-                    isActive: existingOFP.isActive || false,
-                    order: existingOFP.order,
-                    uploadTime: new Date().toISOString(),
-                    fileName: blob.name || "Unknown"
-                };
-                await updateOFP(existingOFP.id, updates);
+            if (existingOFP?.id) {
+                await updateOFP(existingOFP.id, {
+                    ...minimalMetadata, data: null, loggedPdfData: null,
+                    finalized: false, isActive: existingOFP.isActive || false,
+                    order: existingOFP.order, uploadTime: new Date().toISOString(), fileName: blob.name || "Unknown"
+                });
                 results.recordId = existingOFP.id;
                 results.ofpsRecordCreated = true;
-                console.log(`Emergency: existing ofps record updated, ID = ${existingOFP.id}`);
             } else {
-                // Create new minimal record (bottom of order, inactive)
-                const all = await getCachedOFPs();
-                const maxOrder = all.length > 0 ? Math.max(...all.map(o => o.order || 0)) : 0;
-                const ofpRecord = {
-                    ...minimalMetadata,
-                    data: null,
-                    loggedPdfData: null,
-                    finalized: false,
-                    isActive: false,
-                    order: maxOrder + 1,
-                    uploadTime: new Date().toISOString(),
-                    fileName: blob.name || "Unknown"
-                };
                 const db = await getDB();
                 const tx = db.transaction("ofps", "readwrite");
                 const store = tx.objectStore("ofps");
-                const addRequest = store.add(ofpRecord);
-                await new Promise((resolve, reject) => {
-                    addRequest.onsuccess = (e) => {
-                        results.recordId = e.target.result;
-                        results.ofpsRecordCreated = true;
-                        console.log(`Emergency: new minimal ofps record created, ID = ${results.recordId}`);
-                        resolve();
-                    };
-                    addRequest.onerror = (e) => reject(e.target.error);
-                    tx.oncomplete = () => resolve();
-                    tx.onerror = (e) => reject(e.target.error);
+                
+                const maxOrder = await new Promise(res => {
+                    const req = store.index("order").openCursor(null, "prev");
+                    req.onsuccess = (e) => res(e.target.result ? e.target.result.value.order : 0);
+                });
+
+                const addReq = store.add({
+                    ...minimalMetadata, data: null, loggedPdfData: null,
+                    finalized: false, isActive: false, order: maxOrder + 1,
+                    uploadTime: new Date().toISOString(), fileName: blob.name || "Unknown"
+                });
+
+                await new Promise((res, rej) => {
+                    addReq.onsuccess = (e) => { results.recordId = e.target.result; results.ofpsRecordCreated = true; res(); };
+                    addReq.onerror = (e) => rej(e.target.error);
+                    tx.oncomplete = res;
                 });
             }
-        } catch (e2) {
-            console.error('Emergency: ofps record creation/update failed', e2);
-        }
+        } catch (e2) { console.error('Emergency record update failed', e2); }
 
         return results;
     }
@@ -7523,286 +5917,166 @@ for (const s of debugSearches) {
             const tx = db.transaction("ofps", "readwrite");
             const store = tx.objectStore("ofps");
 
-            const getRequest = store.get(Number(id));
-            getRequest.onsuccess = () => {
-                const ofp = getRequest.result;
-                if (!ofp) {
-                    reject(new Error("OFP not found"));
-                    return;
-                }
-                Object.assign(ofp, updates);
-
-                const putRequest = store.put(ofp);
-                putRequest.onerror = (e) => {
-                    alert('Put error:'+ e.target.error);
-                    reject(e.target.error);
-                };
-
-                tx.oncomplete = () => resolve(ofp);
-                tx.onerror = (e) => reject(e.target.error);
+            const getReq = store.get(Number(id));
+            getReq.onsuccess = () => {
+                if (!getReq.result) return reject(new Error("OFP not found"));
+                const putReq = store.put(Object.assign(getReq.result, updates));
+                putReq.onerror = (e) => reject(e.target.error);
+                tx.oncomplete = () => resolve(getReq.result);
             };
-            getRequest.onerror = (e) => reject(e.target.error);
+            getReq.onerror = (e) => reject(e.target.error);
         });
     }
 
     async function findOFPByFlightAndDate(flight, date) {
         if (!flight || !date || flight === 'N/A' || date === 'N/A') return null;
-        const flightStr = String(flight);
         const db = await getDB();
         return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofps", "readonly");
-            const store = tx.objectStore("ofps");
-            const index = store.index("flight");
-            // Use IDBKeyRange to query exact flight
-            const request = index.getAll(IDBKeyRange.only(flightStr));
-            request.onsuccess = () => {
-                const ofps = request.result;
-                const match = ofps.find(ofp => ofp.date === date);
-                resolve(match || null);
-            };
-            request.onerror = (e) => reject(e);
+            const req = db.transaction("ofps", "readonly").objectStore("ofps").index("flight").getAll(IDBKeyRange.only(String(flight)));
+            req.onsuccess = () => resolve(req.result.find(ofp => ofp.date === date) || null);
+            req.onerror = (e) => reject(e);
         });
     }
 
     async function getActiveOFPFromDB() {
         const activeId = localStorage.getItem('activeOFPId');
-        if (!activeId) return null;
-        return getOFPById(Number(activeId));
+        return activeId ? getOFPById(Number(activeId)) : null;
     }
 
     async function deleteOFPFromDB(id) {
         const db = await getDB();
         const numericId = Number(id);
+        const stores = ['ofps', 'ofp_orders'];
+        if (db.objectStoreNames.contains('ofp_user_data')) stores.push('ofp_user_data');
 
-        const storesToUse = ['ofps', 'ofp_orders'];
-        if (db.objectStoreNames.contains('ofp_user_data')) {
-            storesToUse.push('ofp_user_data');
-        }
-
-        const tx = db.transaction(storesToUse, "readwrite");
-        tx.objectStore('ofps').delete(numericId);
-        tx.objectStore('ofp_orders').delete(numericId);
-        if (storesToUse.includes('ofp_user_data')) {
-            tx.objectStore('ofp_user_data').delete(numericId);
-        }
-
-        await new Promise((resolve, reject) => {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(stores, "readwrite");
+            stores.forEach(s => tx.objectStore(s).delete(numericId));
+            
             tx.oncomplete = () => {
-                const activeId = localStorage.getItem('activeOFPId');
-                if (activeId && Number(activeId) === numericId) {
-                    localStorage.removeItem('activeOFPId');
-                }
+                if (localStorage.getItem('activeOFPId') === String(numericId)) localStorage.removeItem('activeOFPId');
                 resolve();
             };
             tx.onerror = (e) => reject(e.target.error);
         });
-        updateUploadButtonVisibility();
-        await updateEmptyStates();
     }
 
     async function clearAllOFPsFromDB() {
         const db = await getDB();
-        const storesToClear = [];
-        if (db.objectStoreNames.contains('ofps')) storesToClear.push('ofps');
-        if (db.objectStoreNames.contains('ofp_orders')) storesToClear.push('ofp_orders');
-        if (db.objectStoreNames.contains('ofp_user_data')) storesToClear.push('ofp_user_data');
+        const stores = ['ofps', 'ofp_orders', 'ofp_user_data'].filter(s => db.objectStoreNames.contains(s));
+        if (stores.length === 0) return localStorage.removeItem('activeOFPId');
 
-        if (storesToClear.length === 0) {
-            localStorage.removeItem('activeOFPId');
-            return;
-        }
-
-        const tx = db.transaction(storesToClear, "readwrite");
-        storesToClear.forEach(storeName => {
-            tx.objectStore(storeName).clear();
-        });
-
-        await new Promise((resolve, reject) => {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(stores, "readwrite");
+            stores.forEach(s => tx.objectStore(s).clear());
             tx.oncomplete = () => {
                 localStorage.removeItem('activeOFPId');
-                updateUploadButtonVisibility();
                 resolve();
             };
-            tx.onerror = (e) => {
-                alert('Transaction error:'+ e.target.error);
-                reject(e.target.error);
-            };
+            tx.onerror = (e) => reject(e.target.error);
         });
-
-        await updateEmptyStates();
     }
 
+    // --- Core Legacy File Store ---
     async function checkPdfInDB() {
         try {
             const db = await getDB();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction("files", "readonly");
-                const req = tx.objectStore("files").get("currentOFP");
-                req.onsuccess = () => resolve(!!req.result);
-                req.onerror = () => resolve(false);
+            return new Promise(res => {
+                const req = db.transaction("files", "readonly").objectStore("files").get("currentOFP");
+                req.onsuccess = () => res(!!req.result);
+                req.onerror = () => res(false);
             });
-        } catch(e) {
-            return false;
-        }
+        } catch { return false; }
     }
 
     async function savePdfToDB(fileBlob) {
         const db = await getDB();
-        return new Promise((resolve, reject) => {
+        return new Promise((res, rej) => {
             const tx = db.transaction("files", "readwrite");
-            const store = tx.objectStore("files");
-            
-            // Store the original Blob, not the ArrayBuffer
-            store.put(fileBlob, "currentOFP");
-            
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
+            tx.objectStore("files").put(fileBlob, "currentOFP");
+            tx.oncomplete = res;
+            tx.onerror = () => rej(tx.error);
         });
     }
 
     async function loadPdfFromDB() {
         const db = await getDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction("files", "readonly");
-            const req = tx.objectStore("files").get("currentOFP");
-            req.onsuccess = () => resolve(req.result); // Return the Blob directly
-            req.onerror = () => resolve(null);
+        return new Promise(res => {
+            const req = db.transaction("files", "readonly").objectStore("files").get("currentOFP");
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => res(null);
         });
     }
 
     async function clearPdfDB() {
         const db = await getDB();
-        const tx = db.transaction("files", "readwrite");
-        tx.objectStore("files").delete("currentOFP");
+        db.transaction("files", "readwrite").objectStore("files").delete("currentOFP");
     }
 
-    async function getAllOFPMetadata() {
-        const db = await getDB();
-        if (!db.objectStoreNames.contains('ofps')) return [];
-
-        if (db.objectStoreNames.contains('ofp_orders')) {
-            const tx = db.transaction(["ofps", "ofp_orders"], "readonly");
-            const ofpsStore = tx.objectStore("ofps");
-            const ordersStore = tx.objectStore("ofp_orders");
-
-            const [ofps, orders] = await Promise.all([
-                new Promise((res, rej) => {
-                    const req = ofpsStore.getAll();
-                    req.onsuccess = () => res(req.result);
-                    req.onerror = (e) => rej(e);
-                }),
-                new Promise((res, rej) => {
-                    const req = ordersStore.getAll();
-                    req.onsuccess = () => res(req.result);
-                    req.onerror = (e) => rej(e);
-                })
-            ]);
-
-            const orderMap = {};
-            orders.forEach(o => { orderMap[o.id] = o.order; });
-
-            // Exclude userWaypoints and userInputs – they are no longer in ofps
-            const metadata = ofps.map(({ data, loggedPdfData, userWaypoints, userInputs, ...rest }) => ({
-                ...rest,
-                order: orderMap[rest.id] || 0
-            }));
-            metadata.sort((a, b) => (a.order || 0) - (b.order || 0));
-            return metadata;
-        } else {
-            // Fallback (should not happen)
-            return [];
-        }
-    }
-
-    // Save user data for a specific OFP
+    // --- Auxiliary Stores ---
     async function saveOFPUserData(ofpId, userWaypoints, userInputs) {
         const db = await getDB();
-        if (!db.objectStoreNames.contains('ofp_user_data')) {
-            alert('ofp_user_data store missing – cannot save');
-            return;
-        }
-        const tx = db.transaction("ofp_user_data", "readwrite");
-        const store = tx.objectStore("ofp_user_data");
-        store.put({ ofpId, userWaypoints, userInputs });
-        return new Promise((resolve, reject) => {
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject(e.target.error);
+        if (!db.objectStoreNames.contains('ofp_user_data')) return;
+        return new Promise((res, rej) => {
+            const tx = db.transaction("ofp_user_data", "readwrite");
+            tx.objectStore("ofp_user_data").put({ ofpId, userWaypoints, userInputs });
+            tx.oncomplete = res;
+            tx.onerror = (e) => rej(e.target.error);
         });
     }
 
-    // Load user data for a specific OFP
     async function loadOFPUserData(ofpId) {
         const db = await getDB();
-        if (!db.objectStoreNames.contains('ofp_user_data')) {
-            alert('ofp_user_data store missing – returning empty');
-            return { userWaypoints: [], userInputs: {} };
-        }
-        const tx = db.transaction("ofp_user_data", "readonly");
-        const store = tx.objectStore("ofp_user_data");
-        return new Promise((resolve, reject) => {
-            const req = store.get(ofpId);
-            req.onsuccess = () => resolve(req.result || { userWaypoints: [], userInputs: {} });
-            req.onerror = (e) => reject(e.target.error);
+        if (!db.objectStoreNames.contains('ofp_user_data')) return { userWaypoints: [], userInputs: {} };
+        return new Promise((res, rej) => {
+            const req = db.transaction("ofp_user_data", "readonly").objectStore("ofp_user_data").get(ofpId);
+            req.onsuccess = () => res(req.result || { userWaypoints: [], userInputs: {} });
+            req.onerror = (e) => rej(e.target.error);
         });
     }
 
     async function saveJourneyLog(pdfBlob, metadata) {
         const db = await getDB();
-        const tx = db.transaction("journey_logs", "readwrite");
-        const store = tx.objectStore("journey_logs");
-        const record = {
-            ...metadata,
-            data: pdfBlob,
-            finalizedAt: new Date().toISOString()
-        };
-        return new Promise((resolve, reject) => {
-            const req = store.add(record);
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = (e) => reject(e.target.error);
+        return new Promise((res, rej) => {
+            const tx = db.transaction("journey_logs", "readwrite");
+            const req = tx.objectStore("journey_logs").add({ ...metadata, data: pdfBlob, finalizedAt: new Date().toISOString() });
+            req.onsuccess = () => res(req.result);
+            req.onerror = (e) => rej(e.target.error);
         });
     }
 
     async function getAllJourneyLogs() {
         const db = await getDB();
-        const tx = db.transaction("journey_logs", "readonly");
-        const store = tx.objectStore("journey_logs");
-        return new Promise((resolve, reject) => {
-            const request = store.getAll();
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+        return new Promise((res, rej) => {
+            const req = db.transaction("journey_logs", "readonly").objectStore("journey_logs").getAll();
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
         });
     }
 
     window.deleteJourneyLog = async function(id) {
         try {
             const db = await getDB();
-            const tx = db.transaction("journey_logs", "readwrite");
-            const store = tx.objectStore("journey_logs");
-            await new Promise((resolve, reject) => {
-                const req = store.delete(id);
-                req.onsuccess = () => resolve();
-                req.onerror = (e) => reject(e.target.error);
+            await new Promise((res, rej) => {
+                const req = db.transaction("journey_logs", "readwrite").objectStore("journey_logs").delete(id);
+                req.onsuccess = res;
+                req.onerror = (e) => rej(e.target.error);
             });
-            showToast('Journey log deleted', 'success');
-            // Refresh the table if visible
-            const journeyContainer = document.getElementById('journey-table-container');
-            if (journeyContainer && !journeyContainer.hidden) {
-                await renderJourneyLogTable();
-            }
+            if (typeof showToast !== 'undefined') showToast('Journey log deleted', 'success');
+            
+            const container = document.getElementById('journey-table-container');
+            if (container && !container.hidden && typeof renderJourneyLogTable === 'function') await renderJourneyLogTable();
         } catch (error) {
             console.error('Error deleting journey log:', error);
-            showToast('Failed to delete', 'error');
         }
     };
 
     window.downloadSavedJourneyLog = async function(id) {
         try {
             const db = await getDB();
-            const tx = db.transaction("journey_logs", "readonly");
-            const store = tx.objectStore("journey_logs");
-            const request = store.get(id);
-            request.onsuccess = () => {
-                const log = request.result;
+            const req = db.transaction("journey_logs", "readonly").objectStore("journey_logs").get(id);
+            req.onsuccess = () => {
+                const log = req.result;
                 if (log && log.data) {
                     const url = URL.createObjectURL(log.data);
                     const a = document.createElement('a');
@@ -7810,65 +6084,46 @@ for (const s of debugSearches) {
                     a.download = `JOURNEY_LOG_${log.flight || 'unknown'}_${log.date || 'nodate'}.pdf`;
                     document.body.appendChild(a);
                     a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    showToast("Journey log downloaded", 'success');
+                    a.remove();
+                    
+                    // Prevent Memory Leaks via proper setTimeout revocation
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                    if (typeof showToast !== 'undefined') showToast("Journey log downloaded", 'success');
                 } else {
-                    showToast("No data found", 'error');
+                    if (typeof showToast !== 'undefined') showToast("No data found", 'error');
                 }
             };
         } catch (error) {
             console.error("Error downloading journey log:", error);
-            showToast("Download failed", 'error');
         }
     };
 
     async function saveJourneyTemplateToDB(fileBlob) {
         const db = await getDB();
-        const tx = db.transaction("files", "readwrite");
-        const store = tx.objectStore("files");
-        
-        store.put(fileBlob, "journeyTemplate");
-        
-        return new Promise((resolve, reject) => {
-            tx.oncomplete = () => {
-                resolve();
-            };
-            tx.onerror = (e) => {
-                alert('DB Write Failed: ' + e.target.error);
-                reject(e);
-            };
+        return new Promise((res, rej) => {
+            const tx = db.transaction("files", "readwrite");
+            tx.objectStore("files").put(fileBlob, "journeyTemplate");
+            tx.oncomplete = res;
+            tx.onerror = (e) => rej(e.target.error);
         });
     }
 
     async function loadJourneyTemplateFromDB() {
         const db = await getDB();
-        const tx = db.transaction("files", "readonly");
-        const store = tx.objectStore("files");
-        
-        return new Promise((resolve, reject) => {
-            const req = store.get("journeyTemplate");
-            req.onsuccess = () => {
-                if (req.result) {
-                    resolve(req.result); 
-                } else {
-                    resolve(null);
-                }
-            };
-            req.onerror = (e) => reject(e);
+        return new Promise(res => {
+            const req = db.transaction("files", "readonly").objectStore("files").get("journeyTemplate");
+            req.onsuccess = () => res(req.result || null);
+            req.onerror = () => res(null);
         });
     }
 
     async function deleteJourneyTemplateFromDB() {
         const db = await getDB();
-        const tx = db.transaction("files", "readwrite");
-        const store = tx.objectStore("files");
-        store.delete("journeyTemplate");
-        return new Promise((resolve, reject) => {
-            tx.oncomplete = () => {
-                resolve();
-            };
-            tx.onerror = (e) => reject(e);
+        return new Promise((res, rej) => {
+            const tx = db.transaction("files", "readwrite");
+            tx.objectStore("files").delete("journeyTemplate");
+            tx.oncomplete = res;
+            tx.onerror = rej;
         });
     }
 
@@ -7879,16 +6134,16 @@ for (const s of debugSearches) {
     async function exportAllData() {
         try {
             const data = {
-                version: APP_VERSION,
+                version: typeof APP_VERSION !== 'undefined' ? APP_VERSION : '1.0',
                 exportDate: new Date().toISOString(),
                 flightData: {
-                    dailyLegs: dailyLegs,
-                    waypoints: waypoints,
-                    alternateWaypoints: alternateWaypoints,
-                    fuelData: fuelData
+                    dailyLegs: dailyLegs || [],
+                    waypoints: waypoints || [],
+                    alternateWaypoints: alternateWaypoints || [],
+                    fuelData: fuelData || []
                 },
                 settings: JSON.parse(localStorage.getItem('efb_settings') || '{}'),
-                state: JSON.parse(localStorage.getItem('efb_log_state') || '{}')
+                state: JSON.parse(localStorage.getItem('efb_log_state_fallback') || localStorage.getItem('efb_log_state_plain') || '{}')
             };
             
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -7898,285 +6153,199 @@ for (const s of debugSearches) {
             a.download = `efb-backup-${new Date().toISOString().split('T')[0]}.json`;
             document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            a.remove();
             
-            showToast('Data exported successfully');
+            setTimeout(() => URL.revokeObjectURL(url), 100); // Memory leak prevention
+            
+            if (typeof showToast !== 'undefined') showToast('Data exported successfully');
             
         } catch (error) {
             console.error('Export failed:', error);
-            showToast('Export failed: ' + error.message, 'error');
+            if (typeof showToast !== 'undefined') showToast('Export failed: ' + error.message, 'error');
         }
     }
 
     window.recoverLostData = async function() {
-        const confirmed = await showConfirmDialog(
-            'Data Recovery Mode',
-            'This will attempt to recover any lost data.<br>' +
-            'Continue?',
-            'error'
-        );
-        
-        if (confirmed) {
-
-            // Try all storage methods
-            const recoveryMethods = [
-                { key: 'efb_log_state', type: 'encrypted' },
-                { key: 'efb_log_state_fallback', type: 'unencrypted' },
-                { key: 'efb_log_state_plain', type: 'legacy' }
-            ];
+        const confirmed = typeof showConfirmDialog === 'function' 
+            ? await showConfirmDialog('Data Recovery', 'This will attempt to recover any lost data.<br>Continue?', 'Recover', 'Cancel', 'error')
+            : confirm("Attempt to recover lost data?");
             
-            for (const method of recoveryMethods) {
-                try {
-                    const data = localStorage.getItem(method.key);
-                    if (data) {
-                        let state;
-                        if (method.type === 'encrypted') {
-                            state = await decryptData(data);
-                        } else {
-                            state = JSON.parse(data);
-                        }
-                        
-                        if (state && state.inputs) {
-                            // Restore inputs
-                            Object.keys(state.inputs).forEach(id => {
-                                if (state.inputs[id]) safeSet(id, state.inputs[id]);
-                            });
-                            
-                            alert(`Recovered data from ${method.type} storage`);
-                            return;
-                        }
-                    }
-                } catch (e) {
-                    console.log(`Recovery from ${method.key} failed:`, e);
+        if (!confirmed) return;
+
+        const methods = [
+            { key: 'efb_log_state', encrypted: true },
+            { key: 'efb_log_state_fallback', encrypted: false },
+            { key: 'efb_log_state_plain', encrypted: false }
+        ];
+        
+        for (const method of methods) {
+            try {
+                const data = localStorage.getItem(method.key);
+                if (!data) continue;
+                
+                let state;
+                if (method.encrypted && typeof decryptData === 'function') {
+                    state = await decryptData(data);
+                } else {
+                    state = JSON.parse(data);
                 }
+                
+                if (state && state.inputs) {
+                    Object.keys(state.inputs).forEach(id => {
+                        if (state.inputs[id]) safeSet(id, state.inputs[id]);
+                    });
+                    
+                    if (typeof showToast !== 'undefined') showToast(`Recovered data from ${method.encrypted ? 'encrypted' : 'unencrypted'} storage`, 'success');
+                    
+                    // Trigger UI updates
+                    if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+                    return;
+                }
+            } catch (e) {
+                console.warn(`Recovery from ${method.key} failed:`, e);
             }
         }
-        showToast("No recoverable data found", 'info');
+        if (typeof showToast !== 'undefined') showToast("No recoverable data found", 'info');
     };
 
     async function confirmFactoryReset() {
-        const confirmed = await showConfirmDialog(
-            'Factory Reset',
-            'WARNING: This will delete ALL data including:<br>' +
-            '• All flight data<br>' +
-            '• All app settings<br>' +
-            '• PIN and security data<br>' +
-            '• Audit logs<br>' +
-            '<br>This action cannot be undone. Continue?',
-            'Reset'
-        );
+        const confirmed = typeof showConfirmDialog === 'function'
+            ? await showConfirmDialog('Factory Reset', 'WARNING: This will delete ALL data including flight data, settings, PIN, and audit logs.<br><br>This action cannot be undone. Continue?', 'Reset', 'Cancel', 'error')
+            : confirm("WARNING: This deletes ALL data. Continue?");
 
-        if (confirmed) {
-            // Clear Local Storage (settings, PIN, audit logs, state)
+        if (!confirmed) return;
+
+        try {
+            // 1. Clear Local/Session Storage completely
             localStorage.clear();
+            sessionStorage.clear();
 
-            // Clear Session Storage
-            sessionStorage.removeItem('efb_authenticated');
-
-            // Clear IndexedDB
-            try {
-
-                const db = await getDB();
-                // Delete the ofps store (all OFPs, metadata, logged PDFs)
-                if (db.objectStoreNames.contains('ofps')) {
-                    const tx = db.transaction('ofps', 'readwrite');
-                    tx.objectStore('ofps').clear();
-                    await new Promise((resolve, reject) => {
-                        tx.oncomplete = resolve;
-                        tx.onerror = reject;
-                    });
-                }
-
-                // Delete the old files store (legacy OFP blob)
-                if (db.objectStoreNames.contains('files')) {
-                    const tx = db.transaction('files', 'readwrite');
-                    tx.objectStore('files').clear();
-                    await new Promise((resolve, reject) => {
-                        tx.oncomplete = resolve;
-                        tx.onerror = reject;
-                    });
-                }
-
-            } catch (e) {
-                console.error('Failed to clear IndexedDB:', e);
+            // 2. Clear IndexedDB (Awaiting strictly to prevent race conditions during reload)
+            const db = await getDB();
+            const storesToClear = ['ofps', 'files', 'ofp_orders', 'ofp_user_data', 'journey_logs'].filter(s => db.objectStoreNames.contains(s));
+            
+            if (storesToClear.length > 0) {
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(storesToClear, 'readwrite');
+                    storesToClear.forEach(s => tx.objectStore(s).clear());
+                    tx.oncomplete = resolve;
+                    tx.onerror = reject;
+                });
             }
 
-            // Unregister service worker
+            // 3. Unregister Service Workers (Wipes app cache)
             if ('serviceWorker' in navigator) {
                 const registrations = await navigator.serviceWorker.getRegistrations();
-                for (let reg of registrations) {
-                    await reg.unregister();
-                }
+                await Promise.all(registrations.map(reg => reg.unregister()));
             }
 
-            // Reload app after short delay
-            showToast('All data reset. Reloading app...', 'info');
-            setTimeout(() => location.reload(), 2000);
+            if (typeof showToast !== 'undefined') showToast('All data reset. Reloading app...', 'info');
+            
+            // Force Hard Reload
+            setTimeout(() => window.location.replace(window.location.href), 1500);
+
+        } catch (e) {
+            console.error('Factory Reset encountered errors:', e);
+            alert("Reset partially failed. Please manually clear your browser data.");
         }
     }
 
     async function performDataReset(preserveDailyLegs = true, setLoadedState = true) {
 
-        // 1. Reset Internal Variables
+        // 1. Reset Arrays & App State
         waypoints = [];
         alternateWaypoints = [];
         fuelData = [];
         blockFuelValue = 0;
         window.cutoffPageIndex = -1;
-        
-        // 2. Reset Coordinates
-        frontCoords = { 
-            atis: null, atcLabel: null, altm1: null, stby: null, 
-            altm2: null, picBlockLabel: null, reasonLabel: null 
-        };
-
-        // 3. Clear PDF Database & Memory
         window.ofpPdfBytes = null;
         window.lastGeneratedOFPPdfBytes = null;
         window.originalFileName = "Logged_OFP.pdf";
+        
+        frontCoords = { atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null, reasonLabel: null };
+
         if(typeof clearPdfDB === 'function') await clearPdfDB();
 
-        // 3. Clear Text Displays (Summary & Weights)
-        const textIDs = [
-            'view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 
-            'view-std-text', 'view-sta-text', 'view-altn', 'view-ci',
-            'view-dest-route', 'view-altn-route', 'view-altn2',
-            'view-min-block', 'view-pic-block',
-            'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 
-            'view-dow', 'view-tow', 'view-lw', 'view-zfw','view-era','view-crz-wind-temp', 'view-seats-stn-jmp'
-        ];
-
-        textIDs.forEach(id => {
-            const e = document.getElementById(id);
-            if(e) e.innerText = "-"; 
-        });
-
-        // 4. Clear ALL Inputs (OFP + Journey Log)
-        const inputIDs = [
-            // Front Page
-            'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 
-            'front-extra-kg', 'front-extra-reason', 'ofp-atd-in', 'view-pic-block',
-            
-            // Journey Log
-            'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std',
-            'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc',
-            'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail',
-            'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 
-            'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-bag', 
-            'j-cargo', 'j-mail', 'j-zfw'
-        ];
+        // 2. Wipe UI Components efficiently
+        const wipeText = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.textContent = "-"; });
+        const wipeInput = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.value = ""; });
+        const wipeZero = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.textContent = "00:00"; });
         
-        // Only clear duty fields if we are Wiping Everything (End of Day)
+        wipeText(['view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn', 'view-ci', 'view-dest-route', 'view-altn-route', 'view-altn2', 'view-min-block', 'view-pic-block', 'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 'view-dow', 'view-tow', 'view-lw', 'view-zfw','view-era','view-crz-wind-temp', 'view-seats-stn-jmp']);
+        
+        const inputsToWipe = ['front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'front-extra-kg', 'front-extra-reason', 'ofp-atd-in', 'view-pic-block', 'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std', 'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail', 'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw', 'ofp-file-in', 'journey-log-file'];
+        
         if (!preserveDailyLegs) {
-            inputIDs.push('j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count');
-            localStorage.removeItem(PERSIST_AUTH_KEY);
+            inputsToWipe.push('j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count');
+            if (typeof PERSIST_AUTH_KEY !== 'undefined') localStorage.removeItem(PERSIST_AUTH_KEY);
         }
+        
+        wipeInput(inputsToWipe);
+        wipeZero(['j-block', 'j-flight', 'j-burn', 'j-calc-ramp', 'j-disc']);
 
-        inputIDs.forEach(id => {
-            const e = document.getElementById(id);
-            if(e) e.value = "";
-        });
-
-        // 5. Clear Calculated Displays
-        ['j-block', 'j-flight', 'j-burn', 'j-calc-ramp', 'j-disc'].forEach(id => {
-            const e = document.getElementById(id);
-            if (e) e.innerText = "00:00";
-        });
-
-        // 6. Clear Tables
+        // 3. Clear Dynamic Tables
         ['ofp-tbody', 'altn-tbody', 'fuel-tbody'].forEach(id => {
             const tb = document.getElementById(id);
             if(tb) tb.innerHTML = '<tr><td colspan="13" style="text-align:center;color:gray;padding:20px">No data</td></tr>';
         });
 
-        // 7. Clear Journey List (Only if End of Day)
+        // 4. End-of-Day Logic
         if (!preserveDailyLegs) {
             const journeyList = document.getElementById('journey-list-body');
             if (journeyList) journeyList.innerHTML = '<tr><td colspan="5" style="text-align:center; color:gray; padding:20px;">No legs.</td></tr>';
             dailyLegs = []; 
             dutyStartTime = null;
-            localStorage.removeItem(PERSIST_AUTH_KEY);
-        }
-
-        // 8. Clear PDF Preview & Fallback
-        const container = document.getElementById('pdf-render-container');
-        const fallback = document.getElementById('pdf-fallback');
-        if (container) {
-            container.innerHTML = '';
-            container.style.display = 'none';
-        }
-        if (fallback) {
-            fallback.innerHTML = '<span style="font-size:30px; margin-bottom:10px;">📄</span>No OFP uploaded yet.';
-            fallback.style.display = 'flex';
-        }
-
-        // 9. Clear Signature
-        if (typeof signaturePad !== 'undefined' && signaturePad) {
-            signaturePad.clear();
-            if(typeof savedSignatureData !== 'undefined') savedSignatureData = null;
-        }
-
-        // 10. Clear File Inputs
-        ['ofp-file-in', 'journey-log-file'].forEach(id => {
-            const e = document.getElementById(id);
-            if(e) e.value = '';
-        });
-
-        // 12. DATABASE & STATE MANAGEMENT
-        if (preserveDailyLegs) {
-            const savedState = localStorage.getItem('efb_log_state');
-            if (savedState) {
-                try {
-                    // Try to decrypt first (since state is encrypted)
-                    let state;
-                    try {
-                        state = await decryptData(savedState);
-                    } catch (decryptError) {
-                        // If decryption fails, try parsing as plain JSON (legacy fallback)
-                        console.log("Decryption failed, trying plain JSON:", decryptError);
-                        state = JSON.parse(savedState);
-                    }
-                    
-                    const newState = {
-                        dailyLegs: state.dailyLegs || [],
-                        dutyStartTime: state.dutyStartTime || null,
-                        inputs: {} 
-                    };
-                    
-                    // Keep Duty Inputs
-                    if (state.inputs) {
-                        ['j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count'].forEach(key => {
-                            if (state.inputs[key]) newState.inputs[key] = state.inputs[key];
-                        });
-                    }
-                    
-                    // Encrypt and save the new state
-                    const encryptedNewState = await encryptData(newState);
-                    localStorage.setItem('efb_log_state', encryptedNewState);
-                    
-                } catch(e) { 
-                    console.error("Error processing saved state:", e);
-                    // If there's an error, start fresh
-                    localStorage.removeItem('efb_log_state');
-                }
-            }
-        } else {
-
-            // 12.1 FULL RESET (End of Day)
+            
             localStorage.removeItem('efb_log_state');
             localStorage.removeItem('efb_log_state_fallback'); 
             localStorage.removeItem('efb_log_state_plain');
             localStorage.removeItem('activeOFPId');
-            setOFPLoadedState(false);
         }
 
-        if (setLoadedState && typeof setOFPLoadedState === 'function') {
-            setOFPLoadedState(false);
+        // 5. Reset UI View States
+        const container = document.getElementById('pdf-render-container');
+        const fallback = document.getElementById('pdf-fallback');
+        if (container) { container.innerHTML = ''; container.style.display = 'none'; }
+        if (fallback) { fallback.innerHTML = '<span style="font-size:30px; margin-bottom:10px;">📄</span>No OFP uploaded yet.'; fallback.style.display = 'flex'; }
+
+        // 6. Clear Memory Pads
+        ['main', 'atis', 'atc'].forEach(padName => {
+            if (typeof pads !== 'undefined' && pads[padName]?.pad) pads[padName].pad.clear();
+        });
+
+        // 7. DB State Sync
+        if (preserveDailyLegs) {
+            try {
+                const savedState = localStorage.getItem('efb_log_state');
+                const fallbackState = localStorage.getItem('efb_log_state_fallback');
+                let stateObj = {};
+
+                if (savedState && typeof decryptData === 'function') {
+                    try { stateObj = await decryptData(savedState); } catch(e) { stateObj = JSON.parse(savedState); }
+                } else if (fallbackState) {
+                    stateObj = JSON.parse(fallbackState);
+                }
+
+                const newState = { dailyLegs: stateObj.dailyLegs || [], dutyStartTime: stateObj.dutyStartTime || null, inputs: {} };
+                
+                ['j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count'].forEach(key => {
+                    if (stateObj?.inputs?.[key]) newState.inputs[key] = stateObj.inputs[key];
+                });
+
+                if (typeof encryptData === 'function') {
+                    localStorage.setItem('efb_log_state', await encryptData(newState));
+                } else {
+                    localStorage.setItem('efb_log_state_fallback', JSON.stringify(newState));
+                }
+            } catch (e) {
+                console.error("Error processing preserved state:", e);
+                localStorage.removeItem('efb_log_state');
+            }
         }
-        if (typeof validateOFPInputs === 'function') {
-            validateOFPInputs();
-        }
+
+        // 8. UI Finalization
+        if (setLoadedState && typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
+        if (typeof validateOFPInputs === 'function') validateOFPInputs();
     }
 
 // ==========================================
@@ -8195,56 +6364,30 @@ for (const s of debugSearches) {
 // 16. SETTINGS
 // ==========================================
     
-    function updateStorageDisplay(bytes) {
-
-        const storageEl = document.getElementById('settings-storage');
-        if (!storageEl) return;
-        
-        let size, unit;
-        
-        if (bytes < 1024) {
-            size = bytes;
-            unit = 'B';
-        } else if (bytes < 1024 * 1024) {
-            size = (bytes / 1024).toFixed(1);
-            unit = 'KB';
-        } else {
-            size = (bytes / (1024 * 1024)).toFixed(2);
-            unit = 'MB';
-        }
-        
-        storageEl.textContent = `${size} ${unit}`;
-    }
-
     async function calculateStorageUsage() {
         try {
-            const storageEl = document.getElementById('settings-storage');
-            if (!storageEl) return;
+            // High-speed reduction of LocalStorage size
+            let bytes = Object.entries(localStorage).reduce((acc, [k, v]) => acc + k.length + (v?.length || 0), 0);
 
-            let totalBytes = 0;
-
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                const value = localStorage.getItem(key);
-                if (value) totalBytes += key.length + value.length;
+            // Fetch IndexedDB size without blocking
+            if ('indexedDB' in window) {
+                try {
+                    const db = await getDB();
+                    if (db.objectStoreNames.contains('files')) {
+                        const dbBytes = await new Promise(res => {
+                            const req = db.transaction("files", "readonly").objectStore("files").get("currentOFP");
+                            req.onsuccess = () => res(req.result?.size || 0);
+                            req.onerror = () => res(0);
+                        });
+                        bytes += dbBytes;
+                    }
+                } catch (e) { /* Ignore DB read errors to allow LocalStorage calc to render */ }
             }
 
-            if ('indexedDB' in window) {
-                const db = await getDB(); // use shared connection
-                if (db.objectStoreNames.contains('files')) {
-                    const tx = db.transaction("files", "readonly");
-                    const store = tx.objectStore("files");
-                    const request = store.get("currentOFP");
-                    request.onsuccess = () => {
-                        if (request.result) totalBytes += request.result.size || 0;
-                        updateStorageDisplay(totalBytes);
-                    };
-                    request.onerror = () => updateStorageDisplay(totalBytes);
-                } else {
-                    updateStorageDisplay(totalBytes);
-                }
-            } else {
-                updateStorageDisplay(totalBytes);
+            const storageEl = document.getElementById('settings-storage');
+            if (storageEl) {
+                const mb = bytes / 1048576; // 1024 * 1024
+                storageEl.textContent = mb >= 1 ? `${mb.toFixed(2)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
             }
         } catch (error) {
             console.error('Failed to calculate storage:', error);
@@ -8254,128 +6397,84 @@ for (const s of debugSearches) {
     }
 
     function initializeSettingsTab() {
-
-        // Bind buttons to their handlers
-        const settingsButtons = {
-            'btn-change-pin': changePIN,
-            'btn-view-audit': viewAuditLog,
-            'btn-export-data': exportAllData,
-            'btn-factory-reset': confirmFactoryReset,
-            'btn-recover-data': recoverLostData,
-            'btn-release-notes': showReleaseNotes,
+        // Fast dictionary mapping for button bindings
+        const binds = {
+            'btn-change-pin': typeof changePIN !== 'undefined' ? changePIN : null,
+            'btn-view-audit': typeof viewAuditLog !== 'undefined' ? viewAuditLog : null,
+            'btn-export-data': typeof exportAllData !== 'undefined' ? exportAllData : null,
+            'btn-factory-reset': typeof confirmFactoryReset !== 'undefined' ? confirmFactoryReset : null,
+            'btn-recover-data': typeof recoverLostData !== 'undefined' ? recoverLostData : null,
+            'btn-release-notes': typeof showReleaseNotes !== 'undefined' ? showReleaseNotes : null,
         };
         
-        Object.entries(settingsButtons).forEach(([id, handler]) => {
-            const button = document.getElementById(id);
-            if (button && typeof handler === 'function') {
-                button.addEventListener('click', handler);
-            }
+        Object.entries(binds).forEach(([id, handler]) => {
+            if (handler) document.getElementById(id)?.addEventListener('click', handler);
         });
         
+        // Auto-save triggers
         ['auto-lock-time', 'pdf-quality', 'hide-all-duty', 'auto-activate-next'].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.addEventListener('change', saveSettings);
-            }
+            document.getElementById(id)?.addEventListener('change', saveSettings);
         });
 
-        // Special handler for ATIS input mode – apply UI change immediately
-        const modeSelect = document.getElementById('atis-input-mode');
-        if (modeSelect) {
-            modeSelect.addEventListener('change', function(e) {
-                const newMode = e.target.value;
-                applyInputMode(newMode);
-                saveSettings();
-            });
-        }
+        // Special ATIS Mode trigger
+        document.getElementById('atis-input-mode')?.addEventListener('change', (e) => {
+            if (typeof applyInputMode === 'function') applyInputMode(e.target.value);
+            saveSettings();
+        });
     }
 
     async function initializeSettings() {
-
-        // Bind buttons and listeners (only once)
         initializeSettingsTab();
-        
-        // Load and apply saved settings
         loadSettings();
         
-        // Calculate storage usage after a short delay (UI is ready)
-        setTimeout(calculateStorageUsage, 1000);
-        
-        // Set app version
+        // Render UI updates safely
         const versionEl = document.getElementById('settings-version');
-        if (versionEl) {
-            versionEl.textContent = `v${APP_VERSION}`;
-        }
-        
-        // Set last updated date
         const updatedEl = document.getElementById('settings-updated');
-        if (updatedEl) {
-            updatedEl.textContent = new Date().toLocaleDateString();
-        }
+        
+        if (versionEl && typeof APP_VERSION !== 'undefined') versionEl.textContent = `v${APP_VERSION}`;
+        if (updatedEl) updatedEl.textContent = new Date().toLocaleDateString();
+        
+        // Calculate storage off the main thread
+        setTimeout(calculateStorageUsage, 1000);
     }
 
     function loadSettings() {
         try {
-            // 1. DO TOKENS FIRST (So they are safe from any UI crashes below)
-            const tokenInput = document.getElementById('skyplan_token');
-            if (tokenInput) {
-                tokenInput.value = localStorage.getItem('skyplan_token') || '';
-            }
+            // 1. Restore Tokens First
+            const tokenIn = document.getElementById('skyplan_token');
+            const refreshIn = document.getElementById('skyplan_refresh_token');
+            if (tokenIn) tokenIn.value = localStorage.getItem('skyplan_token') || '';
+            if (refreshIn) refreshIn.value = localStorage.getItem('skyplan_refresh_token') || '';
 
-            const refreshInput = document.getElementById('skyplan_refresh_token');
-            if (refreshInput) {
-                refreshInput.value = localStorage.getItem('skyplan_refresh_token') || '';
-            }
-
-            // 2. Load the rest of the settings
+            // 2. Restore Standard Settings
             const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
             
-            if (settings.autoLockTime) {
-                const autoLockSelect = document.getElementById('auto-lock-time');
-                if (autoLockSelect) autoLockSelect.value = settings.autoLockTime;
-            }
-            
-            if (settings.pdfQuality) {
-                const pdfQualitySelect = document.getElementById('pdf-quality');
-                if (pdfQualitySelect) pdfQualitySelect.value = settings.pdfQuality;
-            }
+            const autoLock = document.getElementById('auto-lock-time');
+            const pdfQual = document.getElementById('pdf-quality');
+            const hideDuty = document.getElementById('hide-all-duty');
+            const autoAct = document.getElementById('auto-activate-next');
+            const atisMode = document.getElementById('atis-input-mode');
 
-            const hideFCDutyBox = document.getElementById('hide-all-duty');
-            if (hideFCDutyBox) {
-                hideFCDutyBox.checked = settings.hideFCDuty === true; 
-            }
+            if (autoLock && settings.autoLockTime) autoLock.value = settings.autoLockTime;
+            if (pdfQual && settings.pdfQuality) pdfQual.value = settings.pdfQuality;
+            if (hideDuty) hideDuty.checked = settings.hideAllDuty === true;
+            if (autoAct) autoAct.checked = settings.autoActivateNext !== false;
 
-            const autoActivateCheckbox = document.getElementById('auto-activate-next');
-            if (autoActivateCheckbox) {
-                autoActivateCheckbox.checked = settings.autoActivateNext !== false;
+            if (atisMode) {
+                const mode = settings.atisInputMode || 'typing';
+                atisMode.value = mode;
+                if (typeof applyInputMode === 'function') applyInputMode(mode);
             }
-
-            const modeSelect = document.getElementById('atis-input-mode');
-            if (modeSelect) {
-                modeSelect.value = settings.atisInputMode || 'typing';
-                if (typeof applyInputMode === 'function') {
-                    applyInputMode(settings.atisInputMode || 'typing');
-                }
-            }
-                
-            const versionEl = document.getElementById('settings-version');
-            if (versionEl && typeof APP_VERSION !== 'undefined') {
-                versionEl.textContent = `v${APP_VERSION}`;
-            }
-            
-            const updatedEl = document.getElementById('settings-updated');
-            if (updatedEl) {
-                updatedEl.textContent = new Date().toLocaleDateString();
-            }
-            
         } catch (error) {
             console.error('Failed to load settings:', error);
         }
     }
 
     function saveSettings() {
+        const autoLockVal = document.getElementById('auto-lock-time')?.value || '15';
+        
         const settings = {
-            autoLockTime: document.getElementById('auto-lock-time')?.value || '15',
+            autoLockTime: autoLockVal,
             pdfQuality: document.getElementById('pdf-quality')?.value || '2.0',
             hideAllDuty: document.getElementById('hide-all-duty')?.checked || false,
             autoActivateNext: document.getElementById('auto-activate-next')?.checked !== false,
@@ -8383,70 +6482,58 @@ for (const s of debugSearches) {
             lastSaved: new Date().toISOString()
         };
 
-        // Persistent authentication logic
-        if (settings.autoLockTime == 0) {
-            // If currently authenticated, set persistent flag
-            if (sessionStorage.getItem('efb_authenticated') === 'true') {
+        // Persistent Authentication Logic
+        if (typeof PERSIST_AUTH_KEY !== 'undefined') {
+            if (autoLockVal === "0" && sessionStorage.getItem('efb_authenticated') === 'true') {
                 localStorage.setItem(PERSIST_AUTH_KEY, 'true');
+            } else {
+                localStorage.removeItem(PERSIST_AUTH_KEY);
             }
-        } else {
-            // Auto-lock is enabled → remove persistent authentication
-            localStorage.removeItem(PERSIST_AUTH_KEY);
         }
 
         localStorage.setItem('efb_settings', JSON.stringify(settings));
 
-        // ==========================================
-        // TOKEN SAVING LOGIC
-        // ==========================================
-        const tokenInput = document.getElementById('skyplan_token');
-        const refreshInput = document.getElementById('skyplan_refresh_token');
+        // Token Management
+        const tokenVal = document.getElementById('skyplan_token')?.value.trim();
+        const refreshVal = document.getElementById('skyplan_refresh_token')?.value.trim();
 
-        if (tokenInput) {
-            const newToken = tokenInput.value.trim();
-            if (newToken) {
-                localStorage.setItem('skyplan_token', newToken);
-                
-                // Automatically extract and save the user's username
-                try {
-                    const decoded = decodeJWT(newToken);
-                    if (decoded && decoded.preferred_username) {
-                        localStorage.setItem('efb_user', decoded.preferred_username);
-                    }
-                } catch (err) {
-                    console.warn("Could not extract username from token.");
-                }
-            } else {
-                localStorage.removeItem('skyplan_token');
-                localStorage.removeItem('efb_user');
-            }
+        if (tokenVal) {
+            localStorage.setItem('skyplan_token', tokenVal);
+            try {
+                const decoded = typeof decodeJWT === 'function' ? decodeJWT(tokenVal) : null;
+                if (decoded?.preferred_username) localStorage.setItem('efb_user', decoded.preferred_username);
+            } catch (err) { /* Silent fail if invalid token */ }
+        } else {
+            localStorage.removeItem('skyplan_token');
+            localStorage.removeItem('efb_user');
         }
 
-        if (refreshInput) {
-            const newRefreshToken = refreshInput.value.trim();
-            if (newRefreshToken) {
-                localStorage.setItem('skyplan_refresh_token', newRefreshToken);
-            } else {
-                localStorage.removeItem('skyplan_refresh_token');
-            }
+        if (refreshVal) {
+            localStorage.setItem('skyplan_refresh_token', refreshVal);
+        } else {
+            localStorage.removeItem('skyplan_refresh_token');
         }
-        // ==========================================
 
-        if (sessionStorage.getItem('efb_authenticated') === 'true') {
+        if (sessionStorage.getItem('efb_authenticated') === 'true' && typeof resetAutoLockTimer === 'function') {
             resetAutoLockTimer();
         }
-        showToast('Settings saved successfully');
+        
+        if (typeof showToast !== 'undefined') showToast('Settings saved successfully');
     }
 
+    // Fast SemVer (Semantic Versioning) array comparator
     function isNewerVersion(latest, current) {
-        const latestParts = latest.split('.').map(Number);
-        const currentParts = current.split('.').map(Number);
-        for (let i = 0; i < Math.max(latestParts.length, currentParts.length); i++) {
-            const l = latestParts[i] || 0;
-            const c = currentParts[i] || 0;
-            if (l !== c) return l > c;
+        const l = latest.split('.').map(Number);
+        const c = current.split('.').map(Number);
+        const maxLen = Math.max(l.length, c.length);
+        
+        for (let i = 0; i < maxLen; i++) {
+            const lVal = l[i] || 0;
+            const cVal = c[i] || 0;
+            if (lVal > cVal) return true;  // Instant exit if newer
+            if (lVal < cVal) return false; // Instant exit if older
         }
-        return false;
+        return false; // Exactly the same
     }
 
 // ==========================================
@@ -8454,187 +6541,115 @@ for (const s of debugSearches) {
 // ==========================================
 
     window.addEventListener('DOMContentLoaded', function() {
-        // 1. Initialize pdfFallbackElement
+        // 1. Initialize UI Defaults
         pdfFallbackElement = document.getElementById('pdf-fallback');
+        if (typeof setOFPLoadedState === 'function') setOFPLoadedState(!!window.ofpPdfBytes);
         
-        // 2. Check initial OFP state
-        if (window.ofpPdfBytes) {
-            setOFPLoadedState(true);
-        } else {
-            setOFPLoadedState(false);
-        }
-        
-        // 3. Add drag and drop functionality for the overlay
+        // 2. High-Speed Drag & Drop Overlay
         const overlay = document.getElementById('upload-overlay');
         const ofpFileInput = document.getElementById('ofp-file-in');
         
         if (overlay && ofpFileInput) {
-            // Drag enter/over
-            ['dragenter', 'dragover'].forEach(eventName => {
-                overlay.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    overlay.style.background = 'rgba(0, 132, 255, 0.3)';
-                }, false);
-            });
+            const preventDefaults = e => { e.preventDefault(); e.stopPropagation(); };
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => overlay.addEventListener(evt, preventDefaults));
             
-            // Drag leave
-            ['dragleave', 'drop'].forEach(eventName => {
-                overlay.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    overlay.style.background = 'rgba(0, 0, 0, 0.9)';
-                }, false);
-            });
+            ['dragenter', 'dragover'].forEach(evt => overlay.addEventListener(evt, () => overlay.style.background = 'rgba(0, 132, 255, 0.3)'));
+            ['dragleave', 'drop'].forEach(evt => overlay.addEventListener(evt, () => overlay.style.background = 'rgba(0, 0, 0, 0.9)'));
             
-            // Drop
             overlay.addEventListener('drop', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const files = e.dataTransfer.files;
-                if (files.length > 0) {
-                    ofpFileInput.files = files;
+                if (e.dataTransfer.files.length > 0) {
+                    ofpFileInput.files = e.dataTransfer.files;
                     ofpFileInput.dispatchEvent(new Event('change'));
                 }
-            }, false);
+            });
         }
         
-        // 4. Initialize theme on page load
-        const savedTheme = localStorage.getItem('data-theme');
-        const html = document.documentElement;
+        // 3. Fast Theme Initialization
+        const savedTheme = localStorage.getItem('data-theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
         const themeButton = document.querySelector('.theme-toggle');
+        if (themeButton) themeButton.textContent = savedTheme === 'dark' ? 'Day Mode' : 'Night Mode';
         
-        if (savedTheme) {
-            // Apply saved theme
-            html.setAttribute('data-theme', savedTheme);
-            
-            // Update button text and active state
-            if (themeButton) {
-                themeButton.textContent = savedTheme === 'dark' ? 'Day Mode' : 'Night Mode';
-            }
-        } else {
-            // Default to light theme if no saved preference
-            html.setAttribute('data-theme', 'light');
-            if (themeButton) {
-                themeButton.textContent = 'Night Mode';
-            }
-        }
+        // 4. Initialize Core Modules
+        if (typeof initializeTabNavigation === 'function') initializeTabNavigation();
+        if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
+        if (typeof initFileManagerTabs === 'function') initFileManagerTabs();
+        if (typeof addTimeInputMasks === 'function') addTimeInputMasks();
         
-        // 5. Initialize tab navigation
-        initializeTabNavigation();
-        
-        // 6. Initial update for upload button visibility
-        updateUploadButtonVisibility();
-
-        initFileManagerTabs();
-        
-        // 7. Add time input masks
-        addTimeInputMasks();
-        
-        // 8. Initialize Main Drawing Pad
+        // 5. Initialize Main Drawing Pad
         setTimeout(() => {
-            initPad('main');
-            if (pads.main.pad) {
-                pads.main.pad.onEnd = () => {
-                    debouncedSave();
-                };
-                // Restore saved signature if exists (from savedSignatureData)
-                if (savedSignatureData) {
-                    pads.main.pad.fromDataURL(savedSignatureData, { ratio: pads.main.lastRatio });
+            if (typeof initPad === 'function') {
+                initPad('main');
+                if (typeof pads !== 'undefined' && pads.main?.pad) {
+                    pads.main.pad.onEnd = () => typeof debouncedSave === 'function' && debouncedSave();
+                    if (typeof savedSignatureData !== 'undefined' && savedSignatureData) {
+                        pads.main.pad.fromDataURL(savedSignatureData, { ratio: pads.main.lastRatio });
+                    }
                 }
             }
-
         }, 100);
 
-        // Clear buttons for ATIS/ATC
-        const clearAtis = document.getElementById('clear-atis-btn');
-        const clearAtc = document.getElementById('clear-atc-btn');
-
-        if (clearAtis) {
-            clearAtis.addEventListener('click', () => clearPad('atis'));
-        }
-        if (clearAtc) {
-            clearAtc.addEventListener('click', () => clearPad('atc'));
-        }
+        // 6. Bind Canvas Clear Buttons
+        document.getElementById('clear-atis-btn')?.addEventListener('click', () => typeof clearPad === 'function' && clearPad('atis'));
+        document.getElementById('clear-atc-btn')?.addEventListener('click', () => typeof clearPad === 'function' && clearPad('atc'));
     
-        // Auto-save settings when changed
-        ['auto-lock-time', 'pdf-quality','auto-activate-next','hide-all-duty'].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.addEventListener('change', saveSettings);
-            }
-        });
-
-        // Token elements
+        // 7. Token Listeners (Dynamic Extraction)
         const tokenInput = document.getElementById('input-token');
-        const refreshTokenInput = document.getElementById('refresh-token');
-
         if (tokenInput) {
             tokenInput.value = localStorage.getItem('skyplan_token') || '';
-
             tokenInput.addEventListener('input', (e) => {
                 const newToken = e.target.value.trim();
-                
                 if (newToken) {
                     localStorage.setItem('skyplan_token', newToken);
-                    
-                    // Automatically extract and save the user's username!
                     try {
-                        const decoded = decodeJWT(newToken);
-                        if (decoded && decoded.preferred_username) {
+                        const decoded = typeof decodeJWT === 'function' ? decodeJWT(newToken) : null;
+                        if (decoded?.preferred_username) {
                             localStorage.setItem('efb_user', decoded.preferred_username);
-                            console.log("Logged in user:", decoded.preferred_username);
                         }
-                    } catch (err) {
-                        console.warn("Could not extract username from token.");
-                    }
-                    
+                    } catch (err) { console.warn("Could not extract username from token."); }
                 } else {
                     localStorage.removeItem('skyplan_token');
-                    localStorage.removeItem('efb_user'); // Clear username on logout
+                    localStorage.removeItem('efb_user');
                 }
             });
         }
 
-        // Add the listener for the Refresh Token
+        const refreshTokenInput = document.getElementById('refresh-token');
         if (refreshTokenInput) {
             refreshTokenInput.value = localStorage.getItem('skyplan_refresh_token') || '';
-
             refreshTokenInput.addEventListener('input', (e) => {
-                const newRefreshToken = e.target.value.trim();
-                if (newRefreshToken) {
-                    localStorage.setItem('skyplan_refresh_token', newRefreshToken);
-                } else {
-                    localStorage.removeItem('skyplan_refresh_token');
-                }
+                const newRef = e.target.value.trim();
+                newRef ? localStorage.setItem('skyplan_refresh_token', newRef) : localStorage.removeItem('skyplan_refresh_token');
             });
         }
 
-        document.getElementById('notam-filter')?.addEventListener('input', function() {
-            const filterText = this.value.toLowerCase().trim();
+        // 8. Debounced NOTAM Filter (Prevents UI freezing)
+        document.getElementById('notam-filter')?.addEventListener('input', typeof debounce === 'function' ? debounce(function() {
             if (!window.notamFullAlerts) return;
+            const filterText = this.value.toLowerCase().trim();
+            
             if (filterText === '') {
                 renderNotamsWXTable(window.notamFullAlerts);
             } else {
-                const filtered = window.notamFullAlerts.filter(alert => {
-                    const airport = (alert.airport || '').toLowerCase();
-                    const message = (alert.message || '').toLowerCase();
-                    const type = (alert.type || '').toLowerCase();
-                    return airport.includes(filterText) || message.includes(filterText) || type.includes(filterText);
-                });
+                const filtered = window.notamFullAlerts.filter(a => 
+                    (a.airport || '').toLowerCase().includes(filterText) || 
+                    (a.message || '').toLowerCase().includes(filterText) || 
+                    (a.type || '').toLowerCase().includes(filterText)
+                );
                 renderNotamsWXTable(filtered);
             }
-        });
+        }, 250) : function() {}); // Fallback if debounce missing
 
-        // Wire up the ATIS and CLR text field (typing mode only)
+        // 9. High-Speed Popups for ATIS/ATC
+        const isTypingMode = () => document.body.getAttribute('data-atis-mode') !== 'writing';
+
         const atisField = document.getElementById('front-atis');
-        if (atisField) {   // ← only attach ATIS listener if element exists
+        if (atisField) {
             atisField.addEventListener('focus', function(e) {
-                const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-                if (settings.atisInputMode !== 'writing') {
+                if (isTypingMode()) {
                     e.preventDefault();
                     atisField.blur();
-                    showAtisPopup();
+                    if (typeof showAtisPopup === 'function') showAtisPopup();
                 }
             });
         }
@@ -8642,52 +6657,54 @@ for (const s of debugSearches) {
         const atcField = document.getElementById('front-atc');
         if (atcField) {
             atcField.addEventListener('focus', function(e) {
-                const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-                if (settings.atisInputMode !== 'writing') {   // same mode setting as ATIS
+                if (isTypingMode()) {
                     e.preventDefault();
                     atcField.blur();
-                    showClearancePopup();
+                    if (typeof showClearancePopup === 'function') showClearancePopup();
                 }
             });
         }
 
-        const btn = document.getElementById('btn-send-tripinfo');
-        if (btn) {
-            btn.addEventListener('click', sendTripInfo);
-        }
+        // 10. Final Binds & State Load
+        document.getElementById('btn-send-tripinfo')?.addEventListener('click', typeof sendTripInfo === 'function' ? sendTripInfo : null);
 
-        // Activity tracking
         if (sessionStorage.getItem('efb_authenticated') === 'true') {
-            setupActivityTracking();
-            resetAutoLockTimer();
+            if (typeof setupActivityTracking === 'function') setupActivityTracking();
+            if (typeof resetAutoLockTimer === 'function') resetAutoLockTimer();
         }
-        loadState();
+        
+        if (typeof loadState === 'function') loadState();
     });
 
-    window.addEventListener('beforeunload', () => {
-        debouncedSave.cancel();
-        saveState(); 
-    });
+    // --- GLOBAL LIFECYCLE EVENTS ---
 
-    // Trigger Save on tab change
+    // Prevent redundant simultaneous saves
+    let isSavingOnExit = false;
+    const triggerExitSave = () => {
+        if (isSavingOnExit) return;
+        isSavingOnExit = true;
+        if (typeof debouncedSave !== 'undefined' && debouncedSave.cancel) debouncedSave.cancel();
+        if (typeof saveState === 'function') saveState();
+        setTimeout(() => isSavingOnExit = false, 500);
+    };
+
+    window.addEventListener('beforeunload', triggerExitSave);
+    window.addEventListener('pagehide', triggerExitSave);
+    
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-            saveState();
+        if (document.visibilityState === 'hidden') triggerExitSave();
+    });
+
+    // Debounced Resize to prevent canvas stretching & CPU overload during rotation
+    window.addEventListener('resize', typeof debounce === 'function' ? debounce(() => {
+        if (typeof resizePad === 'function') {
+            resizePad('main');
+            if (typeof currentAtisInputMode !== 'undefined' && currentAtisInputMode === 'writing') {
+                resizePad('atis');
+                resizePad('atc');
+            }
         }
-    });
-
-    window.addEventListener('resize', function() {
-        resizePad('main');
-        if (currentAtisInputMode === 'writing') {
-            resizePad('atis');
-            resizePad('atc');
-        }
-    });
-
-
-    window.addEventListener('pagehide', () => {
-        saveState();
-    });
+    }, 200) : () => {});
 
 // ==========================================
 // ATIS Structured Popup (compact + smart fields)
@@ -9961,134 +7978,5 @@ window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr) {
         alert("Error syncing OFP: " + error.message);
     }
 }
-
-// FUNCTIONS NOT USED ANYMORE
-    // Shared function to restore OFP‑specific user data (waypoints + persistent inputs)
-    async function restoreOFPData(ofp) {
-        if (!ofp) return;
-
-        // Restore saved waypoint inputs (userWaypoints)
-        if (ofp.userWaypoints && Array.isArray(ofp.userWaypoints)) {
-            ofp.userWaypoints.forEach((data, i) => {
-                if (i < waypoints.length) {
-                    if (data.ato) safeSet(`o-a-${i}`, data.ato);
-                    if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                    if (data.notes) safeSet(`o-n-${i}`, data.notes);
-                    if (data.agl) safeSet(`o-agl-${i}`, data.agl);
-                }
-            });
-            runFlightLogCalculations();
-            syncLastWaypoint();
-        }
-
-        // Restore saved user inputs (persistent text fields)
-        if (ofp.userInputs && typeof ofp.userInputs === 'object') {
-            Object.keys(ofp.userInputs).forEach(id => {
-                const val = ofp.userInputs[id];
-                // Skip drawing keys – they will be restored by pad initialisation
-                if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') return;
-                if (val !== undefined && val !== null) {
-                    safeSet(id, val);
-                }
-            });
-        }
-    }
-    async function getAllOFPOrders() {
-        const db = await getDB();
-        if (!db.objectStoreNames.contains('ofp_orders')) return [];
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction("ofp_orders", "readonly");
-            const store = tx.objectStore("ofp_orders");
-            const request = store.getAll();
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = (e) => reject(e);
-        });
-    }
-    async function rebuildOFPOrders() {
-        const db = await getDB();
-        const tx = db.transaction(["ofps", "ofp_orders"], "readwrite");
-        const ofpsStore = tx.objectStore("ofps");
-        const ordersStore = tx.objectStore("ofp_orders");
-        
-        // Clear existing orders
-        ordersStore.clear();
-
-        const ofps = await new Promise((res, rej) => {
-            const req = ofpsStore.getAll();
-            req.onsuccess = () => res(req.result);
-            req.onerror = (e) => rej(e);
-        });
-
-        ofps.forEach(ofp => {
-            ordersStore.put({ id: ofp.id, order: ofp.order || 0 });
-        });
-
-        await new Promise((res, rej) => {
-            tx.oncomplete = res;
-            tx.onerror = (e) => rej(e);
-        });
-        console.log('OFP orders rebuilt');
-    }
-    async function restoreOFPUserData(userData) {
-        if (userData.userWaypoints && Array.isArray(userData.userWaypoints)) {
-            userData.userWaypoints.forEach((data, i) => {
-                if (i < waypoints.length) {
-                    if (data.ato) safeSet(`o-a-${i}`, data.ato);
-                    if (data.fuel) safeSet(`o-f-${i}`, data.fuel);
-                    if (data.notes) safeSet(`o-n-${i}`, data.notes);
-                    if (data.agl) safeSet(`o-agl-${i}`, data.agl);
-                }
-            });
-            runFlightLogCalculations();
-            syncLastWaypoint();
-        }
-        if (userData.userInputs && typeof userData.userInputs === 'object') {
-            Object.keys(userData.userInputs).forEach(id => {
-                const val = userData.userInputs[id];
-                if (id === 'signature' || id === 'front-atis-drawing' || id === 'front-atc-drawing') {
-                    // Handle drawings after pads are initialized (already handled elsewhere)
-                    // We'll rely on the pad restoration logic
-                } else {
-                    safeSet(id, val);
-                }
-            });
-            // Restore drawings if needed – you may need to call a separate function
-            if (userData.userInputs.signature && pads.main.pad) {
-                pads.main.pad.fromDataURL(userData.userInputs.signature);
-            }
-            if (userData.userInputs['front-atis-drawing'] && pads.atis.pad) {
-                pads.atis.pad.fromDataURL(userData.userInputs['front-atis-drawing']);
-            }
-            if (userData.userInputs['front-atc-drawing'] && pads.atc.pad) {
-                pads.atc.pad.fromDataURL(userData.userInputs['front-atc-drawing']);
-            }
-        }
-    }
-    async function setActiveOFP(id) {
-        localStorage.setItem('activeOFPId', Number(id));
-        console.log(`[setActiveOFP] active ID set to ${id}`);
-    }
-    async function getAllOFPsFromDB() {
-        try {
-            const db = await getDB();
-            if (!db.objectStoreNames.contains('ofps')) return [];
-
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction("ofps", "readonly");
-                const store = tx.objectStore("ofps");
-                const request = store.getAll();
-
-                request.onsuccess = () => {
-                    const ofps = request.result;
-                    ofps.sort((a, b) => (a.order || 0) - (b.order || 0));
-                    resolve(ofps);
-                };
-                request.onerror = (e) => reject(e.target.error);
-            });
-        } catch (error) {
-            console.error('getAllOFPsFromDB failed:', error);
-            return [];
-        }
-    }
 
 })();
