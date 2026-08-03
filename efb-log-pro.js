@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.2.2";
+    const APP_VERSION = "2.2.1";
     const RELEASE_NOTES = {
-        "2.2.2": {
+        "2.2.1": {
             title: "Release Notes",
             notes: [
                 "📋 Updated ATIS and Clearance popups",
@@ -25,7 +25,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = '399ec11ca161fdbff795aafcfea7cc1e035eb1f312555643a438b7c0a6694023';
+    const EXPECTED_SW_HASH = 'dd7ebeeb684d9015b8a50e4dba1885cb52e880ffd4601912a23729b702e1f824';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -3700,7 +3700,7 @@
         return null;
     }
 
-    async function parsePDFData(pdfBytes, isAutoLoad) {
+async function parsePDFData(pdfBytes, isAutoLoad) {
         try {
             // 1. Reset all global parsing state
             resetParsingState();
@@ -3743,15 +3743,38 @@
             });
             processWaypointsList();
 
-            // 7. Extract metadata from UI (after parsePage1 has populated it)
-            const { flight, date, dep, dest, tripTime, maxSR } = extractMetadataFromUI();
+            // 7. Extract metadata from UI
+            let { flight, date, dep, dest, tripTime, maxSR } = extractMetadataFromUI();
+
+            // --- THE FIX: BRUTE FORCE METADATA FROM FILENAME ---
+            if (!flight || flight === "N/A" || flight === "Unknown") {
+                if (window.originalFileName) {
+                    // Looks for patterns like "KC982_20260803" or "KC982_2026-08-03"
+                    const match = window.originalFileName.match(/^([A-Za-z0-9]+)_(\d{4}-?\d{2}-?\d{2})/);
+                    if (match) {
+                        flight = match[1];
+                        
+                        // Format the date nicely to YYYY-MM-DD
+                        let rawDate = match[2];
+                        if (rawDate.length === 8 && !rawDate.includes('-')) {
+                            rawDate = `${rawDate.substring(0,4)}-${rawDate.substring(4,6)}-${rawDate.substring(6,8)}`;
+                        }
+                        date = rawDate;
+
+                        // Force the UI to show the right info immediately so updateUIAfterParsing doesn't override it
+                        if (document.getElementById('view-flt')) document.getElementById('view-flt').innerText = flight;
+                        if (document.getElementById('view-date')) document.getElementById('view-date').innerText = date;
+                    }
+                }
+            }
+            // ---------------------------------------------------
 
             // 8. Build final metadata object
             const metadata = {
                 flight,
                 date,
-                departure: dep,
-                destination: dest,
+                departure: dep || 'TBA',
+                destination: dest || 'TBA',
                 tripTime: tripTime || '',
                 maxSR: maxSR || '',
                 requestNumber: requestNumber || ''
@@ -3767,7 +3790,7 @@
                 tripTime,
                 maxSR,
                 requestNumber,
-                fullText  // <-- new
+                fullText  
             };
 
         } catch (error) {
@@ -3775,7 +3798,7 @@
             throw error;
         }
     }
-
+    
     window.analyzeNotamsAndWeather = function() {
         const resultsDiv = document.getElementById('notam-results');
         if (!resultsDiv) return;
