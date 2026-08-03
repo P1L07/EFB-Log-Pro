@@ -9858,11 +9858,13 @@ window.loadAssignedFlights = async function() {
                     <td class="assigned-sta">${staStr}</td>
                     <td class="assigned-block">${blockTime}</td>
                     <td class="assigned-reg">${aircraft}</td>
-                    <td style="text-align: right;">
-                        <button onclick="importOFPFromSkyplan('${f.ID}')" class="btn-sync">
-                            Activate OFP
-                        </button>
-                    </td>
+                                        <td style="padding: 15px; text-align: right;">
+                                                                <button onclick="importOFPFromSkyplan('${f.ID}', '${flightNum}', '${dateStr}')" 
+                                                                                                style="background: #81c995; color: #000; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer;">
+                                                                                                                            Sync OFP
+                                                                                                                                                    </button>
+                                                                                                                                                                        </td>
+                                                                                                                                                                         
                 </tr>
             `;
         });
@@ -9876,76 +9878,61 @@ window.loadAssignedFlights = async function() {
     }
 };
 
-window.importOFPFromSkyplan = async function(flightId) {
-    try {
-        const token = await getValidSkyplanToken();
-        if (!token) {
-            return alert("No Skyplan token found. Please add it in settings.");
-        }
+window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr) {
+        try {
+                const token = await getValidSkyplanToken();
+                        if (!token) {
+                                    return alert("No Skyplan token found. Please add it in settings.");
+                                            }
 
-        if (typeof showToast === 'function') showToast("Downloading OFP from Skyplan...", "info");
+                                                    if (typeof showToast === 'function') showToast("Downloading OFP from Skyplan...", "info");
 
-        // 1. Fetch the OFP JSON from Skyplan
-        const url = `https://kcskyplanapi.airastana.com/api/v1/flights/${flightId}/ofp`;
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
+                                                            // 1. Fetch the OFP JSON from Skyplan
+                                                                    const url = `https://kcskyplanapi.airastana.com/api/v1/flights/${flightId}/ofp`;
+                                                                            const response = await fetch(url, {
+                                                                                        method: 'GET',
+                                                                                                    headers: { 'Authorization': `Bearer ${token}` }
+                                                                                                            });
 
-        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-        
-        const data = await response.json();
-        
-        if (!data.FileContent) {
-            throw new Error("No PDF content found for this flight.");
-        }
+                                                                                                                    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+                                                                                                                            
+                                                                                                                                    const data = await response.json();
+                                                                                                                                            
+                                                                                                                                                    if (!data.FileContent) {
+                                                                                                                                                                throw new Error("No PDF content found for this flight.");
+                                                                                                                                                                        }
 
-        // 2. Decode the Base64 string into raw binary PDF data
-        const binaryString = atob(data.FileContent);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-        }
+                                                                                                                                                                                // 2. Decode the Base64 string into raw binary PDF data
+                                                                                                                                                                                        const binaryString = atob(data.FileContent);
+                                                                                                                                                                                                const bytes = new Uint8Array(binaryString.length);
+                                                                                                                                                                                                        for (let i = 0; i < binaryString.length; i++) {
+                                                                                                                                                                                                                    bytes[i] = binaryString.charCodeAt(i);
+                                                                                                                                                                                                                            }
 
-        // 3. Create a standard File object
-        const fileName = data.FileName || `OFP_${flightId}.pdf`;
-        const file = new File([bytes], fileName, { type: 'application/pdf' });
+                                                                                                                                                                                                                                    // 3. FORCE THE CORRECT FILENAME so the parser knows what flight it is!
+                                                                                                                                                                                                                                            const safeDate = dateStr ? dateStr.replace(/-/g, '') : 'UnknownDate';
+                                                                                                                                                                                                                                                    const safeFlight = flightNum ? flightNum.replace(/\s+/g, '') : 'UnknownFlight';
+                                                                                                                                                                                                                                                            const fileName = `${safeFlight}_${safeDate}_OFP.pdf`;
+                                                                                                                                                                                                                                                                    
+                                                                                                                                                                                                                                                                            const file = new File([bytes], fileName, { type: 'application/pdf' });
 
-        if (typeof showToast === 'function') showToast("OFP Downloaded! Extracting data...", "success");
+                                                                                                                                                                                                                                                                                    if (typeof showToast === 'function') showToast("OFP Downloaded! Extracting data...", "success");
 
-        // 4. Send it directly to your existing pipeline
-        if (typeof runAnalysis === 'function') {
-            
-            // This parses the PDF and saves it to IndexedDB
-            await runAnalysis(file, false);
-            
-            // 5. Find the newly created OFP in the database and ACTIVATE it cleanly!
-            if (typeof getCachedOFPs === 'function' && typeof activateOFP === 'function') {
-                const allOFPs = await getCachedOFPs(true); // Force refresh cache
-                
-                if (allOFPs && allOFPs.length > 0) {
-                    // Sort by ID to get the highest/newest one
-                    allOFPs.sort((a, b) => b.id - a.id);
-                    const newestOFP = allOFPs[0];
-                    
-                    // Call your exact activation function! 
-                    // switchTab = true is built-in, so it handles the redirect perfectly.
-                    await activateOFP(newestOFP.id, true); 
-                }
-            }
+                                                                                                                                                                                                                                                                                            // 4. Send it directly to your existing pipeline
+                                                                                                                                                                                                                                                                                                    if (typeof runAnalysis === 'function') {
+                                                                                                                                                                                                                                                                                                                // runAnalysis will now parse it, save it, and auto-activate it automatically
+                                                                                                                                                                                                                                                                                                                            await runAnalysis(file, false);
+                                                                                                                                                                                                                                                                                                                                    } else {
+                                                                                                                                                                                                                                                                                                                                                alert("Error: Core PDF analyzer is missing.");
+                                                                                                                                                                                                                                                                                                                                                        }
 
-        } else {
-            console.warn("runAnalysis function not found in the global scope!");
-            alert("Error: Core PDF analyzer is missing.");
-        }
-
-    } catch (error) {
-        console.error("Failed to import OFP:", error);
-        alert("Error syncing OFP: " + error.message);
-    }
+                                                                                                                                                                                                                                                                                                                                                            } catch (error) {
+                                                                                                                                                                                                                                                                                                                                                                    console.error("Failed to import OFP:", error);
+                                                                                                                                                                                                                                                                                                                                                                            alert("Error syncing OFP: " + error.message);
+                                                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                                                                                                 
 }
-
-// FUNCTIONS NOT USED ANYMORE
     // Shared function to restore OFP‑specific user data (waypoints + persistent inputs)
     async function restoreOFPData(ofp) {
         if (!ofp) return;
