@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.2.1";
+    const APP_VERSION = "2.2.2";
     const RELEASE_NOTES = {
-        "2.2.1": {
+        "2.2.2": {
             title: "Release Notes",
             notes: [
                 "📋 Updated ATIS and Clearance popups",
@@ -25,7 +25,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'dd7ebeeb684d9015b8a50e4dba1885cb52e880ffd4601912a23729b702e1f824';
+    const EXPECTED_SW_HASH = '399ec11ca161fdbff795aafcfea7cc1e035eb1f312555643a438b7c0a6694023';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1978,13 +1978,39 @@
             const existingOFP = await findOFPByFlightAndDate(flight, date);
 
             try {
+                let newlySavedId = null;
+
                 if (existingOFP) {
                     // Pass isBatchUpload to the handler
                     await handleReplacement(existingOFP, blob, metadata, previouslyActiveId, isBatchUpload);
+                    newlySavedId = existingOFP.id;
                 } else {
                     // Pass isBatchUpload to the handler
                     await handleNewOFP(blob, metadata, isBatchUpload);
+                    
+                    // Fetch the newly created record to get its generated ID
+                    const freshlySaved = await findOFPByFlightAndDate(flight, date);
+                    if (freshlySaved) newlySavedId = freshlySaved.id;
                 }
+
+                // --- NEW: AUTO-ACTIVATE THE UPLOADED OFP ---
+                if (newlySavedId && !isBatchUpload) {
+                    // 1. Tell the app this is the active flight
+                    localStorage.setItem('activeOFPId', newlySavedId);
+                    
+                    // 2. Automatically switch to the Summary tab
+                    const summaryBtn = document.querySelector('.nav-btn[data-tab="summary"], .nav-btn[onclick*="summary"]');
+                    if (summaryBtn) {
+                        if (typeof window.showTab === 'function') window.showTab('summary', summaryBtn);
+                        else summaryBtn.click();
+                    }
+                    
+                    // 3. Show success message
+                    showToast(`Activated: ${flight}`, 'success');
+                    if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
+                }
+                // ------------------------------------------
+
                 // After replacement or new OFP, refresh OFP manager if sectors tab is active
                 if (!isBatchUpload && document.querySelector('.tool-section.active')?.id === 'section-sectors') {
                     await renderOFPMangerTable();
@@ -1993,6 +2019,13 @@
                 // Emergency fallback – something went wrong in the handlers
                 console.error("Unexpected error during save:", error);
                 const emergencyResult = await emergencySaveOFP(blob, metadata, existingOFP || null);
+                
+                // Try to activate even on emergency save
+                if (emergencyResult.ofpsRecordCreated && !isBatchUpload) {
+                    const emergencySaved = await findOFPByFlightAndDate(flight, date);
+                    if (emergencySaved) localStorage.setItem('activeOFPId', emergencySaved.id);
+                }
+
                 let toastMessage = existingOFP
                     ? "OFP replaced (emergency mode)"
                     : "OFP saved (emergency mode)";
