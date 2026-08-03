@@ -1136,115 +1136,6 @@
     window.clearAtcCanvas = () => typeof clearPad === 'function' && clearPad('atc');
     window.clearSignature = () => typeof clearPad === 'function' && clearPad('main');
 
-    async function uploadMultipleOFPs(files) {
-        const modal = document.getElementById('upload-progress-modal');
-        const progressBar = document.getElementById('upload-progress-bar');
-        const progressText = document.getElementById('upload-progress-text');
-        const progressDetail = document.getElementById('upload-progress-detail');
-        const closeBtn = document.getElementById('upload-progress-close');
-
-        if (!modal) return;
-
-        progressDetail.innerHTML = '';
-        progressBar.style.width = '0%';
-        progressText.textContent = `Processing 0 of ${files.length}...`;
-        closeBtn.style.display = 'none';
-        modal.style.display = 'block';
-
-        let successCount = 0;
-        let failCount = 0;
-
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            const fileInfo = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
-            progressText.textContent = `Processing ${i + 1} of ${files.length}: ${file.name}`;
-            
-            const logEntry = document.createElement('div');
-            logEntry.style.cssText = 'padding: 4px 0; border-bottom: 1px solid var(--border);';
-            logEntry.innerHTML = `⏳ ${fileInfo} – uploading...`;
-            progressDetail.appendChild(logEntry);
-            progressDetail.scrollTop = progressDetail.scrollHeight;
-
-            try {
-                // IMPORTANT: Pass { isBatch: true } so runAnalysis doesn't auto-activate
-                await runAnalysis(file, false, { isBatch: true });
-                logEntry.innerHTML = `✅ ${fileInfo} – success`;
-                successCount++;
-            } catch (error) {
-                console.error(`Failed to upload ${file.name}:`, error);
-                logEntry.innerHTML = `❌ ${fileInfo} – failed: ${error.message || 'Unknown error'}`;
-                failCount++;
-            }
-
-            progressBar.style.width = `${((i + 1) / files.length) * 100}%`;
-        }
-
-        progressText.textContent = `Completed: ${successCount} succeeded, ${failCount} failed`;
-        closeBtn.style.display = 'block';
-        closeBtn.onclick = () => modal.style.display = 'none';
-
-        // Refresh cache and jump to file manager
-        await getCachedOFPs(true);
-        if (typeof renderOFPMangerTable === 'function') await renderOFPMangerTable();
-        
-        const sectorsBtn = document.querySelector('.nav-btn[data-tab="sectors"], .nav-btn[onclick*="sectors"]');
-        if (sectorsBtn) {
-            typeof window.showTab === 'function' ? window.showTab('sectors', sectorsBtn) : sectorsBtn.click();
-        }
-
-        if (typeof updateUploadButtonVisibility === 'function') updateUploadButtonVisibility();
-        if (typeof updateEmptyStates === 'function') await updateEmptyStates();
-    }
-
-    async function validateOFP(file) {
-        try {
-            if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
-                throw new Error('Invalid file type. Please upload a PDF file.');
-            }
-            if (file.size > 10 * 1024 * 1024) {
-                throw new Error('File too large. Maximum size is 10MB.');
-            }
-            if (file.size < 100) {
-                throw new Error('File too small to be a valid PDF.');
-            }
-
-            // HEADER CHECK (%PDF-)
-            const headerBuffer = await file.slice(0, 5).arrayBuffer();
-            const header = new Uint8Array(headerBuffer);
-            const pdfHeader = [37, 80, 68, 70, 45]; // ASCII for %PDF-
-            
-            for (let i = 0; i < 4; i++) {
-                if (header[i] !== pdfHeader[i]) throw new Error('Invalid file signature. Not a PDF.');
-            }
-
-            // CONTENT VALIDATION
-            const arrayBuffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-            
-            if (pdf.numPages < 1) throw new Error('PDF has no pages.');
-
-            // Use our high-speed line extractor
-            const page = await pdf.getPage(1);
-            const lines = typeof getLinesFromPDFPage === 'function' 
-                            ? await getLinesFromPDFPage(page) 
-                            : [(await page.getTextContent()).items.map(i => i.str).join(' ')];
-                            
-            const pageText = lines.join(' ').toUpperCase();
-
-            // Broadened validation for Skyplan variants
-            if (!pageText.includes('OPERATIONAL FLIGHT PLAN') && !pageText.includes('OFP')) {
-                throw new Error('This does not look like an Operational Flight Plan.');
-            }
-            
-            return true;
-
-        } catch (e) {
-            console.error("PDF Validation Error:", e);
-            alert(`Validation Error: ${e.message}`);
-            return false;
-        }
-    }
-
     // One-time migration of legacy localStorage state (Parallelized)
     async function migrateLegacyState() {
         const MIGRATION_KEY = 'efb_state_migration_v2';
@@ -1346,8 +1237,6 @@
                 
                 if (files.length === 1) {
                     await runAnalysis(files[0], false);
-                } else if (typeof uploadMultipleOFPs === 'function') {
-                    await uploadMultipleOFPs(files);
                 }
                 
                 e.target.value = ''; // Reset input
@@ -1386,11 +1275,11 @@
             if (typeof deleteJourneyTemplateFromDB === 'function') await deleteJourneyTemplateFromDB().catch(() => {});
         }
         
-        // 6. OFFLINE AUTO-LOAD LOGIC (Massively simplified)
+        // 6. OFFLINE AUTO-LOAD LOGIC
         try {
             const activeId = localStorage.getItem('activeOFPId');
             if (activeId) {
-                // Let the robust activateOFP function do all the heavy lifting!
+                // Let the robust activateOFP function do all the heavy lifting
                 await activateOFP(activeId, false).catch(e => {
                     console.warn("Failed to auto-activate OFP on startup:", e);
                     localStorage.removeItem('activeOFPId');
@@ -2778,19 +2667,6 @@
             const fileInput = document.getElementById('ofp-file-in');
             if (fileInput && fileInput.files.length > 0) {
                 blob = fileInput.files[0];
-                try {
-                    const isValid = await validateOFP(blob);
-                    if (!isValid) {
-                        fileInput.value = '';
-                        setOFPLoadedState(false);
-                        return;
-                    }
-                } catch (error) {
-                    alert(`Invalid PDF: ${error.message}`);
-                    fileInput.value = '';
-                    setOFPLoadedState(false);
-                    return;
-                }
                 localStorage.removeItem('efb_log_state');
             }
         }
@@ -7355,54 +7231,6 @@ function showClearancePopup() {
 // ==========================================
 // Trip Info
 // ==========================================
-
-function parseSkyplanCrew(apiResponse) {
-  const flightData = apiResponse?.FlightsCrewMembers?.[0];
-
-  if (!flightData || !Array.isArray(flightData.CrewMembers)) {
-    return {
-      flightId: null,
-      captain: null,
-      flightDeck: [],
-      cabinCrew: [],
-      allCrew: []
-    };
-  }
-
-  const crewMembers = flightData.CrewMembers;
-
-  // Format individual member objects
-  const formattedMembers = crewMembers.map(member => ({
-    employeeId: member.EmployeeID,
-    firstName: member.FirstName,
-    lastName: member.LastName,
-    fullName: `${member.FirstName} ${member.LastName}`.trim(),
-    position: member.Position,
-    phoneNumber: member.PhoneNumber,
-    dateOfBirth: member.DateOfBirth ? member.DateOfBirth.split('T')[0] : null
-  }));
-
-  // Role categorization
-  const flightDeckPositions = ['CP', 'FO'];
-
-  const captain = formattedMembers.find(m => m.position === 'CP') || null;
-  const flightDeck = formattedMembers.filter(m => flightDeckPositions.includes(m.position));
-  const cabinCrew = formattedMembers.filter(m => !flightDeckPositions.includes(m.position));
-
-  return {
-    flightId: flightData.FlightID,
-    pilotCount: flightData.PilotCount,
-    totalCrewCount: flightData.CrewCount,
-    captain: captain ? {
-      name: captain.fullName,
-      employeeId: captain.employeeId,
-      phone: captain.phoneNumber
-    } : null,
-    flightDeck,
-    cabinCrew,
-    allCrew: formattedMembers
-  };
-}
 
 function convertTripTime(timeStr) {
     if (!timeStr || timeStr === '-') return '';
