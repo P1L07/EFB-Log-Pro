@@ -1958,64 +1958,101 @@
     }
 
     function extractWeights(lines) {
-        // Find the specific line that holds the weights
-        const weightLine = lines.find(l => l.includes('MTOW') && l.includes('MZFW'));
-        if (!weightLine) return;
+        if (!lines || !Array.isArray(lines)) return;
 
-        const weightFields = {
-            'view-mtow': 'MTOW', 'view-mlw': 'MLW', 'view-mzfw': 'MZFW',
-            'view-mpld': 'MPLD', 'view-fcap': 'FCAP', 'view-dow': 'DOW',
-            'view-tow': 'TOW', 'view-lw': 'LW', 'view-zfw': 'ZFW', 'view-pld': 'PLD'
+        // Join lines into a single searchable string
+        const fullText = lines.map(l => l.replace(/[\u200B-\u200D\uFEFF]/g, '').trim()).join(' ');
+
+        const weightMap = {
+            'view-mtow': '-', 'view-mlw': '-', 'view-mzfw': '-', 'view-mpld': '-', 'view-fcap': '-', 'view-dow': '-',
+            'view-tow': '-', 'view-lw': '-', 'view-zfw': '-', 'view-pld': '-'
         };
 
-        Object.keys(weightFields).forEach(id => {
-            const regex = new RegExp("\\b" + weightFields[id] + "\\s+(\\d+)", "i");
-            const match = weightLine.match(regex);
-            if (match) safeText(id, match[1]);
+        // Key-Value map matching exact headers to their numbers on the same line
+        const mappings = [
+            { id: 'view-mtow', key: 'MTOW' },
+            { id: 'view-mlw',  key: 'MLW'  },
+            { id: 'view-mzfw', key: 'MZFW' },
+            { id: 'view-mpld', key: 'MPLD' },
+            { id: 'view-fcap', key: 'FCAP' },
+            { id: 'view-dow',  key: 'DOW'  },
+            { id: 'view-tow',  key: 'TOW'  },
+            { id: 'view-lw',   key: 'LW'   },
+            { id: 'view-zfw',  key: 'ZFW'  },
+            { id: 'view-pld',  key: 'PLD'  }
+        ];
+
+        mappings.forEach(item => {
+            // Match word boundary + Label + optional space/colon + 4-to-5 digit number
+            // Using negative lookbehind (?<!M) for TOW so it doesn't trigger on MTOW
+            let pattern;
+            if (item.key === 'TOW') {
+                pattern = /(?<!M)\bTOW\s+(\d{4,5})\b/i;
+            } else if (item.key === 'ZFW') {
+                pattern = /(?<!M)\bZFW\s+(\d{4,5})\b/i;
+            } else if (item.key === 'PLD') {
+                pattern = /(?<!M)\bPLD\s+(\d{4,5})\b/i;
+            } else if (item.key === 'LW') {
+                pattern = /(?<!M)\bLW\s+(\d{4,5})\b/i;
+            } else {
+                pattern = new RegExp(`\\b${item.key}\\s+(\\d{4,5})\\b`, 'i');
+            }
+
+            const match = fullText.match(pattern);
+            if (match) {
+                weightMap[item.id] = match[1];
+            }
+        });
+
+        // Safe DOM Injection
+        Object.keys(weightMap).forEach(id => {
+            safeText(id, weightMap[id]);
         });
     }
 
     function extractRoutes(lines) {
-        let destRoute = '-', altnRoute = '-', altn2Route = '-';
-        let currentSection = null;
-        let currentText = [];
+        if (!lines || !Array.isArray(lines)) return;
 
-        for (let line of lines) {
-            if (line.startsWith('DEST ROUTE')) {
-                currentSection = 'dest';
-                currentText = [line.replace(/DEST\s+ROUTE[:\s]*/i, '')];
-                continue;
-            }
-            if (line.match(/^ALTN1?\s+ROUTE/i)) {
-                if (currentSection === 'dest') destRoute = currentText.join(' ').trim();
-                currentSection = 'altn1';
-                currentText = [line.replace(/^ALTN1?\s+ROUTE[:\s]*/i, '')];
-                continue;
-            }
-            if (line.startsWith('ALTN2 ROUTE')) {
-                if (currentSection === 'dest') destRoute = currentText.join(' ').trim();
-                if (currentSection === 'altn1') altnRoute = currentText.join(' ').trim();
-                currentSection = 'altn2';
-                currentText = [line.replace(/ALTN2\s+ROUTE[:\s]*/i, '')];
-                continue;
-            }
-            // Stop parsing routes if we hit FUEL or ALTN stats
-            if (line.startsWith('FUEL') || (line.startsWith('ALTN') && !line.includes('ROUTE'))) {
-                if (currentSection === 'dest') destRoute = currentText.join(' ').trim();
-                if (currentSection === 'altn1') altnRoute = currentText.join(' ').trim();
-                if (currentSection === 'altn2') altn2Route = currentText.join(' ').trim();
-                break;
-            }
-            
-            // Append multiline routes
-            if (currentSection) currentText.push(line);
+        // Reconstruct the full text block so split line tokens don't break string matching
+        const fullText = lines.map(l => l.replace(/[\u200B-\u200D\uFEFF]/g, '').trim()).join(' ');
+
+        let destRoute = '-', altnRoute = '-', altn2Route = '-';
+
+        // 1. Extract DEST ROUTE
+        // Matches "DEST ROUTE:" up until ALTN ROUTE, FUEL, or REMARKS
+        const destMatch = fullText.match(/\bDEST\s+ROUTE[:\s]+([\s\S]*?)(?=\bALTN\s*1?\s+ROUTE\b|\bALTN\s*2\s+ROUTE\b|\bFUEL\b|\bRMK\b|\bREMARKS?\b|$)/i);
+        if (destMatch && destMatch[1]) {
+            destRoute = destMatch[1].replace(/\s+/g, ' ').trim();
         }
 
-        safeText('view-dest-route', destRoute || '-');
-        safeText('view-altn-route', altnRoute || '-');
-        safeText('view-altn2-route', altn2Route || '-');
-    }
+        // 2. Extract ALTN / ALTN1 ROUTE
+        const altnMatch = fullText.match(/\bALTN\s*1?\s+ROUTE[:\s]+([\s\S]*?)(?=\bALTN\s*2\s+ROUTE\b|\bFUEL\b|\bRMK\b|\bREMARKS?\b|$)/i);
+        if (altnMatch && altnMatch[1]) {
+            altnRoute = altnMatch[1].replace(/\s+/g, ' ').trim();
+        }
 
+        // 3. Extract ALTN2 ROUTE (if present)
+        const altn2Match = fullText.match(/\bALTN\s*2\s+ROUTE[:\s]+([\s\S]*?)(?=\bFUEL\b|\bRMK\b|\bREMARKS?\b|$)/i);
+        if (altn2Match && altn2Match[1]) {
+            altn2Route = altn2Match[1].replace(/\s+/g, ' ').trim();
+        }
+
+        // Clean up any stray trailing colons or punctuation
+        const clean = (str) => {
+            if (!str || str === '-') return '-';
+            let s = str.trim();
+            if (s.startsWith(':')) s = s.substring(1).trim();
+            return s || '-';
+        };
+
+        // DOM Injection
+        safeText('view-dest-route', clean(destRoute));
+        safeText('view-altn-route', clean(altnRoute));
+
+        const altn2Id = document.getElementById('view-altn2-route') ? 'view-altn2-route' : 'view-altn2';
+        safeText(altn2Id, clean(altn2Route));
+    }
+    
     function extractAdditionalFlightInfo(lines) {
         let row1Text = "-", row2Text = "-", maxSR = "";
         
@@ -2565,17 +2602,79 @@
         return calculateNightDuty(startMinsUTC, endMinsUTC);
     }
 
+    function renderFlightLogTables(forceRedraw = false) {
+        // 1. Calculate the latest fuel, ETOs, and cumulative times
+        if (typeof runFlightLogCalculations === 'function') {
+            runFlightLogCalculations(); 
+        }
+
+        // 2. Incremental update check (Fast-path if only typing ATOs or fuel)
+        const canIncrementalUpdate = !forceRedraw && 
+            typeof waypointTableCache !== 'undefined' &&
+            waypointTableCache.waypoints && 
+            waypointTableCache.waypoints.length === waypoints.length &&
+            waypointTableCache.alternateWaypoints &&
+            waypointTableCache.alternateWaypoints.length === alternateWaypoints.length &&
+            (Date.now() - waypointTableCache.lastUpdate) < 1000;
+        
+        if (canIncrementalUpdate) {
+            if (typeof updateFlightLogTablesIncremental === 'function') updateFlightLogTablesIncremental();
+            if (typeof updateAlternateTableIncremental === 'function') updateAlternateTableIncremental();
+            return;
+        }
+
+        // 3. Full DOM Render Helper
+        const fillTable = (list, tableId, prefix) => {
+            const tb = document.getElementById(tableId); 
+            if (!tb) return;
+            
+            if (!list || list.length === 0) {
+                tb.innerHTML = '<tr><td colspan="14" style="text-align:center;color:gray;padding:20px">No waypoints found</td></tr>';
+                return;
+            }
+
+            let rowsHtml = '';
+            list.forEach((wp, index) => {
+                rowsHtml += createWaypointRowHtml(wp, index, prefix);
+            });
+            
+            tb.innerHTML = rowsHtml;
+        };
+        
+        // Populate Main Flight Log (prefix 'o') and Alternates Log (prefix 'a')
+        fillTable(waypoints, 'ofp-tbody', 'o'); 
+        fillTable(alternateWaypoints, 'altn-tbody', 'a');
+    
+        // 4. Cache DOM Element references for fast O(1) lookups during typing
+        waypointATOCache = Array.from(document.querySelectorAll('[id^="o-a-"]'));
+        alternateATOCache = Array.from(document.querySelectorAll('[id^="a-a-"]'));
+        takeoffFuelInput = document.getElementById('o-f-0');
+        waypointFuelCache = Array.from(document.querySelectorAll('[id^="o-f-"]'));
+        
+        waypointTableCache = {
+            waypoints: Array.isArray(waypoints) ? [...waypoints] : [],
+            alternateWaypoints: Array.isArray(alternateWaypoints) ? [...alternateWaypoints] : [],
+            lastUpdate: Date.now()
+        };
+        
+        // 5. Update cruise level for Journey Log if present
+        if (typeof updateCruiseLevelForJourneyLog === 'function') {
+            updateCruiseLevelForJourneyLog();
+        }
+    }
+
+    // High-speed O(1) Incremental Updates for Main Table
     function updateFlightLogTablesIncremental() {
         if (!waypoints || waypoints.length === 0) return;
         
         waypoints.forEach((wp, i) => {
-            const etoCell = el(`o-eto-${i}`);
+            const etoCell = document.getElementById(`o-eto-${i}`);
             if (etoCell) {
                 const newEto = wp.eto || "--";
                 if (etoCell.textContent !== newEto) etoCell.textContent = newEto;
             }
             
-            const fuelCell = el(`o-calcfuel-${i}`);
+            const fuelCell = document.getElementById(`o-calcfuel-${i}`);
             if (fuelCell) {
                 const newFuel = wp.fuel ? Math.round(wp.fuel) : "-";
                 if (fuelCell.textContent !== String(newFuel)) fuelCell.textContent = newFuel;
@@ -2583,17 +2682,18 @@
         });
     }
 
+    // High-speed O(1) Incremental Updates for Alternate Table
     function updateAlternateTableIncremental() {
         if (!alternateWaypoints || alternateWaypoints.length === 0) return;
         
         alternateWaypoints.forEach((wp, i) => {
-            const etoCell = el(`a-eto-${i}`);
+            const etoCell = document.getElementById(`a-eto-${i}`);
             if (etoCell) {
                 const newEto = wp.eto || "--";
                 if (etoCell.textContent !== newEto) etoCell.textContent = newEto;
             }
             
-            const fuelCell = el(`a-calcfuel-${i}`);
+            const fuelCell = document.getElementById(`a-calcfuel-${i}`);
             if (fuelCell) {
                 const newFuel = wp.fuel ? Math.round(wp.fuel) : "-";
                 if (fuelCell.textContent !== String(newFuel)) fuelCell.textContent = newFuel;
@@ -2912,75 +3012,117 @@
         }
     }
 
-    function parsePageOne(lines) {
+function parsePageOne(lines) {
         try {
             let foundFlight = false;
-            const flightPattern = /^([A-Z]{3}\d{3,4})\s+([A-Z0-9-]{3,7})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s+([A-Z]{4})\s+(CI\d+)\s+(\d{4})\s+(\d{4})\s+(\d{4})\s+(\d{4})\s+([A-Z]{4})/;
 
             for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                const match = line.match(flightPattern);
+                // Strip invisible PDF formatting characters (Zero-width spaces, BOMs) that break Regex
+                const line = lines[i].replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
                 
-                if (match) {
-                    const [, flt, reg, date, dep, dest, ci, stdRaw, etdRaw, staRaw, etaRaw, altn] = match;
+                // Fast-check: Does this line contain a Date and two ICAO airport codes?
+                if (/\d{2}\/\d{2}\/\d{2}/.test(line) && /[A-Z]{4}\s+[A-Z]{4}/.test(line)) {
                     
-                    // Look for ERA and ALTN2 (they usually trail on the exact same line!)
-                    const afterFlight = line.substring(match.index + match[0].length).trim();
-                    const nextTokens = afterFlight.split(/\s+/);
-                    let era = '', altn2 = '';
+                    // Split the line into tokens by ANY whitespace boundary
+                    const tokens = line.split(/\s+/);
                     
-                    for (let token of nextTokens) {
-                        if (token.length === 4 && /^[A-Z]{4}$/.test(token)) {
-                            if (!era) era = token;
-                            else if (!altn2) { altn2 = token; break; }
-                        }
-                    }
+                    // Find the exact index of the Date to use as our anchor pivot
+                    const dateIdx = tokens.findIndex(t => /^\d{2}\/\d{2}\/\d{2}$/.test(t));
                     
-                    const formatTime = (t) => t && t.length === 4 ? t.substring(0,2) + ":" + t.substring(2,4) : "-";
-                    
-                    safeText('view-flt', flt); 
-                    safeText('view-reg', reg); 
-                    safeText('view-date', date);
-                    safeText('view-dep', dep); 
-                    safeText('view-dest', dest); 
-                    safeText('view-ci', ci);
-                    safeText('view-std-text', formatTime(stdRaw));
-                    safeText('view-etd-text', formatTime(etdRaw));
-                    safeText('view-sta-text', formatTime(staRaw));
-                    safeText('view-eta-text', formatTime(etaRaw));
-                    safeText('view-altn', altn);
-                    safeText('view-era-text', era || '');
-                    safeText('view-altn2', altn2 || '');
-                    
-                    safeSet('j-flt', flt);
-                    safeSet('j-reg', reg);
-                    safeSet('j-date', date);
-                    safeSet('j-dep', dep);
-                    safeSet('j-dest', dest);
-                    safeSet('j-altn', altn);
-                    if (era && el('j-era')) el('j-era').value = era;
-                    if (altn2 && el('j-altn2')) el('j-altn2').value = altn2;
-                    if (!el('j-std')?.value) safeSet('j-std', formatTime(stdRaw));
+                    if (dateIdx >= 2) {
+                        const flt = tokens[dateIdx - 2];
+                        const reg = tokens[dateIdx - 1];
+                        const date = tokens[dateIdx];
+                        const dep = tokens[dateIdx + 1];
+                        const dest = tokens[dateIdx + 2];
+                        const ci = tokens[dateIdx + 3];
+                        const stdRaw = tokens[dateIdx + 4];
+                        const etdRaw = tokens[dateIdx + 5];
+                        const staRaw = tokens[dateIdx + 6];
+                        const etaRaw = tokens[dateIdx + 7];
+                        
+                        // Smart Alternate Extraction (Grabs any remaining 4-letter codes)
+                        const remainingTokens = tokens.slice(dateIdx + 8);
+                        const altApts = remainingTokens.filter(t => /^[A-Z]{4}$/.test(t));
+                        
+                        const altn = altApts[0] || '';
+                        const era = altApts[1] || '';
+                        const altn2 = altApts[2] || '';
 
-                    foundFlight = true;
-                    break;
+                        const formatTime = (t) => (t && /^\d{4}$/.test(t)) ? t.substring(0,2) + ":" + t.substring(2,4) : "-";
+
+                        safeText('view-flt', flt); 
+                        safeText('view-reg', reg); 
+                        safeText('view-date', date);
+                        safeText('view-dep', dep); 
+                        safeText('view-dest', dest); 
+                        safeText('view-ci', ci);
+                        safeText('view-std-text', formatTime(stdRaw));
+                        safeText('view-etd-text', formatTime(etdRaw));
+                        safeText('view-sta-text', formatTime(staRaw));
+                        safeText('view-eta-text', formatTime(etaRaw));
+                        safeText('view-altn', altn);
+                        safeText('view-era-text', era);
+                        safeText('view-altn2', altn2);
+                        
+                        safeSet('j-flt', flt);
+                        safeSet('j-reg', reg);
+                        safeSet('j-date', date);
+                        safeSet('j-dep', dep);
+                        safeSet('j-dest', dest);
+                        safeSet('j-altn', altn);
+                        
+                        if (era && document.getElementById('j-era')) document.getElementById('j-era').value = era;
+                        if (altn2 && document.getElementById('j-altn2')) document.getElementById('j-altn2').value = altn2;
+                        if (!document.getElementById('j-std')?.value) safeSet('j-std', formatTime(stdRaw));
+
+                        foundFlight = true;
+                        break;
+                    }
                 }
             }
             
-            if (!foundFlight) throw new Error('Could not parse flight information from OFP');
+            // Extreme Fallback (In case PDF.js completely merged the spaces e.g. "UACCUAAA")
+            if (!foundFlight) {
+                console.warn("Token-Pivot parser failed, attempting strict Regex fallback...");
+                const fallbackRegex = /([A-Z0-9]{3,8})\s+([A-Z0-9-]{3,8})\s+(\d{2}\/\d{2}\/\d{2})\s+([A-Z]{4})\s*([A-Z]{4})\s+(\S+)\s+(\d{4})\s+(\d{4})\s+(\d{4})\s+(\d{4})(?:\s+([A-Z]{4}))?/;
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const match = lines[i].replace(/[\u200B-\u200D\uFEFF]/g, '').match(fallbackRegex);
+                    if (match) {
+                        const [, flt, reg, date, dep, dest, ci, stdRaw, etdRaw, staRaw, etaRaw, altn] = match;
+                        const formatTime = (t) => (t && /^\d{4}$/.test(t)) ? t.substring(0,2) + ":" + t.substring(2,4) : "-";
+                        
+                        safeText('view-flt', flt); safeText('view-reg', reg); safeText('view-date', date);
+                        safeText('view-dep', dep); safeText('view-dest', dest); safeText('view-ci', ci);
+                        safeText('view-std-text', formatTime(stdRaw)); safeText('view-etd-text', formatTime(etdRaw));
+                        safeText('view-sta-text', formatTime(staRaw)); safeText('view-eta-text', formatTime(etaRaw));
+                        safeText('view-altn', altn || '');
+                        
+                        safeSet('j-flt', flt); safeSet('j-reg', reg); safeSet('j-date', date);
+                        safeSet('j-dep', dep); safeSet('j-dest', dest); safeSet('j-altn', altn || '');
+                        if (!document.getElementById('j-std')?.value) safeSet('j-std', formatTime(stdRaw));
 
-            extractAdditionalFlightInfo(lines);
-            extractRoutes(lines);
-            extractFuelData(lines);
-            extractWeights(lines);
+                        foundFlight = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!foundFlight) {
+                throw new Error('Could not parse flight information from OFP. Layout unrecognized.');
+            }
+
+            if (typeof extractAdditionalFlightInfo === 'function') extractAdditionalFlightInfo(lines);
+            if (typeof extractRoutes === 'function') extractRoutes(lines);
+            if (typeof extractFuelData === 'function') extractFuelData(lines);
+            if (typeof extractWeights === 'function') extractWeights(lines);
             
             return true;
             
         } catch (error) {
             console.error('Error in parsePageOne:', error);
-            ['view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 
-             'view-altn', 'view-std-text', 'view-sta-text', 'view-ci',
-             'view-era-text', 'view-altn2'].forEach(id => safeText(id, '-'));
+            ['view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 'view-altn', 'view-std-text', 'view-sta-text', 'view-ci', 'view-era-text', 'view-altn2'].forEach(id => safeText(id, '-'));
             if (typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
             throw error; 
         }
@@ -2990,24 +3132,25 @@
         const page = await pdf.getPage(1);
         const lines = await getLinesFromPDFPage(page);
         
-        // Extract raw coordinates (this still needs raw items, so we pull them)
+        // Extract raw coordinates for PDF mapping
         const content = await page.getTextContent();
         if (typeof extractMainPageCoordinates === 'function') {
             extractMainPageCoordinates(content.items);
         }
 
         try {
-            parsePageOne(lines); // Pass the perfectly ordered array
+            parsePageOne(lines);
         } catch (parseError) {
-            console.warn('Failed to parse page 1:', parseError);
+            console.warn('Failed to parse page 1 components:', parseError);
             if (typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
             throw parseError;
         }
 
-        // We join it just for the request number extraction (legacy support)
         const textContent = lines.join('\n');
         let requestNumber = '';
-        if (typeof extractRequestNumber === 'function') requestNumber = extractRequestNumber(textContent);
+        if (typeof extractRequestNumber === 'function') {
+            requestNumber = extractRequestNumber(textContent);
+        }
         
         return { requestNumber, page1Lines: lines, textContent };
     }
@@ -3041,88 +3184,90 @@
     }
     
     async function parseWaypoints(page, pageNum) {
-        const rows = buildRows((await page.getTextContent()).items);
-        rows.sort((a,b) => b.y - a.y); 
+        const textContent = await page.getTextContent();
+        const rows = typeof buildRows === 'function' 
+            ? buildRows(textContent.items) 
+            : []; // Fallback to your original buildRows builder
+            
+        if (!rows || rows.length === 0) return [];
 
+        rows.sort((a, b) => b.y - a.y); 
+
+        // 1. Locate the Table Header Y boundary
         let headerY = null;
-        for(const row of rows) {
+        for (const row of rows) {
             const rowText = row.items.map(item => item.str).join(' ');
-            if((rowText.includes("TO") && rowText.includes("FUEL")) || 
-            (rowText.includes("AWY") && rowText.includes("ETE"))) {
+            if ((rowText.includes("TO") && rowText.includes("FUEL")) || 
+                (rowText.includes("AWY") && rowText.includes("ETE")) ||
+                (rowText.includes("FREQ") && rowText.includes("FL"))) {
                 headerY = row.y; 
                 break; 
             }
         }
 
-        if(!headerY) return [];
+        if (!headerY) return [];
 
         const waypoints = [];
 
-        for(let r = 0; r < rows.length; r++) {
+        // 2. Parse Waypoint Rows
+        for (let r = 0; r < rows.length; r++) {
             const row = rows[r];
-            if(row.y >= headerY) continue;
-            if(row.items.length < 3) continue;
+            if (row.y >= headerY) continue;
+            if (!row.items || row.items.length < 2) continue;
 
             let timeValue = null, fuelValue = null;
-            for(const item of row.items) {
-                const str = item.str.trim();
-                if(/^\d+[\.:]\d{2}$/.test(str)) timeValue = str;
-                if(/^\d{3,5}$/.test(str) && !str.includes('.') && !str.includes(':')) {
-                    const num = parseInt(str);
-                    if(num >= 100 && num <= 50000 && !row.items.map(x=>x.str).join(' ').includes('FL ')) {
+
+            // Search for Time and Fuel within the row's items
+            for (const item of row.items) {
+                const str = (item.str || '').trim();
+                
+                // Time regex matching (e.g. 01:23 or 01.23)
+                if (/^\d{1,3}[\.:]\d{2}$/.test(str)) {
+                    timeValue = str;
+                }
+                
+                // Fuel regex matching (standalone numbers, avoiding FL references)
+                if (/^\d{3,5}$/.test(str) && !str.includes('.') && !str.includes(':')) {
+                    const num = parseInt(str, 10);
+                    const fullRowStr = row.items.map(x => x.str).join(' ');
+                    if (num >= 100 && num <= 99999 && !fullRowStr.includes('FL ')) {
                         fuelValue = str;
                     }
                 }
             }
 
-            if(timeValue && fuelValue) {
+            if (timeValue && fuelValue) {
                 let data = { 
                     name: "?", awy: "-", level: "-", track: "-", 
                     wind: "-", tas: "-", gs: "-", sr: "-" 
                 };
 
-                // ---- FIRST ROW (waypoint info) ----
-                if(r > 0) {
-                    const prevRow = rows[r-1];
-                    if(Math.abs(row.y - prevRow.y) < 25) {
-                        const fullString = prevRow.items.map(x => x.str).join(' ');
-                        const parts = fullString.trim().split(/\s+/);
+                // ---- FIRST ROW: Waypoint Name, Airway, Level, etc. ----
+                if (r > 0) {
+                    const prevRow = rows[r - 1];
+                    // Relaxed delta gap from 25 to 35 to prevent dropping rows on scaled PDFs
+                    if (Math.abs(row.y - prevRow.y) < 35) {
+                        const fullString = prevRow.items.map(x => x.str).join(' ').trim();
+                        const parts = fullString.split(/\s+/);
 
-                        if (parts.length >= 8) {
-                            data.name = parts[0];
-                            data.awy = parts[1];
-                            data.level = parts[2];
-                            data.track = parts[3];
-                            data.wind = parts[4];
-                            data.tas = parts[5];
-                            data.gs = parts[6];
-                            // IMT/FTM is parts[7] – we ignore it
-                        } else if (parts.length >= 7) {
-                            data.name = parts[0];
-                            data.awy = parts[1];
-                            data.level = parts[2];
-                            data.track = parts[3];
-                            data.wind = parts[4];
-                            data.tas = parts[5];
-                            data.gs = parts[6];
-                        } else if (parts.length > 0) {
-                            data.name = parts[0];
-                            if(parts[1]) data.awy = parts[1];
-                            if(parts[2]) data.level = parts[2];
+                        if (parts.length > 0 && parts[0]) {
+                            // Strip out stray non-alphanumeric artifacts except stars/dashes
+                            data.name = parts[0].replace(/[^a-zA-Z0-9*-]/g, '') || parts[0];
+                            if (parts[1]) data.awy = parts[1];
+                            if (parts[2]) data.level = parts[2];
+                            if (parts[3]) data.track = parts[3];
+                            if (parts[4]) data.wind = parts[4];
+                            if (parts[5]) data.tas = parts[5];
+                            if (parts[6]) data.gs = parts[6];
                         }
                     }
                 }
 
-                // SECOND ROW 
+                // ---- SECOND ROW: Shear Rate (SR) extraction ----
                 let sr = '-';
-
-                // Debug: print the entire second row
-                const rowText = row.items.map(x => x.str).join(' ');
-
-                // Look for a 3-digit MAC token immediately followed by a 2-digit SR token 
                 for (let i = 0; i < row.items.length - 1; i++) {
-                    const token = row.items[i].str.trim();
-                    const nextToken = row.items[i + 1].str.trim();
+                    const token = (row.items[i].str || '').trim();
+                    const nextToken = (row.items[i + 1].str || '').trim();
                     if (/^\d{3}$/.test(token) && !token.includes('/') && 
                         /^\d{2}$/.test(nextToken) && !nextToken.includes('/')) {
                         sr = nextToken;
@@ -3130,10 +3275,10 @@
                     }
                 }
 
-                // If not found, try combined 5-digit token (e.g., "74702")
+                // Combined 5-digit token fallback (e.g. "74702")
                 if (sr === '-') {
                     for (let i = 0; i < row.items.length; i++) {
-                        const token = row.items[i].str.trim();
+                        const token = (row.items[i].str || '').trim();
                         if (/^\d{5}$/.test(token)) {
                             const possibleSR = token.substring(3, 5);
                             if (/^\d{2}$/.test(possibleSR)) {
@@ -3144,18 +3289,15 @@
                     }
                 }
 
-                // If still not found, look for a token with space where the first part is clean
+                // Spaced token fallback
                 if (sr === '-') {
                     for (let i = 0; i < row.items.length; i++) {
-                        const token = row.items[i].str.trim();
+                        const token = (row.items[i].str || '').trim();
                         const spaceIndex = token.indexOf(' ');
                         if (spaceIndex !== -1) {
                             const beforeSpace = token.substring(0, spaceIndex).trim();
                             const afterSpace = token.substring(spaceIndex + 1).trim();
-                            const isValidBefore = /^[A-Z0-9]{3}$/.test(beforeSpace);
-                            const isValidAfter = /^\d{2}$/.test(afterSpace);
-                            
-                            if (isValidBefore && isValidAfter) {
+                            if (/^[A-Z0-9]{3}$/.test(beforeSpace) && /^\d{2}$/.test(afterSpace)) {
                                 sr = afterSpace;
                                 break;
                             }
@@ -3163,20 +3305,19 @@
                     }
                 }
 
-                if(data.name !== "?") {
-                    const wpObj = {
+                if (data.name !== "?") {
+                    waypoints.push({
                         ...data,
-                        totalMins: parseTimeString(timeValue),
+                        totalMins: typeof parseTimeString === 'function' ? parseTimeString(timeValue) : 0,
                         eto: "",
-                        fob: parseInt(fuelValue) || 0,
+                        fob: parseInt(fuelValue, 10) || 0,
                         page: pageNum - 1, 
                         y_anchor: row.y,
                         isTakeoff: false,
                         isAlternate: false,
                         rawTime: timeValue,
                         sr: sr
-                    };
-                    waypoints.push(wpObj); 
+                    }); 
                 }
             }
         }
@@ -3187,9 +3328,15 @@
     async function parseAllWaypoints(pdf) {
         const allWaypoints = [];
         for (let i = 2; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const pageWaypoints = await parseWaypoints(page, i);
-            allWaypoints.push(...pageWaypoints);
+            try {
+                const page = await pdf.getPage(i);
+                const pageWaypoints = await parseWaypoints(page, i);
+                if (pageWaypoints && pageWaypoints.length > 0) {
+                    allWaypoints.push(...pageWaypoints);
+                }
+            } catch (e) {
+                console.warn(`Error parsing waypoints on page ${i}:`, e);
+            }
         }
         return allWaypoints;
     }
