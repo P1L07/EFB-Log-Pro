@@ -4560,13 +4560,10 @@ function parsePageOne(lines) {
 // ==========================================
 // 8. DRAWING PAD ENGINE
 // ==========================================
-    
-    // Attaches the save listener natively
+// Attaches the save listener natively
     function attachPadOnEnd(pad, name) {
         if (!pad) return;
 
-        // Rely solely on SignaturePad's native 'onEnd' event. 
-        // No custom pointerup events are needed (prevents double-saving).
         pad.onEnd = () => {
             if (typeof debouncedSave === 'function') debouncedSave();
             if (name === 'main' && typeof validateOFPInputs === 'function') {
@@ -4582,10 +4579,14 @@ function parsePageOne(lines) {
         const canvas = document.getElementById(p.canvasId);
         if (!canvas) return;
 
-        // Force a layout reflow to guarantee we have exact dimensions
-        const computed = window.getComputedStyle(canvas);
-        const containerWidth = canvas.offsetWidth || parseInt(computed.width) || 200;
-        const containerHeight = canvas.offsetHeight || parseInt(computed.height) || 80;
+        const container = canvas.parentElement || canvas.parentNode;
+        
+        // Always measure the PARENT container box width (fixes 200px narrow collapse)
+        const containerWidth = (container ? container.clientWidth : 0) || canvas.offsetWidth || 300;
+        const containerHeight = (container ? container.clientHeight : 0) || canvas.offsetHeight || 150;
+
+        // Don't initialize if container is completely hidden (0 width)
+        if (containerWidth === 0) return;
 
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
 
@@ -4593,8 +4594,8 @@ function parsePageOne(lines) {
         canvas.width = containerWidth * ratio;
         canvas.height = containerHeight * ratio;
         
-        // CSS dimensions dictate physical size
-        canvas.style.width = `${containerWidth}px`;
+        // CSS dimensions dictate physical size (force 100% parent match)
+        canvas.style.width = '100%';
         canvas.style.height = `${containerHeight}px`;
 
         const ctx = canvas.getContext('2d');
@@ -4628,17 +4629,18 @@ function parsePageOne(lines) {
         return p.pad;
     }
 
-    // Debounced Resize prevents iPad rotation stretching bugs
+    // Resize handler for iPad rotation / window resizing
     function resizePad(name) {
         const p = pads[name];
         if (!p || !p.pad) return;
         
         const canvas = p.pad.canvas;
-        if (!canvas || canvas.offsetWidth === 0) return;
+        const container = canvas ? canvas.parentElement : null;
+        if (!canvas || !container || container.clientWidth === 0) return;
 
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        const containerWidth = canvas.offsetWidth;
-        const containerHeight = canvas.offsetHeight;
+        const containerWidth = container.clientWidth;
+        const containerHeight = container.clientHeight || canvas.offsetHeight;
 
         // Only resize if physical dimensions actually changed
         if (containerWidth === p.lastWidth && containerHeight === p.lastHeight && ratio === p.lastRatio) {
@@ -4651,23 +4653,22 @@ function parsePageOne(lines) {
         // Re-scale internal resolution
         canvas.width = containerWidth * ratio;
         canvas.height = containerHeight * ratio;
+        canvas.style.width = '100%';
+        canvas.style.height = `${containerHeight}px`;
 
         const ctx = canvas.getContext('2d');
         ctx.scale(ratio, ratio);
 
         // Re-initialize pad to recalculate bounding boxes
-        const penColor = window.getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-        p.pad = new SignaturePad(canvas, {
-            backgroundColor: 'rgba(0,0,0,0)',
-            penColor: penColor,
-            minWidth: 1,
-            maxWidth: 3
-        });
+        const penColor = window.getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#007aff';
+        
+        p.pad.clear();
+        p.pad.penColor = penColor;
 
-        attachPadOnEnd(p.pad, name);
-
-        // Restore drawing, telling SignaturePad to rescale it to the new ratio
-        if (currentData) p.pad.fromDataURL(currentData, { ratio: ratio });
+        // Restore drawing safely
+        if (currentData) {
+            p.pad.fromDataURL(currentData);
+        }
 
         p.lastWidth = containerWidth;
         p.lastHeight = containerHeight;
@@ -4680,7 +4681,7 @@ function parsePageOne(lines) {
 
         try {
             // First check the database for the active flight
-            const userData = await loadOFPUserData(Number(activeId));
+            const userData = typeof loadOFPUserData === 'function' ? await loadOFPUserData(Number(activeId)) : null;
             let data = userData?.userInputs?.[drawingKey];
 
             // If not found, check the temporary legacy fallback in LocalStorage
@@ -4705,10 +4706,8 @@ function parsePageOne(lines) {
                 return;
             }
 
+            // Load drawing directly (REMOVED the recursive resizePad call here!)
             await pad.fromDataURL(data);
-            
-            // Force a quick resize check to ensure the aspect ratio matches current rotation
-            resizePad(padName);
             
         } catch (e) {
             console.error(`Failed to restore ${drawingKey} to ${padName}:`, e);
@@ -4745,7 +4744,6 @@ function parsePageOne(lines) {
         };
 
         if (mode === 'typing') {
-            // Save state and kill any active debounces
             if (typeof debouncedSave === 'function') debouncedSave.cancel();
             if (typeof saveState === 'function') saveState();
 
@@ -4753,8 +4751,7 @@ function parsePageOne(lines) {
                 if (uiElements[key].input) uiElements[key].input.style.display = 'block';
                 if (uiElements[key].canvas) uiElements[key].canvas.style.display = 'none';
                 
-                // Explicitly memory-wipe the pad
-                if (pads[key].pad) {
+                if (pads[key]?.pad) {
                     pads[key].pad.off();
                     pads[key].pad = null;
                 }
@@ -4766,21 +4763,16 @@ function parsePageOne(lines) {
                 if (uiElements[key].canvas) uiElements[key].canvas.style.display = 'block';
             });
 
-            const activeSection = document.querySelector('.tool-section.active');
-            if (activeSection && activeSection.id === 'section-summary') {
-                // Wait for CSS reflow to finish before grabbing canvas width
-                requestAnimationFrame(() => {
-                    setTimeout(() => {
-                        if (!pads.atis.pad) initPad('atis');
-                        if (!pads.atc.pad) initPad('atc');
-                    }, 50);
-                });
-            }
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    if (!pads.atis.pad) initPad('atis');
+                    if (!pads.atc.pad) initPad('atc');
+                }, 100);
+            });
         }
         
         document.body.setAttribute('data-atis-mode', mode);
     }
-
 
 // ==========================================
 // 9. Journey Log
