@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.2.2";
+    const APP_VERSION = "2.2.1";
     const RELEASE_NOTES = {
-        "2.2.2": {
+        "2.2.1": {
             title: "Release Notes",
             notes: [
                 "📋 Updated ATIS and Clearance popups",
@@ -25,7 +25,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = '399ec11ca161fdbff795aafcfea7cc1e035eb1f312555643a438b7c0a6694023';
+    const EXPECTED_SW_HASH = 'dd7ebeeb684d9015b8a50e4dba1885cb52e880ffd4601912a23729b702e1f824';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -4701,83 +4701,47 @@
         if (!activeSection) return;
 
         const activeTabId = activeSection.id.replace('section-', '');
-        const hasActiveOFP = !!localStorage.getItem('activeOFPId');
         
-        let hasAnyOFP = false;
-        try {
-            const count = await getOFPCount();
-            hasAnyOFP = count > 0;
-        } catch (e) {
-            console.warn('Failed to get OFP count', e);
+        // --- ADD THIS LINE: Skip these tabs entirely for empty states ---
+        if (['assigned', 'sectors', 'settings', 'journey'].includes(activeTabId)) {
+            return; 
         }
 
-        const showEmpty = hasAnyOFP && !hasActiveOFP && !['sectors', 'journey', 'settings'].includes(activeTabId);
+        const container = activeSection.querySelector('.scrollable-content') || activeSection;
+        
+        if (!isOFPLoaded) {
+            // Check if there are any OFPs in the database
+            let hasAnyOFP = false;
+            try {
+                const count = await getOFPCount();
+                hasAnyOFP = count > 0;
+            } catch(e) {}
 
-        // Ensure the activeSection has relative positioning and takes full height
-        if (window.getComputedStyle(activeSection).position === 'static') {
-            activeSection.style.position = 'relative';
-        }
-        // Make sure the section has a defined height (if not, use min-height)
-        if (activeSection.style.height === '' && activeSection.style.minHeight === '') {
-            activeSection.style.minHeight = 'calc(100vh - 60px)'; // adjust based on your layout
-        }
-
-        // Find or create the empty state container
-        let emptyContainer = activeSection.querySelector('.tab-empty-state-container');
-        if (!emptyContainer) {
-            emptyContainer = document.createElement('div');
-            emptyContainer.className = 'tab-empty-state-container';
-            emptyContainer.style.cssText = `
-                display: none;
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background: var(--background);
-                z-index: 10;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                flex-direction: column;
-                text-align: center;
-                padding: 20px;
-                box-sizing: border-box;
-            `;
-            emptyContainer.innerHTML = `
-                <div style="
-                    max-width: 500px;
-                    width: 100%;
-                    background: var(--panel);
-                    border-radius: 20px;
-                    padding: 40px 30px;
-                    box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-                    border: 1px solid var(--border);
-                ">
-                    <span style="font-size: 80px; display: block; margin-bottom: 20px; line-height: 1;">📋</span>
-                    <h2 style="color: var(--text); margin: 0 0 10px; font-size: 28px;">No Active OFP</h2>
-                    <p style="color: var(--dim); margin: 0 0 30px; font-size: 16px; line-height: 1.6;">
-                        Please activate one from the My Flights tab.
-                    </p>
-                </div>
-            `;
-            activeSection.appendChild(emptyContainer);
-        }
-
-        // Hide/show normal content and overlay
-        const normalChildren = Array.from(activeSection.children).filter(
-            child => !child.classList.contains('tab-empty-state-container')
-        );
-
-        if (showEmpty) {
-            normalChildren.forEach(child => child.style.display = 'none');
-            emptyContainer.style.display = 'flex';
-        } else {
-            normalChildren.forEach(child => child.style.display = '');
-            emptyContainer.style.display = 'none';
+            if (hasAnyOFP) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px; margin-bottom: 20px;">📂</div>
+                        <h3>No Active OFP</h3>
+                        <p style="color: var(--dim); margin-bottom: 20px;">You have saved OFPs, but none are currently active.</p>
+                        <button onclick="window.showTab('sectors', document.querySelector('.nav-btn[data-tab=\\'sectors\\']'))" 
+                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
+                            Go to Sectors to Activate
+                        </button>
+                    </div>`;
+            } else {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div style="font-size: 48px; margin-bottom: 20px;">✈️</div>
+                        <h3>No Active OFP</h3>
+                        <p style="color: var(--dim); margin-bottom: 20px;">Upload an OFP or download one from Skyplan.</p>
+                        <button onclick="window.goToAssignedAndActivate()" 
+                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
+                            Check Assigned Flights
+                        </button>
+                    </div>`;
+            }
         }
     }
-
     // Handler for 'Paper Flight Plan' Tab 
     async function renderPDFPreview(pdfBytes) {
         const container = document.getElementById('pdf-render-container');
