@@ -804,6 +804,104 @@ button:disabled,
     padding-bottom: 5px;
 }
 
+/* Refresh button – uses accent color, works on both themes */
+.btn-refresh {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-weight: bold;
+    font-size: 14px;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+.btn-refresh:hover {
+    opacity: 0.9;
+}
+
+/* Assigned flights table container – light background with subtle border */
+.assigned-table-wrapper {
+    flex: 1;
+    overflow-y: auto;
+    background: var(--input);          /* matches your input fields */
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+/* Table rows inside the assigned flights table */
+.assigned-flight-row {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.2s;
+    background: transparent;
+}
+.assigned-flight-row:hover {
+    background: rgba(var(--accent-rgb), 0.1);   /* subtle accent highlight */
+}
+
+.assigned-table-wrapper {
+    flex: 1;
+    overflow-y: auto;
+    background: transparent;
+    border: none;
+}
+
+/* ----- Assigned Flights Table Styling ----- */
+
+/* Row */
+.assigned-flight-row {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+}
+.assigned-flight-row:hover {
+    background: rgba(var(--accent-rgb), 0.08);  /* subtle highlight on hover */
+}
+
+/* Common cell padding and text colour */
+.assigned-flight-row td {
+    padding: 14px 12px;
+    color: var(--text);
+    font-size: 14px;
+}
+
+/* Flight number – accent color, bold */
+.assigned-flight {
+    font-weight: 600;
+    color: var(--accent) !important;
+    font-size: 15px;
+}
+
+/* Monospace times */
+.assigned-time,
+.assigned-sta {
+    font-family: monospace;
+}
+
+/* Secondary info (STA, block time, reg) – slightly dimmed */
+.assigned-sta,
+.assigned-block,
+.assigned-reg {
+    color: var(--dim);
+    font-size: 13px;
+}
+
+
+/* Sync button – use the accent, white text, no hardcoded green */
+.btn-sync {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.btn-sync:hover {
+    background: #0066cc;   /* slightly darker on hover – adjust to match your accent */
+}
+
 /* Toast Animations */
 @keyframes slideIn {
     from { transform: translateX(100%); opacity: 0; }
@@ -821,12 +919,11 @@ button:disabled,
 <div id="upload-overlay" class="upload-overlay hidden">
     <div style="max-width: 500px; width: 100%; background: var(--panel); border-radius: 20px; padding: 40px 30px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); border: 1px solid var(--border); text-align: center;">
         <span style="font-size: 80px; display: block; margin-bottom: 20px; line-height: 1;">📁</span>
-        <h2 style="color: var(--text); margin: 0 0 10px; font-size: 28px;">No OFPs Uploaded</h2>
+        <h2 style="color: var(--text); margin: 0 0 10px; font-size: 28px;">No Active OFP</h2>
         <p style="color: var(--dim); margin: 0 0 30px; font-size: 16px; line-height: 1.6;">
-            Upload your first Operational Flight Plan to get started.<br>
-            You can also drop multiple PDFs anywhere on this screen.
+            Select Operational Flight Plan to get started.<br>
         </p>
-        <button onclick="document.getElementById('ofp-file-in').click()" style="background: var(--accent); color: white; border: none; padding: 15px 40px; border-radius: 50px; font-weight: 600; font-size: 18px; cursor: pointer; box-shadow: 0 8px 20px rgba(0,132,255,0.4); transition: transform 0.2s, box-shadow 0.2s;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 12px 28px rgba(0,132,255,0.6)';" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 8px 20px rgba(0,132,255,0.4)';">Upload OFP</button>
+        <button onclick="document.getElementById('ofp-file-in').click()" style="background: var(--accent); color: white; border: none; padding: 15px 40px; border-radius: 50px; font-weight: 600; font-size: 18px; cursor: pointer; box-shadow: 0 8px 20px rgba(0,132,255,0.4); transition: transform 0.2s, box-shadow 0.2s;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 12px 28px rgba(0,132,255,0.6)';" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 8px 20px rgba(0,132,255,0.4)';">Activate OFP</button>
     </div>
 </div>
 
@@ -834,6 +931,7 @@ button:disabled,
     <aside class="sidebar">
         <div class="sidebar-header">EFB Log Pro</span></div>
     <div class="nav-menu">
+        <button class="nav-btn" data-tab="assigned">My Flights</button>
         <button class="nav-btn" data-tab="summary">Flight Summary</button>
         <button class="nav-btn" data-tab="weights-fuel">Weights & Fuel</button>
         <button class="nav-btn" data-tab="log">Flight Log</button>
@@ -851,6 +949,23 @@ button:disabled,
     </aside>
 <input type="file" id="ofp-file-in" style="display:none" multiple accept=".pdf">
     <main class="main-content">
+        <section id="section-assigned" class="tool-section">
+            <div class="panel" style="height: 85vh; padding: 20px; overflow: hidden; display: flex; flex-direction: column;">
+                <!-- Header -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h2 style="color: var(--text); margin: 0; font-family: sans-serif;">My Flights</h2>
+                    <button onclick="loadAssignedFlights()" class="btn-refresh">
+                        ↻ Refresh Flights
+                    </button>
+                </div>
+                <!-- Scrollable Table Container -->
+                <div id="assigned-flights-container" class="assigned-table-wrapper">
+                    <div style="color: var(--dim); text-align: center; padding: 40px; font-family: sans-serif;">
+                        Click "Refresh Flights" to load your roster.
+                    </div>
+                </div>
+            </div>
+        </section>
         <section id="section-summary" class="tool-section">
             <div class="panel">
                 <div class="grid-row">
@@ -952,6 +1067,9 @@ button:disabled,
                         style="color:var(--accent); font-weight:bold; font-size:18px;" 
                         oninput="calculateExtraFromTotal()">
                 </div>
+            </div>
+            <div class="btn-group">
+                <button id="btn-send-tripinfo" class="btn btn-email" style="display:none;">FILL TRIP INFO</button>
             </div>
         </section>
         <section id="section-log" class="tool-section">
@@ -1113,48 +1231,36 @@ button:disabled,
                 </div>
 
 
-<h3>Duty Settings & Crew</h3>
-<div class="grid-row" style="margin-bottom:10px">
-    <div class="field">
-        <label>FC Report Time(AUTO)</label>
-        <input type="time" id="j-duty-start" class="input" style="color:var(--accent); font-weight:bold;"> 
-    </div>
+                <h3>Duty Settings & Crew</h3>
+                <div class="grid-row" style="margin-bottom:10px">
+                    <div class="field">
+                        <label>FC Report Time(AUTO)</label>
+                        <input type="time" id="j-duty-start" class="input" style="color:var(--accent); font-weight:bold;"> 
+                    </div>
 
-    <div class="field">
-        <label>CC Report Time(AUTO)</label>
-        <input type="time" id="j-cc-duty-start" class="input" style="color:var(--accent); font-weight:bold;">
-    </div>
+                    <div class="field">
+                        <label>CC Report Time(AUTO)</label>
+                        <input type="time" id="j-cc-duty-start" class="input" style="color:var(--accent); font-weight:bold;">
+                    </div>
 
-    <div class="field">
-        <label>Max FDP(AUTO)</label>
-        <input type="time" id="j-max-fdp" class="input" style="color:var(--accent); font-weight:bold;">
-    </div>
-</div>
+                    <div class="field">
+                        <label>Max FDP(AUTO)</label>
+                        <input type="time" id="j-max-fdp" class="input" style="color:var(--accent); font-weight:bold;">
+                    </div>
+                </div>
 
-<div class="grid-row" style="margin-top:15px;" style="margin-bottom:10px;">
-    <div class="field">
-        <label># Flight Crew(AUTO)</label>
-        <input type="number" id="j-fc-count" class="input" value="2" min="1" max="4">
-    </div>
-    <div class="field">
-        <label># Cabin Crew(AUTO)</label>
-        <input type="number" id="j-cc-count" class="input" value="4" min="0" max="10">
-    </div>
-    </div>
-<div class="btn-group" style="margin-top: 20px;">
-    <button class="btn btn-save" onclick="downloadJourneyLog('email')">
-        Finalize Journey Log
-    </button>
-</div>
-<div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
-    <label style="color:var(--text); font-size:14px;">Journey log rows:</label>
-    <select id="j-template-rows" style="padding:8px; border-radius:8px; background:var(--input); color:var(--text); border:1px solid var(--border);">
-        <option value="3">3 Rows</option>
-        <option value="4" selected>4 Rows (Standard)</option>
-        <option value="5" selected>5 Rows</option>
-        <option value="6">6 Rows</option>
-    </select>
-</div>
+                <div class="grid-row" style="margin-top:15px;" style="margin-bottom:10px;">
+                        <input type="hidden" id="j-fc-count">
+                        <input type="hidden" id="j-cc-count">
+                    </div>
+                <div class="btn-group" style="margin-top: 20px;">
+                    <button class="btn btn-save" onclick="downloadJourneyLog('email')">
+                        Finalize Journey Log
+                    </button>
+                </div>
+                <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
+                    <input type="hidden" id="j-template-rows">
+                </div>
             </div>
         </section>
         <section id="section-confirm" class="tool-section">
@@ -1333,6 +1439,14 @@ button:disabled,
                         <div class="settings-item">
                             <input type="checkbox" id="hide-all-duty" class="input-checkbox">
                         </div>
+                    </div>
+                    <div class="setting-item">
+                        <label>Access Token</label>
+                        <input type="text" id="skyplan_token" class="data-box" placeholder="eyJhbGciOi..." onchange="localStorage.setItem('skyplan_token', this.value.trim())">
+                    </div>
+                    <div class="setting-item">
+                        <label>Refresh Token</label>
+                        <input type="text" id="skyplan_refresh_token" class="data-box" placeholder="eyJhbGciOi..." onchange="localStorage.setItem('skyplan_refresh_token', this.value.trim())">
                     </div>
                 </div>
 

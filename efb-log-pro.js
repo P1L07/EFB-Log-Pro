@@ -3,23 +3,14 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.1";
+    const APP_VERSION = "2.2";
     const RELEASE_NOTES = {
-        "2.1": {
+        "2.2": {
             title: "Release Notes",
             notes: [
-                "⚡ Analyze Relevant Weather and NOTAMs",
-                "📋 Finalized Journey logs and OFPs are being saved",
-                "✍️ Write or Type ATIS/ATC",
-                "⚡ DOM caching for waypoint inputs – 10x faster flight log updates",
-                "📁 Upload multiple OFPs at once",
-                "🆕 Shear Rate (SR) column added to Flight Log and Alternate tables",
-                "📁 Downloaded OFP filenames now include flight number and date",
-                "📋 OFP Manager table with Trip Time, Max SR, Request #",
-                "🔄 Replace existing OFPs (same flight/date)",
-                "✅ Finalized OFP indicator and download",
-                "🎨 New Sectors tab with search & reorder",
-                "✍️ Signature pad scaling fixed",
+                "📋 Updated ATIS and Clearance popups",
+                "✍️ Journey log data donwloaded directly from the server",
+                "📁 Download OFPs directly from the server",
             ]
         },
     };
@@ -34,12 +25,13 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'bf43d1bbc6107fdc6fc1feb4cb554958f3b391d7d103e4df9744d1c88d768fe2';
+    const EXPECTED_SW_HASH = '7a232c07b97c910c5962b0b1e49e664485fc2f10846cd8ce0c7c871686757f51';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
         'front-extra-kg', 'front-extra-reason', 'view-pic-block'
     ];
+
     const FLIGHT_THREAT_DICTIONARY = {
         notams: [
             { regex: /\b(?:AD|AERODROME|APPT)\s+(?:CLSD|CLOSED)\b/i, level: 'critical', type: 'ARPT CLSD' },
@@ -67,11 +59,13 @@
             { regex: /\bR[0-9]{2}[LRC]?\/0[0-5][0-9]{2}/i, level: 'critical', type: 'RVR' }
         ]
     };
+
     const JOURNEY_CONFIG = {
-        fontSize: 10,
+        fontSize: 8,
         rowGap: 17, 
         headers: {}
     };
+
     const TIME_X = 485, ATO_X = 485, FOB_X = 445, NOTES_X = 160;
     const V_LIFT = 2;       
     const LINE_HEIGHT = 12;
@@ -5830,7 +5824,7 @@
 
         // --- EXPANDED KEYS LIST (Captures all form and view fields) ---
         const keysToSave = [
-            'j-flt', 'j-reg', 'j-dep', 'j-dest', 'j-altn', 'j-out', 'j-off', 'j-on', 'j-in', 
+            'j-date', 'j-std', 'j-sta', 'j-flt', 'j-reg', 'j-dep', 'j-dest', 'j-altn', 'j-out', 'j-off', 'j-on', 'j-in', 
             'j-block', 'j-flight', 'j-night', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 
             'j-ldg-detail', 'j-init', 'j-uplift-w', 'j-calc-ramp', 'j-act-ramp', 'j-shut', 
             'j-burn', 'j-uplift-vol', 'j-slip', 'j-slip-2', 'j-disc', 'j-adl', 'j-chl', 
@@ -5853,6 +5847,8 @@
 
         d['j-date'] = d['j-date'] || d['view-date'];
         d['j-arr'] = d['j-arr'] || d['view-arr'] || d['j-dest'];
+        d['j-atd'] = d['j-out'];                         // ATD = actual off-block time
+        d['j-sta'] = d['view-sta-text'] || d['j-sta'];   // STA = scheduled arrival (from view)
 
         // Get the nightTime value from the j-night input
         const nightTime = d['j-night'] || "00:00";
@@ -6197,6 +6193,11 @@ window.downloadJourneyLog = async function(mode = 'download') {
             journeyLogTemplateBytes = templateBuffer; 
         }
 
+        const debugSearches = ['STA', 'ATD', 'ATA', 'STD', 'Blk', 'Flt', 'MA', 'DETAIL', 'DUTY'];
+for (const s of debugSearches) {
+    const res = await findTextInPDF(journeyLogTemplateBytes, s);
+    console.log(`findTextInPDF("${s}"):`, res ? `Found at X=${res[4]}, Y=${res[5]}` : 'NOT FOUND');
+}
         if (dailyLegs.length === 0) return alert("No legs to print.");
 
         // Generate PDF
@@ -6211,7 +6212,7 @@ window.downloadJourneyLog = async function(mode = 'download') {
         const templateRows = parseInt(document.getElementById('j-template-rows')?.value || "4");
         const standardRows = 4;
         const rowGap = JOURNEY_CONFIG?.rowGap || 15; 
-        const nameFontSize = Math.max(6, (JOURNEY_CONFIG?.fontSize || 8) - 3); 
+        const nameFontSize = JOURNEY_CONFIG?.fontSize || 8; 
 
         let FUEL_OFFSET = (standardRows - templateRows) * rowGap;
         let CREW_OFFSET = (standardRows - templateRows) * rowGap * 2;
@@ -6297,15 +6298,15 @@ window.downloadJourneyLog = async function(mode = 'download') {
         // ====================================================================
         const dynamicHeaders = [
             { idName: 'date', search: 'Date', shiftX: -10, keys: ['j-date'] },
-            { idName: 'flt', search: 'flight', shiftX: -10, keys: ['j-flt'] },
-            { idName: 'reg', search: 'Ac.Reg', shiftX: -10, keys: ['j-reg'] },
+            { idName: 'flt', search: 'flight', shiftX: -8, keys: ['j-flt'] },
+            { idName: 'reg', search: 'Ac.Reg', shiftX: -5, keys: ['j-reg'] },
             { idName: 'dep', search: 'Dep', shiftX: -5, keys: ['j-dep'] },
             { idName: 'arr', search: 'Arr', shiftX: -5, keys: ['j-arr'] },
             { idName: 'std', search: 'STD', shiftX: -5, keys: ['j-std'] },
             { idName: 'sta', search: 'STA', shiftX: -5, keys: ['j-sta'] }
         ];
 
-        const headerDrop = 18; 
+        const headerDrop = 16; 
 
         for (const header of dynamicHeaders) {
             const textAnchor = await findTextInPDF(journeyLogTemplateBytes, header.search) || 
@@ -6359,14 +6360,15 @@ window.downloadJourneyLog = async function(mode = 'download') {
         const logColumnDefs = [
             // Main
             { search: 'ATD',        keys: ['j-atd'],        shiftX: -5,  category: 'main' },
+            { search: 'ATA',        keys: ['j-in'],         shiftX: -5,  category: 'main' },
             { search: 'Off-Block',  keys: ['j-out'],        shiftX: -5,  category: 'main' },
             { search: 'TKOF',       keys: ['j-off'],        shiftX: -5,  category: 'main' },
             { search: 'TDWN',       keys: ['j-on'],         shiftX: -5,  category: 'main' },
-            { search: 'Blk',        keys: ['j-in'],         shiftX: -5,  category: 'main' },
+            { search: 'Blk',        keys: ['j-block'],      shiftX: -5,  category: 'main' },
             { search: 'Flt',        keys: ['j-flight'],     shiftX: -5,  category: 'main' },
             { search: 'NtBLK',      keys: ['j-night'],      shiftX: -5,  category: 'main' },
             { search: 'TO',         keys: ['j-to'],         shiftX: -5,  category: 'main' },
-            { search: 'LDG',        keys: ['j-ldg'],        shiftX: -5,  category: 'main' },
+            { search: 'LD',        keys: ['j-ldg'],        shiftX: -5,  category: 'main' },
             { search: 'MA',         keys: ['j-ldg-type'],   shiftX: -5,  category: 'main' },
             { search: 'FlAlt',      keys: ['j-flt-alt'],    shiftX: -5,  category: 'main' },
             { search: 'DETAIL',     keys: ['j-ldg-detail'], shiftX: -5,  category: 'main' },
@@ -6374,11 +6376,11 @@ window.downloadJourneyLog = async function(mode = 'download') {
             { search: 'Init',       keys: ['j-init'],       shiftX: -5,  category: 'fuel' },
             { search: 'UplfW',      keys: ['j-uplift-w'],   shiftX: -5,  category: 'fuel' },
             { search: 'UplfV',      keys: ['j-uplift-vol'], shiftX: -5,  category: 'fuel' },
-            { search: 'Calc Ramp',  keys: ['j-calc-ramp'],  shiftX: -5,  category: 'fuel' },
-            { search: 'Act Ramp',   keys: ['j-act-ramp'],   shiftX: -5,  category: 'fuel' },
+            { search: 'Calc Ramp',  keys: ['j-calc-ramp'],  shiftX: -2,  category: 'fuel' },
+            { search: 'Act Ramp',   keys: ['j-act-ramp'],   shiftX: -2,  category: 'fuel' },
             { search: 'Stdn',       keys: ['j-shut'],       shiftX: -5,  category: 'fuel' },
             { search: 'Burn',       keys: ['j-burn'],       shiftX: -5,  category: 'fuel' },
-            { search: 'Fuel Disc',  keys: ['j-disc'],       shiftX: -5,  category: 'fuel' },
+            { search: 'Fuel Disc',  keys: ['j-disc'],       shiftX: -2,  category: 'fuel' },
             { search: 'Slip 1',     keys: ['j-slip'],       shiftX: -5,  category: 'fuel' },
             { search: 'Slip 2',     keys: ['j-slip-2'],     shiftX: -5,  category: 'fuel' },
             // Loadsheet
@@ -6396,6 +6398,7 @@ window.downloadJourneyLog = async function(mode = 'download') {
             { search: 'Duty time',     key: 'j-duty-time' },
             { search: 'Night duty',   key: 'j-duty-night' },
             { search: 'Alwd. time', key: 'j-duty-allowed' },
+            { search: 'LEGS', key: 'sectors-total' },
         ];
 
         // --- Find crew column positions ---
@@ -6523,6 +6526,11 @@ window.downloadJourneyLog = async function(mode = 'download') {
         const numFC = parseInt(el('j-fc-count')?.value || 2);
         const numCC = parseInt(el('j-cc-count')?.value || 4);
         const totalRows = numFC + numCC;
+        // Filter out any empty rows just in case, then count the remaining valid legs
+        const validLegsCount = dailyLegs.filter(leg => leg['j-flt'] || leg['j-dep']).length;
+
+        // Create a string that repeats 'x' for every valid leg (e.g., 4 legs = "xxxx")
+        const sectorsTotalString = 'x'.repeat(validLegsCount);
 
         const fcDutyStartStr = el('j-duty-start')?.value || "00:00";
         const ccDutyStartStr = el('j-cc-duty-start')?.value || "00:00";
@@ -6561,8 +6569,8 @@ window.downloadJourneyLog = async function(mode = 'download') {
                 const pos = String(member.Position || member.position || '').toUpperCase();
                 const fullName = `${member.FirstName || member.firstName || ''} ${member.LastName || member.lastName || ''}`.trim().toUpperCase();
 
-                const nameX = opX - 115;
-                const posX = opX - 135; 
+                const nameX = opX - 125;
+                const posX = opX - 140; 
                 const idX = opX - 175;
 
                 page.drawText(empId, { x: idX, y: y, size: nameFontSize, font: font, color: PDFLib.rgb(0,0,0) });
@@ -6582,6 +6590,16 @@ window.downloadJourneyLog = async function(mode = 'download') {
 
             if(myMaxFDP && crewCols['j-duty-allowed']) 
                 page.drawText(myMaxFDP, { x: crewCols['j-duty-allowed'], y: y, size: JOURNEY_CONFIG.fontSize || 8, font: font, color: PDFLib.rgb(0,0,0) });
+
+            if (crewCols['sectors-total']) {
+                page.drawText(sectorsTotalString, { 
+                    x: crewCols['sectors-total'], 
+                    y: y, 
+                    size: JOURNEY_CONFIG.fontSize || 8, 
+                    font: font, 
+                    color: PDFLib.rgb(0,0,0) 
+                });
+            }
         }
 
         // SAVE & DOWNLOAD
