@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.2";
+    const APP_VERSION = "2.2.1";
     const RELEASE_NOTES = {
-        "2.2": {
+        "2.2.1": {
             title: "Release Notes",
             notes: [
                 "📋 Updated ATIS and Clearance popups",
@@ -25,7 +25,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = '7a232c07b97c910c5962b0b1e49e664485fc2f10846cd8ce0c7c871686757f51';
+    const EXPECTED_SW_HASH = 'dd7ebeeb684d9015b8a50e4dba1885cb52e880ffd4601912a23729b702e1f824';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
