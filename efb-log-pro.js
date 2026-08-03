@@ -4726,21 +4726,6 @@
                     <p style="color: var(--dim); margin: 0 0 30px; font-size: 16px; line-height: 1.6;">
                         Please activate one from the My Flights tab.
                     </p>
-                    <button onclick="goToSectorsAndActivate()" style="
-                        background: var(--accent);
-                        color: white;
-                        border: none;
-                        padding: 15px 40px;
-                        border-radius: 50px;
-                        font-weight: 600;
-                        font-size: 18px;
-                        cursor: pointer;
-                        box-shadow: 0 8px 20px rgba(0,132,255,0.4);
-                        transition: transform 0.2s, box-shadow 0.2s;
-                    " onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 12px 28px rgba(0,132,255,0.6)';" 
-                    onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 8px 20px rgba(0,132,255,0.4)';">
-                        File Manager
-                    </button>
                 </div>
             `;
             activeSection.appendChild(emptyContainer);
