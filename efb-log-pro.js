@@ -3494,16 +3494,20 @@ function parsePageOne(lines) {
                     return 3;
                 };
 
+                // Sort by Airport Priority FIRST (DEP -> DEST -> ALTN -> OTHER), then Severity
                 finalAlerts.sort((a, b) => {
+                    // 1. Primary: Airport Rank
+                    const rankA = getAirportRank(a.airport);
+                    const rankB = getAirportRank(b.airport);
+                    if (rankA !== rankB) return rankA - rankB;
+
+                    // 2. Secondary: Severity
                     const severityOrder = { critical: 0, warning: 1, info: 2 };
                     const sevA = severityOrder[(a.severity || '').toLowerCase()] ?? 3;
                     const sevB = severityOrder[(b.severity || '').toLowerCase()] ?? 3;
                     if (sevA !== sevB) return sevA - sevB;
 
-                    const rankA = getAirportRank(a.airport);
-                    const rankB = getAirportRank(b.airport);
-                    if (rankA !== rankB) return rankA - rankB;
-
+                    // 3. Tertiary: Type
                     return (a.type || '').localeCompare(b.type || '');
                 });
 
@@ -3523,31 +3527,29 @@ function parsePageOne(lines) {
 
     function runRulesOnText(notams, weather) {
         const alerts = [];
-        let notamCount = 0;
 
         // Process NOTAMs
         notams.forEach(rawText => {
-            notamCount++;
             const { airport, text: cleaned } = cleanNOTAMText(rawText);
-            if (cleaned.length < 10) {
-                return;
-            }
+            if (cleaned.length < 10) return;
 
             let matched = false;
-            FLIGHT_THREAT_DICTIONARY.notams.forEach(rule => {
-                if (rule.regex.test(cleaned)) {
-                    alerts.push({
-                        severity: rule.level,
-                        type: `NOTAM: ${rule.type}`,
-                        airport: airport,
-                        message: cleaned.substring(0, 2000) + (cleaned.length > 2000 ? '...' : '')
-                    });
-                matched = true;
+            if (typeof FLIGHT_THREAT_DICTIONARY !== 'undefined' && FLIGHT_THREAT_DICTIONARY.notams) {
+                FLIGHT_THREAT_DICTIONARY.notams.forEach(rule => {
+                    if (rule.regex.test(cleaned)) {
+                        alerts.push({
+                            severity: rule.level,
+                            type: rule.type, // Removed "NOTAM: " prefix
+                            airport: airport,
+                            message: cleaned.substring(0, 2000) + (cleaned.length > 2000 ? '...' : '')
+                        });
+                        matched = true;
+                    }
+                });
             }
-        });
 
-        if (!matched) {
-            alerts.push({
+            if (!matched) {
+                alerts.push({
                     severity: 'info',
                     type: 'NOTAM',
                     airport: airport,
@@ -3556,27 +3558,28 @@ function parsePageOne(lines) {
             }
         });
 
-        // Process WX
+        // Process WX (METAR / TAF / SPECI)
         weather.forEach(report => {
-            // Try to find ICAO code after METAR/SPECI/TAF (with optional AMD)
             let airportMatch = report.match(/\b(?:METAR|SPECI|TAF(?:\s+AMD)?)\s+([A-Z]{4})\b/i);
             if (!airportMatch) {
-                // Fallback: look for any standalone 4-letter ICAO code (might be the airport)
                 airportMatch = report.match(/\b([A-Z]{4})\b/);
             }
             const airport = airportMatch ? airportMatch[1] : 'Unknown';
             
-            FLIGHT_THREAT_DICTIONARY.weather.forEach(rule => {
-                if (rule.regex.test(report)) {
-                    alerts.push({
-                        severity: rule.level,
-                        type: `Weather: ${rule.type}`,
-                        airport: airport,
-                        message: report.substring(0, 2000) + (report.length > 2000 ? '...' : '')
-                    });
-                }
-            });
+            if (typeof FLIGHT_THREAT_DICTIONARY !== 'undefined' && FLIGHT_THREAT_DICTIONARY.weather) {
+                FLIGHT_THREAT_DICTIONARY.weather.forEach(rule => {
+                    if (rule.regex.test(report)) {
+                        alerts.push({
+                            severity: rule.level,
+                            type: rule.type, // Removed "Weather: " prefix (e.g. outputs "THUNDERSTORM")
+                            airport: airport,
+                            message: report.substring(0, 2000) + (report.length > 2000 ? '...' : '')
+                        });
+                    }
+                });
+            }
         });
+
         return alerts;
     }
 
@@ -3987,6 +3990,7 @@ function parsePageOne(lines) {
         if (!container) return;
 
         const runwaysMap = window.airportRunways || {};
+        const metarsMap = window.airportMetars || {};
 
         if (!alerts || alerts.length === 0) {
             container.innerHTML = `
@@ -3998,30 +4002,34 @@ function parsePageOne(lines) {
             return;
         }
 
-        // Group alerts by airport to match your .airport-block CSS layout
-        const grouped = {};
+        // Preserve flight order: DEP -> DEST -> ALTN -> OTHER
+        const grouped = new Map();
         alerts.forEach(alert => {
             const apt = (alert.airport || 'UNKNOWN').toUpperCase();
-            if (!grouped[apt]) grouped[apt] = [];
-            grouped[apt].push(alert);
+            if (!grouped.has(apt)) grouped.set(apt, []);
+            grouped.get(apt).push(alert);
         });
 
         let html = '';
 
-        for (const [apt, aptAlerts] of Object.entries(grouped)) {
+        for (const [apt, aptAlerts] of grouped.entries()) {
             const runway = runwaysMap[apt] || '';
+            const metar = metarsMap[apt] || '';
+
+            // Common pill style for Runway and METAR badges
+            const pillStyle = `font-size: 13px; font-weight: normal; color: var(--text); background: var(--input); padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border); display: inline-block;`;
 
             html += `
                 <div class="airport-block">
-                    <div class="airport-header">
+                    <div class="airport-header" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;">
                         <span class="airport-code">${apt}</span>
-                        ${runway ? `<span class="runway-info">${runway}</span>` : ''}
+                        ${runway ? `<span class="runway-info" style="${pillStyle}"><strong>RWY:</strong> ${runway}</span>` : ''}
+                        ${metar ? `<span class="metar-info" style="${pillStyle}"><strong>METAR:</strong> ${metar}</span>` : ''}
                     </div>
                     <div class="alerts-list">
             `;
 
             aptAlerts.forEach(alert => {
-                // Ensures severity matches .alert-item.critical, .alert-item.warning, or .alert-item.info
                 const severity = (alert.severity || 'info').toLowerCase();
                 
                 html += `
@@ -4040,7 +4048,7 @@ function parsePageOne(lines) {
 
         container.innerHTML = html;
     }
-
+    
     // Debounced search filtering to prevent UI lag while typing
     window.filterOFPs = debounce(function() {
         renderOFPMangerTable();
@@ -7121,29 +7129,24 @@ function convertTripTime(timeStr) {
 }
 
 async function fetchFlightIdFromRoster(flightDateStr, flightNumberRaw, depIcaoRaw) {
-    console.log('--- [Roster Check] START ---');
-    console.log(`1. Raw Inputs -> Date: "${flightDateStr}", Flight: "${flightNumberRaw}", Dep: "${depIcaoRaw}"`);
 
     const token = await getValidSkyplanToken();
     if (!token) {
-        console.error('❌ No token found in localStorage.');
+        console.error('Valid Skyplan token unavailable (token missing, expired, or prompt dismissed).');
         return null;
     }
-    console.log('2. Token found in storage (starts with):', token.substring(0, 15) + '...');
 
-    let employeeId = '15183';
+    let employeeId = null;
     try {
         const employee = decodeJWT(token);
-        employeeId = employee.employeeid || '15183';
-        console.log(`3. Decoded JWT -> EmployeeID: ${employeeId}`);
+        employeeId = employee.employeeid || null;
     } catch (e) {
-        console.warn('⚠️ Failed to decode JWT, defaulting to employee 15183', e);
+        console.warn('Failed to decode JWT', e);
     }
 
     // Clean inputs
     const flightNumber = String(parseInt(flightNumberRaw.replace(/\D/g, ''), 10)); 
     const depIcao = depIcaoRaw.replace(/[^A-Z]/ig, '').toUpperCase(); 
-    console.log(`4. Cleaned Inputs -> FlightNumber: "${flightNumber}", DepStation: "${depIcao}"`);
 
     // Date Parsing
     let flightDate;
@@ -7157,11 +7160,9 @@ async function fetchFlightIdFromRoster(flightDateStr, flightNumberRaw, depIcaoRa
         if (year.length === 2) year = `20${year}`; 
         flightDate = `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`;
     }
-    console.log(`5. Parsed Base Date: "${flightDate}"`);
-
     const baseDate = new Date(flightDate);
     if (isNaN(baseDate.getTime())) {
-        console.error("❌ Date parsing failed completely.");
+        console.error("Date parsing failed completely.");
         return null;
     }
 
@@ -7176,7 +7177,6 @@ async function fetchFlightIdFromRoster(flightDateStr, flightNumberRaw, depIcaoRa
         From: fromDate.toISOString().slice(0,10),
         To: toDate.toISOString().slice(0,10)
     };
-    console.log('6. Sending API Payload:', payload);
     
     try {
         const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/crew-roster-flights-details', {
@@ -7188,29 +7188,18 @@ async function fetchFlightIdFromRoster(flightDateStr, flightNumberRaw, depIcaoRa
             body: JSON.stringify(payload)
         });
         
-        console.log(`7. API Response Status: ${resp.status} ${resp.statusText}`);
         
         if (!resp.ok) {
             if (resp.status === 401) {
-                console.error('❌ 401 Unauthorized - Your Skyplan token has expired or is invalid.');
-                showToast('Skyplan Token Expired. Please update in settings.', 'error');
+                console.error('401 Unauthorized - Your Skyplan token has expired or is invalid.');
             }
             const errText = await resp.text();
-            console.error(`❌ Error Response Body:`, errText);
+            console.error(`Error Response Body:`, errText);
             throw new Error(`Status ${resp.status}`);
         }
         
         const data = await resp.json();
         const flights = data.Flights || [];
-        console.log(`8. Roster Fetch Success! Found ${flights.length} flights in the window.`);
-
-        // Dump what flights it actually sees to the console
-        if (flights.length > 0) {
-            console.log('9. Available flights from API:');
-            flights.forEach(f => {
-                console.log(`   -> ${f.CarrierCode}${f.FlightNumber} | Dep: ${f.DepartureStationIcaoCode}/${f.DepartureStationCode} | Date: ${f.StdLt}`);
-            });
-        }
 
         const match = flights.find(f => {
             const apiFltNum = f.FlightNumber.toString();
@@ -7225,17 +7214,12 @@ async function fetchFlightIdFromRoster(flightDateStr, flightNumberRaw, depIcaoRa
         });
 
         if (match) {
-            console.log(`10. ✅ MATCH FOUND! Assigned ExternalFlightID: ${match.ID}`);
-            console.log('--- [Roster Check] END ---');
             return match.ID;
         } else {
-            console.warn(`10. ⚠️ NO MATCH. Could not find Flight ${flightNumber} departing from ${depIcao} in the array above.`);
-            console.log('--- [Roster Check] END ---');
             return null;
         }
 
     } catch (e) {
-        console.error('❌ [Roster Check] Failed entirely:', e);
         return null;
     }
 }
@@ -7558,74 +7542,101 @@ function getDepartureICAO(routeStr) {
 // Server connection
 // ==========================================
 
+// Singleton promise lock: Ensures only ONE modal opens even if multiple requests trigger simultaneously
+let tokenModalPromise = null;
+
+function promptForTokenModal() {
+    if (tokenModalPromise) return tokenModalPromise;
+
+    tokenModalPromise = new Promise((resolve) => {
+        const bodyHTML = `
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label style="font-size: 12px; font-weight: 600; color: var(--dim);">Paste New Skyplan Access Token</label>
+                <textarea id="modal-skyplan-token" placeholder='eyJhbGciOi...' 
+                    style="width: 100%; height: 120px; padding: 10px; border-radius: 8px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 13px; font-family: monospace; resize: vertical; word-break: break-all; outline: none;"></textarea>
+            </div>
+        `;
+
+        const finish = (resultToken) => {
+            tokenModalPromise = null;
+            resolve(resultToken);
+        };
+
+        if (typeof createModal === 'function') {
+            createModal({
+                title: 'Skyplan Token Expired',
+                icon: '🔑',
+                type: 'info',
+                confirmText: 'Save Token',
+                cancelText: 'Disregard',
+                centered: true,
+                compact: true,
+                maxWidth: '500px',
+                bodyHTML: bodyHTML,
+                onConfirm: async () => {
+                    const inputElem = document.getElementById('modal-skyplan-token');
+                    let rawToken = inputElem ? inputElem.value.trim() : '';
+
+                    // Automatically strip double quotes from beginning/end
+                    rawToken = rawToken.replace(/^"+|"+$/g, '').trim();
+
+                    if (rawToken) {
+                        localStorage.setItem('skyplan_token', rawToken);
+                        const settingInput = document.getElementById('skyplan_token');
+                        if (settingInput) settingInput.value = rawToken;
+                        if (typeof showToast === 'function') showToast('Skyplan token updated!', 'success');
+                        finish(rawToken);
+                    } else {
+                        finish(null);
+                    }
+                },
+                onCancel: () => {
+                    finish(null);
+                }
+            });
+        } else {
+            let rawToken = prompt("Skyplan Access Token expired. Please paste new token:");
+            if (rawToken) {
+                rawToken = rawToken.trim().replace(/^"+|"+$/g, '').trim();
+                localStorage.setItem('skyplan_token', rawToken);
+                finish(rawToken);
+            } else {
+                finish(null);
+            }
+        }
+    });
+
+    return tokenModalPromise;
+}
+
 window.getValidSkyplanToken = async function() {
     let token = localStorage.getItem('skyplan_token');
-    let refreshToken = localStorage.getItem('skyplan_refresh_token');
+    if (token) {
+        token = token.trim().replace(/^"+|"+$/g, '').trim();
+        localStorage.setItem('skyplan_token', token);
+    }
 
-    if (!token) return null;
+    // 1. Missing Token -> Open Modal directly
+    if (!token) {
+        return await promptForTokenModal();
+    }
 
-    const decoded = decodeJWT(token);
+    // 2. Invalid JWT Format -> Open Modal directly
+    const decoded = typeof decodeJWT === 'function' ? decodeJWT(token) : null;
     if (!decoded || typeof decoded.exp !== 'number') {
-        // Could not decode or no expiry – assume token is still valid, do not refresh
-        return token;
+        return await promptForTokenModal();
     }
 
+    // 3. Check Expiration (with 5-minute buffer)
     const now = Math.floor(Date.now() / 1000);
-    if (decoded.exp > now + 300) {
-        return token;  // still valid
+    if (decoded.exp <= now + 300) {
+        console.warn("Skyplan token expired. Requesting new token...");
+        // Bypasses fetch() to avoid ERR_NAME_NOT_RESOLVED browser console noise
+        return await promptForTokenModal();
     }
 
-    // Only now do we know for certain it’s expired
-
-    // --- TOKEN IS EXPIRED ---
-    if (!refreshToken) {
-        console.warn("Access token expired and no refresh token found in settings.");
-        if (typeof showToast === 'function') showToast("Skyplan token expired. Please update settings.", "error");
-        return null; 
-    }
-
-    try {
-        console.log("Access token expired. Auto-refreshing in background...");
-        
-        // Call the Keycloak token endpoint
-        const response = await fetch('https://id.airastana.com/realms/air-astana/protocol/openid-connect/token', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            // Note: client_id 'app-sky-plan-web' is extracted directly from your token's 'azp' field
-            body: new URLSearchParams({
-                'grant_type': 'refresh_token',
-                'client_id': 'app-sky-plan-web',
-                'refresh_token': refreshToken
-            })
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            
-            // Save the new tokens!
-            token = data.access_token;
-            localStorage.setItem('skyplan_token', token);
-            
-            if (data.refresh_token) {
-                localStorage.setItem('skyplan_refresh_token', data.refresh_token);
-                // Also update the UI input box if settings are currently open
-                const refreshInput = document.getElementById('skyplan_refresh_token');
-                if (refreshInput) refreshInput.value = data.refresh_token;
-            }
-            
-            console.log("Token refreshed successfully!");
-            return token;
-        } else {
-            console.error("Failed to refresh token. It may have expired. Code:", response.status);
-            if (typeof showToast === 'function') showToast("Session expired completely. Please get new tokens.", "error");
-            return null;
-        }
-    } catch (e) {
-        console.error("Network error while trying to refresh token:", e);
-        return token; // Return old token as a last resort, though it will likely fail
-    }
+    // 4. Token is valid -> Return token immediately
+    return token;
 };
 
 window.loadAssignedFlights = async function() {

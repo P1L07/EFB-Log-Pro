@@ -748,7 +748,8 @@ button:disabled,
     margin-bottom: 8px;
     flex-wrap: wrap;
 }
-.airport-header .runway-info .metar-info {
+.airport-header .runway-info, 
+.airport-header .metar-info {
     font-size: 14px;
     font-weight: normal;
     color: var(--text);
@@ -1315,9 +1316,6 @@ button:disabled,
                     </table>
                 </div>
                 <div class="btn-group" style="margin-top: 20px;">
-                    <button onclick="document.getElementById('ofp-file-in').click()" class="btn btn-save">
-                        📁 Upload New OFP
-                    </button>
                     <button onclick="clearAllOFPs()" class="btn btn-danger">
                         🗑️ Clear All
                     </button>
