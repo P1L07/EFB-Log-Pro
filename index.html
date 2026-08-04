@@ -918,13 +918,26 @@ button:disabled,
 <body>
 
 <div id="upload-overlay" class="upload-overlay hidden">
-    <div style="max-width: 500px; width: 100%; background: var(--panel); border-radius: 20px; padding: 40px 30px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); border: 1px solid var(--border); text-align: center;">
+    <div style="max-width: 520px; width: 100%; background: var(--panel); border-radius: 20px; padding: 40px 30px; box-shadow: 0 20px 40px rgba(0,0,0,0.2); border: 1px solid var(--border); text-align: center;">
         <span style="font-size: 80px; display: block; margin-bottom: 20px; line-height: 1;">📁</span>
         <h2 style="color: var(--text); margin: 0 0 10px; font-size: 28px;">No Active OFP</h2>
         <p style="color: var(--dim); margin: 0 0 30px; font-size: 16px; line-height: 1.6;">
-            Select Operational Flight Plan to get started.<br>
+            Select or sync an Operational Flight Plan to get started.
         </p>
-        <button onclick="document.getElementById('ofp-file-in').click()" style="background: var(--accent); color: white; border: none; padding: 15px 40px; border-radius: 50px; font-weight: 600; font-size: 18px; cursor: pointer; box-shadow: 0 8px 20px rgba(0,132,255,0.4); transition: transform 0.2s, box-shadow 0.2s;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 12px 28px rgba(0,132,255,0.6)';" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 8px 20px rgba(0,132,255,0.4)';">Activate OFP</button>
+        <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+            <button onclick="document.getElementById('ofp-file-in').click()" 
+                    style="flex: 1; min-width: 170px; background: var(--accent); color: white; border: none; padding: 14px 20px; border-radius: 50px; font-weight: 600; font-size: 16px; cursor: pointer; box-shadow: 0 8px 20px rgba(0,132,255,0.3); transition: transform 0.2s, box-shadow 0.2s;" 
+                    onmouseover="this.style.transform='scale(1.03)';" 
+                    onmouseout="this.style.transform='scale(1)';">
+                📁 Manual Upload
+            </button>
+            <button onclick="if(typeof window.showTab==='function'){window.showTab('assigned', document.querySelector('.nav-btn[data-tab=\'assigned\']'));}" 
+                    style="flex: 1; min-width: 170px; background: var(--input); color: var(--text); border: 1px solid var(--border); padding: 14px 20px; border-radius: 50px; font-weight: 600; font-size: 16px; cursor: pointer; transition: transform 0.2s, border-color 0.2s;" 
+                    onmouseover="this.style.transform='scale(1.03)'; this.style.borderColor='var(--accent)';" 
+                    onmouseout="this.style.transform='scale(1)'; this.style.borderColor='var(--border)';">
+                ☁️ Choose from Server
+            </button>
+        </div>
     </div>
 </div>
 

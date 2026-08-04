@@ -3,16 +3,17 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.2.1";
-    const RELEASE_NOTES = {
-        "2.2.1": {
+    const APP_VERSION = "2.2.2";
+const RELEASE_NOTES = {
+        "2.2.2": {
             title: "Release Notes",
             notes: [
+                "🔑 Improved Skyplan token prompt with auto-quote cleaning & smooth background refresh",
                 "📋 Updated ATIS and Clearance popups",
-                "✍️ Journey log data donwloaded directly from the server",
+                "✍️ Journey log data downloaded directly from the server",
                 "📁 Download OFPs directly from the server",
             ]
-        },
+        }
     };
     const ENCRYPTION_KEY_NAME = 'efb_encryption_key';
     const ENCRYPTION_ALGO = {
@@ -25,7 +26,7 @@
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = 'dd7ebeeb684d9015b8a50e4dba1885cb52e880ffd4601912a23729b702e1f824';
+    const EXPECTED_SW_HASH = '399ec11ca161fdbff795aafcfea7cc1e035eb1f312555643a438b7c0a6694023';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -3716,26 +3717,29 @@ function parsePageOne(lines) {
         const activeTabId = activeSection ? activeSection.id.replace('section-', '') : '';
         const hiddenTabs = new Set(['journey', 'sectors', 'settings', 'assigned']);
 
-        // Early return logic: If we are on a tab that hides the overlay, or OFP is loaded, hide instantly.
+        // Early exit: Hide overlay if an OFP is loaded or if on a system tab
         if (isOFPLoaded || hiddenTabs.has(activeTabId)) {
             overlay.classList.add('hidden');
-            if (typeof updateEmptyStates === 'function') updateEmptyStates();
             return;
         }
 
-        // Only query database if absolutely necessary
+        // Check IndexedDB for saved OFPs
         try {
-            const count = await getOFPCount();
-            if (count > 0) {
+            const count = typeof getOFPCount === 'function' ? await getOFPCount() : 0;
+            if (count > 0 && isOFPLoaded) {
                 overlay.classList.add('hidden');
             } else {
                 overlay.classList.remove('hidden');
             }
         } catch (e) {
-            console.warn('Failed to get OFP count', e);
+            console.warn('Failed to check OFP count', e);
+            overlay.classList.remove('hidden');
         }
-        
-        if (typeof updateEmptyStates === 'function') updateEmptyStates();
+    }
+
+    // Safely neutralized to prevent destructive innerHTML overwrites of form panels
+    async function updateEmptyStates() {
+        await updateUploadButtonVisibility();
     }
 
     window.goToAssignedAndActivate = function() {
@@ -4150,50 +4154,6 @@ function parsePageOne(lines) {
                 });
             }
         });
-    }
-
-    async function updateEmptyStates() {
-        const activeSection = document.querySelector('.tool-section.active');
-        if (!activeSection) return;
-
-        const activeTabId = activeSection.id.replace('section-', '');
-        
-        // Fast exit for tabs that don't use empty states
-        if (['assigned', 'sectors', 'settings', 'journey'].includes(activeTabId)) return;
-
-        const container = activeSection.querySelector('.scrollable-content') || activeSection;
-        
-        if (!isOFPLoaded) {
-            let hasAnyOFP = false;
-            try {
-                // Lightweight count check without pulling PDF data
-                hasAnyOFP = (await getOFPCount()) > 0;
-            } catch(e) {}
-
-            if (hasAnyOFP) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div style="font-size: 48px; margin-bottom: 20px;">📂</div>
-                        <h3>No Active OFP</h3>
-                        <p style="color: var(--dim); margin-bottom: 20px;">You have saved OFPs, but none are currently active.</p>
-                        <button onclick="window.showTab('sectors', document.querySelector('.nav-btn[data-tab=\\'sectors\\']'))" 
-                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
-                            Go to Sectors to Activate
-                        </button>
-                    </div>`;
-            } else {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div style="font-size: 48px; margin-bottom: 20px;">✈️</div>
-                        <h3>No Active OFP</h3>
-                        <p style="color: var(--dim); margin-bottom: 20px;">Upload an OFP or download one from Skyplan.</p>
-                        <button onclick="window.goToAssignedAndActivate()" 
-                                style="background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer;">
-                            Check Assigned Flights
-                        </button>
-                    </div>`;
-            }
-        }
     }
 
     async function renderPDFPreview(pdfBytes) {
