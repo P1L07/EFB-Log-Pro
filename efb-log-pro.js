@@ -4816,8 +4816,25 @@ function parsePageOne(lines) {
     }
 
 // ==========================================
-// 9. Journey Log Download
+// 9. Journey Log Managment
 // ==========================================
+
+    async function getCrewForJourneyLog(flightId) {
+        // 1. Check current memory
+        if (window.crewData && window.crewData.length > 0) return window.crewData;
+
+        // 2. Check local database for saved flight data
+        if (typeof loadOFPUserData === 'function') {
+            const userData = await loadOFPUserData(Number(flightId));
+            if (userData?.userInputs?.crewData) return userData.userInputs.crewData;
+        }
+
+        // 3. Fallback LocalStorage check
+        const backup = localStorage.getItem(`crew_backup_${flightId}`);
+        if (backup) return JSON.parse(backup);
+
+        return [];
+    }
 
     async function loadBuiltInTemplate() {
         try {
@@ -4854,6 +4871,18 @@ function parsePageOne(lines) {
                     return; 
                 }
             }
+
+            const activeId = localStorage.getItem('activeOFPId');
+    
+            // 1. Fetch saved crew data (Works 100% offline)
+            const crew = await getCrewForJourneyLog(activeId);
+
+            // 2. Format crew for display in the PDF / Email body
+            const fcList = crew.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position))
+                            .map(m => `${m.Position}: ${m.FirstName} ${m.LastName}`).join(', ');
+                            
+            const ccList = crew.filter(m => !['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position))
+                            .map(m => `${m.Position}: ${m.FirstName} ${m.LastName}`).join(', ');
 
             // 1. EXTRACT TEXT ITEMS
             const loadingTask = pdfjsLib.getDocument({ data: journeyLogTemplateBytes });
@@ -7297,76 +7326,6 @@ async function fetchFlightIdFromRoster(flightDateStr, flightNumberRaw, depIcaoRa
     }
 }
 
-async function fetchCrewInfo(flightId, token) {
-    try {
-        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ FlightIDs: [flightId] })
-        });
-
-        if (!resp.ok) throw new Error(`Status ${resp.status}`);
-
-        const data = await resp.json();
-        const flightData = data.FlightsCrewMembers?.[0];
-
-        if (!flightData || !Array.isArray(flightData.CrewMembers)) {
-            // No crew data – clear the cache and return safe defaults
-            window.crewData = [];
-            return null;
-        }
-
-        const members = flightData.CrewMembers;
-
-        // ── Identify flight deck positions (all other positions are cabin crew) ──
-        const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
-        const flightDeck = members.filter(m => flightDeckPositions.includes(m.Position));
-        const cabinCrew = members.filter(m => !flightDeckPositions.includes(m.Position));
-
-        // ── Cache the ordered crew list globally for Journey Log ──
-        window.crewData = [
-            ...flightDeck.map(m => ({
-                FirstName: m.FirstName,
-                LastName: m.LastName,
-                Position: m.Position
-            })),
-            ...cabinCrew.map(m => ({
-                FirstName: m.FirstName,
-                LastName: m.LastName,
-                Position: m.Position
-            }))
-        ];
-
-        // ── Captain name ──
-        const captain = members.find(m => m.Position === 'CP');
-        const captainName = captain
-            ? `${captain.FirstName} ${captain.LastName}`.trim()
-            : '';
-
-        // ── Counts (with fallback to API-provided PilotCount / CrewCount) ──
-        const fcCount = flightDeck.length > 0
-            ? flightDeck.length
-            : (flightData.PilotCount || 2);
-
-        const ccCount = cabinCrew.length > 0
-            ? cabinCrew.length
-            : Math.max(0, (flightData.CrewCount || 6) - (flightData.PilotCount || 2));
-
-        return {
-            captainName,
-            fcCount,
-            ccCount
-        };
-    } catch (e) {
-        console.error('[Crew Fetch] Failed:', e);
-        window.crewData = [];   // ensure it's empty on error
-        return null;
-    }
-}
-
 async function sendTripInfo() {
     const token = await getValidSkyplanToken();
     if (!token) {
@@ -7918,5 +7877,81 @@ window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailN
         alert("Error syncing OFP: " + error.message);
     }
 };
+
+async function fetchCrewInfo(flightId, token) {
+    try {
+        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ FlightIDs: [flightId] })
+        });
+
+        if (!resp.ok) throw new Error(`Status ${resp.status}`);
+
+        const data = await resp.json();
+        const flightData = data.FlightsCrewMembers?.[0];
+
+        if (!flightData || !Array.isArray(flightData.CrewMembers)) {
+            window.crewData = [];
+            return null;
+        }
+
+        const members = flightData.CrewMembers;
+
+        // Identify flight deck vs cabin crew
+        const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
+        const flightDeck = members.filter(m => flightDeckPositions.includes(m.Position));
+        const cabinCrew = members.filter(m => !flightDeckPositions.includes(m.Position));
+
+        // Format clean crew list
+        const formattedCrew = [
+            ...flightDeck.map(m => ({ FirstName: m.FirstName, LastName: m.LastName, Position: m.Position })),
+            ...cabinCrew.map(m => ({ FirstName: m.FirstName, LastName: m.LastName, Position: m.Position }))
+        ];
+
+        // 1. Cache in memory for current view
+        window.crewData = formattedCrew;
+
+        // 2. PERMANENT SAVE: Store crew list locally tied to the active flight
+        const activeId = localStorage.getItem('activeOFPId');
+        if (activeId && typeof saveOFPUserData === 'function') {
+            await saveOFPUserData(Number(activeId), { crewData: formattedCrew });
+        } else {
+            // Fallback backup by flightId
+            localStorage.setItem(`crew_backup_${flightId}`, JSON.stringify(formattedCrew));
+        }
+
+        // Captain name & counts
+        const captain = members.find(m => m.Position === 'CP');
+            const captainName = captain ? `${captain.FirstName} ${captain.LastName}`.trim() : '';
+            const fcCount = flightDeck.length > 0 ? flightDeck.length : (flightData.PilotCount || 2);
+            const ccCount = cabinCrew.length > 0 ? cabinCrew.length : Math.max(0, (flightData.CrewCount || 6) - (flightData.PilotCount || 2));
+
+            return {
+                captainName,
+                fcCount,
+                ccCount,
+                crewData: formattedCrew
+            };
+        } catch (e) {
+            console.error('[Crew Fetch] Failed:', e);
+            
+            // OFFLINE FALLBACK: Try reading previously saved crew data from local storage
+            const activeId = localStorage.getItem('activeOFPId');
+            if (activeId && typeof loadOFPUserData === 'function') {
+                const localData = await loadOFPUserData(Number(activeId));
+                if (localData?.userInputs?.crewData) {
+                    console.log('[Crew Offline] Restored crew manifest from local storage.');
+                    window.crewData = localData.userInputs.crewData;
+                }
+            }
+            
+            return null;
+        }
+}
+
 
 })();
