@@ -7078,6 +7078,119 @@ function showClearancePopup() {
 }
 
 // ==========================================
+// Aircraft Defects (ADD / CDD) Management
+// ==========================================
+
+window.fetchAircraftDefects = async function(tailNumber) {
+    if (!tailNumber || tailNumber === '-' || tailNumber === 'TBA') {
+        renderADDTable([], tailNumber || '-');
+        return [];
+    }
+
+    const cleanTail = tailNumber.trim().toUpperCase();
+    const tailEl = document.getElementById('add-tail-number');
+    if (tailEl) tailEl.textContent = cleanTail;
+
+    const token = await getValidSkyplanToken();
+    if (!token) return [];
+
+    try {
+        
+        const response = await fetch('https://kcskyplanapi.airastana.com/api/v1/defect-reports', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ TailNumbers: [cleanTail] })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const defects = data.DefectReports || [];
+
+        window.currentAircraftADDs = defects;
+        window.currentADDRegistration = cleanTail;
+
+        renderADDTable(defects, cleanTail);
+        return defects;
+
+    } catch (error) {
+        if (typeof showToast === 'function') {
+            showToast(`Failed to load ADDs for ${cleanTail}: ${error.message}`, 'error');
+        }
+        renderADDTable([], cleanTail, error.message);
+        return [];
+    }
+};
+
+function renderADDTable(defects, tailNumber, errorMessage = null) {
+    const tbody = document.getElementById('add-tbody');
+    const tailEl = document.getElementById('add-tail-number');
+    if (tailEl) tailEl.textContent = tailNumber || '-';
+    if (!tbody) return;
+
+    if (errorMessage) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--error); padding:25px;">Error loading ADDs: ${errorMessage}</td></tr>`;
+        return;
+    }
+
+    if (!defects || defects.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--dim); padding:25px;">No active ADD / CDD items for ${tailNumber}.</td></tr>`;
+        return;
+    }
+
+    const formatDate = (dateStr) => {
+        if (!dateStr) return '-';
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return dateStr.split('T')[0];
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = String(d.getFullYear()).slice(-2);
+        return `${day}/${month}/${year}`;
+    };
+
+    let html = '';
+    defects.forEach(item => {
+        const type = item.DefectType || 'ADD';
+        const typeClass = type === 'CDD' ? 'badge warning' : 'badge critical';
+        const ata = item.Chapter ? `ATA ${item.Chapter}` : '-';
+        const mel = item.Mel || item.MelNumber || '-';
+        const defectTitle = item.Defect ? `<strong>${item.Defect}:</strong> ` : '';
+        const desc = item.Description || '-';
+        const deferDate = formatDate(item.DeferDate);
+        const dueDate = formatDate(item.DeferToDate);
+        const notes = item.DeferNotes || '-';
+
+        html += `
+            <tr>
+                <td><span class="${typeClass}">${type}</span></td>
+                <td style="font-weight: 600; color: var(--accent);">${ata}</td>
+                <td style="font-weight: 600;">${mel}</td>
+                <td style="word-break: break-word;">${defectTitle}${desc}</td>
+                <td style="font-family: monospace; font-size: 13px;">${deferDate}</td>
+                <td style="font-family: monospace; font-size: 13px; color: var(--error); font-weight: bold;">${dueDate}</td>
+                <td style="word-break: break-word; color: var(--dim); font-size: 13px;">${notes}</td>
+            </tr>
+        `;
+    });
+
+    tbody.innerHTML = html;
+}
+
+window.refreshCurrentAircraftADDs = function() {
+    const reg = window.currentADDRegistration || (document.getElementById('view-reg')?.innerText || '').trim();
+    if (reg && reg !== '-') {
+        window.fetchAircraftDefects(reg);
+    } else {
+        if (typeof showToast === 'function') showToast('No active aircraft registration available.', 'info');
+    }
+};
+
+// ==========================================
 // Trip Info
 // ==========================================
 
@@ -7790,6 +7903,12 @@ window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr) {
             await runAnalysis(file, false);
         } else {
             alert("Error: Core PDF analyzer is missing.");
+        }
+
+        // Inside importOFPFromSkyplan / activation pipeline after identifying flight details:
+        const aircraftReg = f.RegistrationNumber || (document.getElementById('view-reg')?.innerText || '').trim();
+        if (aircraftReg && aircraftReg !== '-') {
+            window.fetchAircraftDefects(aircraftReg);
         }
 
     } catch (error) {

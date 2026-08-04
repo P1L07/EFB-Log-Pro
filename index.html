@@ -935,7 +935,7 @@ button:disabled,
                     style="flex: 1; min-width: 170px; background: var(--input); color: var(--text); border: 1px solid var(--border); padding: 14px 20px; border-radius: 50px; font-weight: 600; font-size: 16px; cursor: pointer; transition: transform 0.2s, border-color 0.2s;" 
                     onmouseover="this.style.transform='scale(1.03)'; this.style.borderColor='var(--accent)';" 
                     onmouseout="this.style.transform='scale(1)'; this.style.borderColor='var(--border)';">
-                ☁️ Choose from Server
+                ☁️ Cloud Upload
             </button>
         </div>
     </div>
@@ -953,6 +953,7 @@ button:disabled,
         <button class="nav-btn" data-tab="flight-analysis">Flight Analysis</button>
         <button class="nav-btn" data-tab="paper">Paper Flight Plan</button>
         <button class="nav-btn" data-tab="journey">Journey Log</button>
+        <button class="nav-btn" data-tab="add">Aircraft ADD</button>
         <button class="nav-btn" data-tab="confirm">Finalize OFP</button>
         <button class="nav-btn" data-tab="sectors">File Manager</button>
         <button class="nav-btn" data-tab="settings">Settings</button>
@@ -1274,6 +1275,40 @@ button:disabled,
                 </div>
                 <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
                     <input type="hidden" id="j-template-rows">
+                </div>
+            </div>
+        </section>
+        <section id="section-add" class="tool-section">
+            <div class="panel">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3 style="margin: 0; font-size: 16px;">
+                        AIRCRAFT DEFECTS (ADD / CDD) — <span id="add-tail-number" style="color: var(--text); font-weight: bold;">-</span>
+                    </h3>
+                    <button onclick="refreshCurrentAircraftADDs()" class="btn-refresh">
+                        ↻ Refresh Defects
+                    </button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 80px;">Type</th>
+                                <th style="width: 70px;">ATA</th>
+                                <th style="width: 80px;">MEL</th>
+                                <th>Defect & Description</th>
+                                <th style="width: 100px;">Defer Date</th>
+                                <th style="width: 100px;">Due Date</th>
+                                <th>Defer Notes & Limitations</th>
+                            </tr>
+                        </thead>
+                        <tbody id="add-tbody">
+                            <tr>
+                                <td colspan="7" style="text-align: center; color: var(--dim); padding: 30px;">
+                                    No active flight / registration loaded.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </section>
