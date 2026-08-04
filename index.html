@@ -62,6 +62,28 @@
     margin-top: 10px;
 }
 
+/* Signature Pad Wrapper Constraint */
+.signature-wrapper, 
+#signature-pad-container, 
+.sig-pad-container {
+    position: relative;
+    width: 100%;
+    height: 150px !important;    /* Fixed height constraint */
+    max-height: 150px !important;
+    overflow: hidden !important;
+    box-sizing: border-box;
+}
+
+/* Force canvas CSS style bounds */
+.signature-wrapper canvas,
+#signature-pad-container canvas,
+.sig-pad-container canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+    touch-action: none;          /* Prevents iPad page scrolling while drawing */
+}
+
 #sig-canvas {
     width: 100%;
     height: 200px; /* Fixed height for the pad */
@@ -1279,8 +1301,8 @@ button:disabled,
             </div>
         </section>
         <section id="section-add" class="tool-section">
-            <div class="panel">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <div class="panel" style="display: flex; flex-direction: column; max-height: calc(100dvh - 80px);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-shrink: 0;">
                     <h3 style="margin: 0; font-size: 16px;">
                         AIRCRAFT DEFECTS (ADD / CDD) — <span id="add-tail-number" style="color: var(--text); font-weight: bold;">-</span>
                     </h3>
@@ -1288,17 +1310,19 @@ button:disabled,
                         ↻ Refresh Defects
                     </button>
                 </div>
-                <div class="table-container">
-                    <table>
-                        <thead>
+                
+                <!-- Touch-Enabled & Scroll-Constrained Wrapper -->
+                <div class="table-container" style="flex: 1; max-height: 70vh; overflow-x: auto; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y;">
+                    <table style="width: 100%; min-width: 900px; border-collapse: collapse;">
+                        <thead style="position: sticky; top: 0; background: var(--panel); z-index: 10; box-shadow: 0 1px 0 var(--border);">
                             <tr>
                                 <th style="width: 80px;">Type</th>
-                                <th style="width: 70px;">ATA</th>
+                                <th style="width: 80px;">ATA</th>
                                 <th style="width: 80px;">MEL</th>
-                                <th>Defect & Description</th>
-                                <th style="width: 100px;">Defer Date</th>
-                                <th style="width: 100px;">Due Date</th>
-                                <th>Defer Notes & Limitations</th>
+                                <th style="min-width: 250px;">Defect & Description</th>
+                                <th style="width: 110px;">Defer Date</th>
+                                <th style="width: 110px;">Due Date</th>
+                                <th style="min-width: 220px;">Defer Notes & Limitations</th>
                             </tr>
                         </thead>
                         <tbody id="add-tbody">

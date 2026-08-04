@@ -3,9 +3,9 @@
 // 1. CONFIGURATION
 // ==========================================
 
-    const APP_VERSION = "2.2.2";
+    const APP_VERSION = "2.2.4";
 const RELEASE_NOTES = {
-        "2.2.2": {
+        "2.2.4": {
             title: "Release Notes",
             notes: [
                 "🔑 Improved Skyplan token prompt with auto-quote cleaning & smooth background refresh",
@@ -26,7 +26,7 @@ const RELEASE_NOTES = {
     const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
     const AUDIT_LOG_KEY = 'efb_audit_log';
     const MAX_LOG_ENTRIES = 1000;
-    const EXPECTED_SW_HASH = '399ec11ca161fdbff795aafcfea7cc1e035eb1f312555643a438b7c0a6694023';
+    const EXPECTED_SW_HASH = '09a25c7995b9a991d6d7ee61b12362cf2185ef7979e2ff09a8a60bf91d7d0f87';
     const SW_HASH_STORAGE_KEY = 'efb_sw_hash_cache';
     const PERSISTENT_INPUT_IDS = [
         'front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2',
@@ -1551,11 +1551,11 @@ const RELEASE_NOTES = {
 // ==========================================
     
     window.validateOFPInputs = function() {
-        const flt = el('j-flt')?.value;
-        const date = el('j-date')?.value;
+        const flt = el('j-flt')?.value || el('view-flt')?.innerText;
+        const date = el('j-date')?.value || el('view-date')?.innerText;
         const alt1 = el('front-altm1')?.value;
         const summaryOK = !!flt && !!date && !!alt1;
-        const fuelOK = (blockFuelValue > 0);
+        const fuelOK = typeof blockFuelValue !== 'undefined' && blockFuelValue > 0;
 
         let flightLogOK = false;
         const atoInputs = document.querySelectorAll('[id^="o-a-"]');
@@ -1567,15 +1567,32 @@ const RELEASE_NOTES = {
         }
 
         let journeyOK = false;
-        const currentFlight = el('j-flt')?.value || el('view-flt')?.innerText;
-        // Verify that the journey table specifically contains this flight AND has valid out/in times
-        if (currentFlight && dailyLegs && dailyLegs.length > 0) {
-            journeyOK = dailyLegs.some(leg => 
-                leg['j-flt'] === currentFlight && leg['j-out'] && leg['j-in']
-            );
+        const rawCurrentFlight = el('j-flt')?.value || el('view-flt')?.innerText || el('view-flt')?.textContent || '';
+        
+        // Helper to strip non-alphanumeric chars (e.g., "KC 230" -> "KC230", "230" -> "230")
+        const cleanNum = str => String(str || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+        const currentClean = cleanNum(rawCurrentFlight);
+
+        if (dailyLegs && dailyLegs.length > 0) {
+            journeyOK = dailyLegs.some(leg => {
+                const legFltClean = cleanNum(leg['j-flt'] || leg['view-flt']);
+                
+                // Flexible Flight Match: Exact match OR partial numeric match ("KC230" matches "230")
+                const flightMatches = !currentClean || 
+                                     !legFltClean || 
+                                     currentClean === legFltClean || 
+                                     currentClean.endsWith(legFltClean) || 
+                                     legFltClean.endsWith(currentClean);
+
+                // Flexible Out/In time check
+                const hasOut = !!(leg['j-out'] || leg['j-off'] || leg['j-atd']);
+                const hasIn  = !!(leg['j-in']  || leg['j-on']);
+
+                return flightMatches && hasOut && hasIn;
+            });
         }
 
-        const signatureOK = pads.main.pad && !pads.main.pad.isEmpty();
+        const signatureOK = pads?.main?.pad && !pads.main.pad.isEmpty();
 
         const checks = [
             { label: "Flight Summary", valid: summaryOK },
@@ -1589,7 +1606,7 @@ const RELEASE_NOTES = {
         if (list) {
             list.innerHTML = checks.map(c => 
                 `<div class="checklist-item">
-                    <span>${sanitizeHTML(c.label)}</span>
+                    <span>${typeof sanitizeHTML === 'function' ? sanitizeHTML(c.label) : c.label}</span>
                     <span class="${c.valid ? 'status-ok' : 'status-fail'}">${c.valid ? '✔' : '✖'}</span>
                 </div>`
             ).join('');
@@ -4285,7 +4302,8 @@ function parsePageOne(lines) {
 // ==========================================
 // 8. DRAWING PAD ENGINE
 // ==========================================
-// Attaches the save listener natively
+
+    // Attaches the save listener natively
     function attachPadOnEnd(pad, name) {
         if (!pad) return;
 
@@ -4305,23 +4323,25 @@ function parsePageOne(lines) {
         if (!canvas) return;
 
         const container = canvas.parentElement || canvas.parentNode;
+        if (!container) return;
         
-        // Always measure the PARENT container box width (fixes 200px narrow collapse)
-        const containerWidth = (container ? container.clientWidth : 0) || canvas.offsetWidth || 300;
-        const containerHeight = (container ? container.clientHeight : 0) || canvas.offsetHeight || 150;
+        // Measure bounding rect without padding distortion
+        const rect = container.getBoundingClientRect();
+        const containerWidth = rect.width || canvas.offsetWidth || 300;
+        const containerHeight = rect.height || canvas.offsetHeight || 150;
 
-        // Don't initialize if container is completely hidden (0 width)
-        if (containerWidth === 0) return;
+        // Don't initialize if container is hidden (0 width/height)
+        if (containerWidth === 0 || containerHeight === 0) return;
 
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
 
         // Set actual internal dimensions for Retina crispness
-        canvas.width = containerWidth * ratio;
-        canvas.height = containerHeight * ratio;
+        canvas.width = Math.floor(containerWidth * ratio);
+        canvas.height = Math.floor(containerHeight * ratio);
         
-        // CSS dimensions dictate physical size (force 100% parent match)
+        // CSS dimensions dictate physical size (fill 100% of parent box without pushing bounds)
         canvas.style.width = '100%';
-        canvas.style.height = `${containerHeight}px`;
+        canvas.style.height = '100%';
 
         const ctx = canvas.getContext('2d');
         ctx.scale(ratio, ratio);
@@ -4354,18 +4374,21 @@ function parsePageOne(lines) {
         return p.pad;
     }
 
-    // Resize handler for iPad rotation / window resizing
+    // Resize handler for iPad rotation / tab switches
     function resizePad(name) {
         const p = pads[name];
         if (!p || !p.pad) return;
         
         const canvas = p.pad.canvas;
         const container = canvas ? canvas.parentElement : null;
-        if (!canvas || !container || container.clientWidth === 0) return;
+        if (!canvas || !container) return;
+
+        const rect = container.getBoundingClientRect();
+        const containerWidth = rect.width;
+        const containerHeight = rect.height;
+        if (containerWidth === 0 || containerHeight === 0) return;
 
         const ratio = Math.max(window.devicePixelRatio || 1, 1);
-        const containerWidth = container.clientWidth;
-        const containerHeight = container.clientHeight || canvas.offsetHeight;
 
         // Only resize if physical dimensions actually changed
         if (containerWidth === p.lastWidth && containerHeight === p.lastHeight && ratio === p.lastRatio) {
@@ -4373,31 +4396,34 @@ function parsePageOne(lines) {
         }
 
         // Cache the current drawing data before wiping the canvas
-        const currentData = p.pad.isEmpty() ? null : p.pad.toDataURL();
+        const currentData = p.pad.isEmpty() ? null : p.pad.toData();
 
         // Re-scale internal resolution
-        canvas.width = containerWidth * ratio;
-        canvas.height = containerHeight * ratio;
+        canvas.width = Math.floor(containerWidth * ratio);
+        canvas.height = Math.floor(containerHeight * ratio);
         canvas.style.width = '100%';
-        canvas.style.height = `${containerHeight}px`;
+        canvas.style.height = '100%';
 
         const ctx = canvas.getContext('2d');
         ctx.scale(ratio, ratio);
 
-        // Re-initialize pad to recalculate bounding boxes
+        // Re-apply pen color
         const penColor = window.getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#007aff';
-        
-        p.pad.clear();
         p.pad.penColor = penColor;
 
         // Restore drawing safely
         if (currentData) {
-            p.pad.fromDataURL(currentData);
+            p.pad.fromData(currentData);
         }
 
         p.lastWidth = containerWidth;
         p.lastHeight = containerHeight;
         p.lastRatio = ratio;
+    }
+
+    // Tab-switch resize helper for Confirm tab
+    function resizeSignaturePad() {
+        resizePad('main');
     }
 
     async function restorePadDrawing(padName, drawingKey) {
@@ -4457,6 +4483,7 @@ function parsePageOne(lines) {
 
         if (typeof debouncedSave === 'function') debouncedSave();
     }
+
 
     // Toggle UI between Text Inputs and Drawing Canvases
     function applyInputMode(mode) {
@@ -4645,6 +4672,9 @@ function parsePageOne(lines) {
         d['j-sta'] = d['view-sta-text'] || d['j-sta']; 
         d.nightTime = d['j-night'] || "00:00"; 
         
+        // ── SNAPSHOT CREW DATA FOR THIS LEG ──
+        d.crewData = Array.isArray(window.crewData) ? JSON.parse(JSON.stringify(window.crewData)) : [];
+
         dailyLegs.push(d);
         
         if (typeof recalcMaxFDP === 'function') requestAnimationFrame(recalcMaxFDP);
@@ -4652,7 +4682,7 @@ function parsePageOne(lines) {
         renderJourneyList();
         clearJourneyInputs(d['j-shut']);
         ['j-dep', 'j-dest'].forEach(id => safeSet(id, ''));
-        
+        if (typeof validateOFPInputs === 'function') validateOFPInputs();
         saveState();
     };
 
@@ -4765,77 +4795,6 @@ function parsePageOne(lines) {
         calculateFuelForJourneyLog();
     };
 
-// ==========================================
-// 11. Download Managment
-// ==========================================
-
-    async function sharePdf(pdfBytes, filename, subject, body) {
-        // Create Blob and File in one clean line
-        const file = new File([new Blob([pdfBytes], { type: 'application/pdf' })], filename, { type: 'application/pdf' });
-
-        // Fire-and-forget clipboard copy (silently handles failure if permissions are denied)
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText("ofp@airastana.com").catch(() => {});
-        }
-
-        // Try native iOS/iPadOS Share Sheet
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            try {
-                await navigator.share({
-                    files: [file],
-                    title: subject,
-                    text: body || subject
-                });
-                return; // Native share successful
-            } catch (err) {
-                console.warn("Share cancelled or failed, falling back to download.");
-                // Let it fall through to downloadBlob
-            }
-        }
-        
-        // Fallback for Desktop browsers or unsupported devices
-        downloadBlob(pdfBytes, filename);
-    }
-
-    // High-performance download with Memory Leak protection
-    function downloadBlob(bytes, name) {
-        const blob = new Blob([bytes], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = name;
-        
-        // Modern DOM appending and clicking
-        document.body.appendChild(link);
-        link.click();
-        link.remove(); 
-        
-        // CRITICAL: Release the memory back to the iPad after a short delay
-        setTimeout(() => URL.revokeObjectURL(url), 100);
-    }
-
-// ==========================================
-// 9. Journey Log Managment
-// ==========================================
-
-    async function getCrewForJourneyLog(flightId) {
-        // 1. Check current memory
-        if (window.crewData && window.crewData.length > 0) return window.crewData;
-
-        // 2. Check local database for saved flight data
-        if (typeof loadOFPUserData === 'function') {
-            const userData = await loadOFPUserData(Number(flightId));
-            if (userData?.userInputs?.crewData) return userData.userInputs.crewData;
-        }
-
-        // 3. Fallback LocalStorage check
-        const backup = localStorage.getItem(`crew_backup_${flightId}`);
-        if (backup) return JSON.parse(backup);
-
-        return [];
-    }
-
     async function loadBuiltInTemplate() {
         try {
             const response = await fetch(`./journey_log_template.pdf?v=${Date.now()}`, { cache: 'no-store' });
@@ -4856,6 +4815,55 @@ function parsePageOne(lines) {
         return found ? found.transform : null; // Returns [scaleX, skewX, skewY, scaleY, x, y]
     }
 
+    function getUniqueDayCrew(legs) {
+        const uniqueMap = new Map();
+
+        if (Array.isArray(legs)) {
+            legs.forEach(leg => {
+                const legCrew = Array.isArray(leg.crewData) ? leg.crewData : [];
+                legCrew.forEach(member => {
+                    if (!member || (!member.FirstName && !member.LastName)) return;
+                    
+                    const pos = (member.Position || '').trim().toUpperCase();
+                    const fn = (member.FirstName || '').trim().toUpperCase();
+                    const ln = (member.LastName || '').trim().toUpperCase();
+                    const key = `${fn}_${ln}_${pos}`;
+
+                    if (!uniqueMap.has(key)) {
+                        uniqueMap.set(key, {
+                            EmployeeID: member.EmployeeID || '',
+                            FirstName: (member.FirstName || '').trim(),
+                            LastName: (member.LastName || '').trim(),
+                            Position: pos
+                        });
+                    }
+                });
+            });
+        }
+
+        // Fallback to in-memory global crew data if legs had no saved snapshots
+        if (uniqueMap.size === 0 && Array.isArray(window.crewData) && window.crewData.length > 0) {
+            window.crewData.forEach(member => {
+                if (!member || (!member.FirstName && !member.LastName)) return;
+                const pos = (member.Position || '').trim().toUpperCase();
+                const fn = (member.FirstName || '').trim().toUpperCase();
+                const ln = (member.LastName || '').trim().toUpperCase();
+                const key = `${fn}_${ln}_${pos}`;
+
+                if (!uniqueMap.has(key)) {
+                    uniqueMap.set(key, {
+                        EmployeeID: member.EmployeeID || '',
+                        FirstName: (member.FirstName || '').trim(),
+                        LastName: (member.LastName || '').trim(),
+                        Position: pos
+                    });
+                }
+            });
+        }
+
+        return Array.from(uniqueMap.values());
+    }
+
     window.downloadJourneyLog = async function(mode = 'download') {
         if (!dailyLegs || dailyLegs.length === 0) return showToast("No legs to print.", "error");
 
@@ -4872,26 +4880,16 @@ function parsePageOne(lines) {
                 }
             }
 
-            const activeId = localStorage.getItem('activeOFPId');
-    
-            // 1. Fetch saved crew data (Works 100% offline)
-            const crew = await getCrewForJourneyLog(activeId);
+            // 1. EXTRACT UNIQUE CREW MEMBERS ACROSS ALL SECTORS
+            let activeCrewList = getUniqueDayCrew(dailyLegs);
 
-            // 2. Format crew for display in the PDF / Email body
-            const fcList = crew.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position))
-                            .map(m => `${m.Position}: ${m.FirstName} ${m.LastName}`).join(', ');
-                            
-            const ccList = crew.filter(m => !['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position))
-                            .map(m => `${m.Position}: ${m.FirstName} ${m.LastName}`).join(', ');
-
-            // 1. EXTRACT TEXT ITEMS
+            // 2. SETUP PDF PARSER & CANVAS
             const loadingTask = pdfjsLib.getDocument({ data: journeyLogTemplateBytes });
             const textPdf = await loadingTask.promise;
             const textPage = await textPdf.getPage(1);
             const textContent = await textPage.getTextContent();
             const textItems = textContent.items;
 
-            // 2. SETUP DRAWING CANVAS
             const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
             const page = pdfDoc.getPages()[0];
             const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
@@ -4903,11 +4901,12 @@ function parsePageOne(lines) {
             const rowGap = JOURNEY_CONFIG?.rowGap || 15; 
             const nameFontSize = JOURNEY_CONFIG?.fontSize || 8; 
 
-            // 3. FETCH CREW IF NEEDED
+            // Check if user set "Hide Crew Duty Data" in Settings
             const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-            const shouldHideAll = settings.hideAllDuty === true;
+            const shouldHideDutyTimes = settings.hideAllDuty === true;
             
-            if ((!window.crewData || window.crewData.length === 0) && !shouldHideAll) {
+            // 3. ONLINE FALLBACK FETCH (IF CREW IS COMPLETELY EMPTY)
+            if (activeCrewList.length === 0) {
                 try {
                     const token = typeof getValidSkyplanToken === 'function' ? await getValidSkyplanToken() : null;
                     if (token) {
@@ -4932,35 +4931,56 @@ function parsePageOne(lines) {
                                 const data = await resp.json();
                                 const members = data.FlightsCrewMembers?.[0]?.CrewMembers || [];
                                 const flightDeck = members.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
-                                const cabinCrew = members.filter(m => !flightDeck.includes(m));
+                                const cabinCrew = members.filter(m => !['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
                                 window.crewData = [...flightDeck, ...cabinCrew];
+                                activeCrewList = getUniqueDayCrew(dailyLegs);
                             }
                         }
                     }
                 } catch(e) {
-                    console.warn("Failed to fetch crew manifest:", e);
+                    console.warn("Failed to fetch crew manifest fallback:", e);
                 }
             }
-            const activeCrewList = window.crewData || [];
 
             // 4. DRAW STATIC HEADERS
+            const headerAnchor = findAnchor(textItems, "AIR ASTANA/FLY ARYSTAN") || findAnchor(textItems, "AIR ASTANA");
+            if (headerAnchor) {
+                const now = new Date();
+                const day = String(now.getDate()).padStart(2, '0');
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const year = now.getFullYear();
+                const hours = String(now.getHours()).padStart(2, '0');
+                const mins = String(now.getMinutes()).padStart(2, '0');
+                
+                const currentDateTimeStr = `${day}/${month}/${year} ${hours}:${mins}`;
+
+                page.drawText(currentDateTimeStr, { 
+                    x: headerAnchor[4] + 50, 
+                    y: headerAnchor[5], 
+                    size: nameFontSize, 
+                    font 
+                });
+            }
+
             const catAnchor = findAnchor(textItems, "L/T");
             if (catAnchor) page.drawText("75/125", { x: catAnchor[4] - 30, y: catAnchor[5], size: nameFontSize, font });
 
-            let captainNameStr = localStorage.getItem('efb_captain_name') || activeCrewList.find(m => m.Position === 'CP') 
-                ? `${activeCrewList.find(m => m.Position === 'CP').FirstName || ''} ${activeCrewList.find(m => m.Position === 'CP').LastName || ''}`.trim().toUpperCase() 
-                : "";
+            let captainNameStr = localStorage.getItem('efb_captain_name') || '';
+            if (!captainNameStr) {
+                const captObj = activeCrewList.find(m => m.Position === 'CP');
+                if (captObj) captainNameStr = `${captObj.FirstName} ${captObj.LastName}`.trim();
+            }
 
             if (captainNameStr) {
                 const capAnchor = findAnchor(textItems, "Captain/KBC:");
                 if (capAnchor) {
-                    page.drawText(captainNameStr, { x: capAnchor[4] + 30, y: capAnchor[5], size: nameFontSize, font });
+                    page.drawText(captainNameStr.toUpperCase(), { x: capAnchor[4] + 50, y: capAnchor[5], size: nameFontSize, font });
                 }
             }
 
             // 5. DRAW DYNAMIC HEADERS & LEGS
             const headerDrop = 16; 
-            const drawLegData = (anchor, shiftX, keys, baselineY, isFuelCol = false) => {
+            const drawLegData = (anchor, shiftX, keys, baselineY) => {
                 if (!anchor) return;
                 const colX = anchor[4] + shiftX;
                 const baseY = baselineY ?? (anchor[5] - headerDrop);
@@ -5052,51 +5072,55 @@ function parsePageOne(lines) {
                 } catch (e) { console.warn("Signature skipped"); }
             }
 
-            // 7. DRAW CREW DUTY
-            if (!shouldHideAll) {
-                const crewCols = {};
-                ['DUTY', 'Duty time', 'Night duty', 'Alwd. time', 'LEGS'].forEach(k => {
-                    const a = findAnchor(textItems, k);
-                    if (a) crewCols[k] = a[4];
-                });
+            // 7. DRAW CREW ROSTER (ALWAYS PRINTS NAMES & OP, IGNORING TIMES IF HIDDEN)
+            const crewCols = {};
+            ['DUTY', 'Duty time', 'Night duty', 'Alwd. time', 'LEGS'].forEach(k => {
+                const a = findAnchor(textItems, k);
+                if (a) crewCols[k] = a[4];
+            });
 
-                let crewBaselineY = (findAnchor(textItems, 'DUTY') || findAnchor(textItems, 'OP') || [0,0,0,0,0, 333 + headerDrop])[5] - headerDrop;
+            let crewBaselineY = (findAnchor(textItems, 'DUTY') || findAnchor(textItems, 'OP') || [0,0,0,0,0, 333 + headerDrop])[5] - headerDrop;
+            const sectorsString = 'x'.repeat(dailyLegs.filter(l => l['j-flt'] || l['j-dep']).length);
+
+            const getFDP = (startMins) => {
+                const onBlocksMins = dailyLegs[dailyLegs.length-1] ? (typeof parseTimeString === 'function' ? parseTimeString(dailyLegs[dailyLegs.length-1]['j-in']) : 0) : null;
+                if (onBlocksMins == null) return "";
+                let diff = onBlocksMins - startMins;
+                if (diff < 0) diff += 1440;
+                return typeof minsToTime === 'function' ? minsToTime(diff) : "";
+            };
+
+            const fcStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-duty-start')?.value) : 0;
+            const ccStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-cc-duty-start')?.value) : 0;
+            
+            // Separate Flight Deck from Cabin Crew
+            const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
+            const uniquePilots = activeCrewList.filter(m => flightDeckPositions.includes(m.Position));
+            const uniqueCabin = activeCrewList.filter(m => !flightDeckPositions.includes(m.Position));
+            const sortedCrew = [...uniquePilots, ...uniqueCabin];
+
+            sortedCrew.forEach((member, i) => {
+                const y = crewBaselineY - (i * (JOURNEY_CONFIG?.rowGap || 17));
+                const isFC = flightDeckPositions.includes(member.Position);
+                const myStart = isFC ? fcStartMins : ccStartMins;
+
+                // ALWAYS print Employee ID, Position, Name, and "OP"
+                if (crewCols['DUTY']) {
+                    const opX = crewCols['DUTY'];
+                    page.drawText(String(member.EmployeeID || '').toUpperCase(), { x: opX - 175, y, size: nameFontSize, font });
+                    page.drawText(String(member.Position || '').toUpperCase(), { x: opX - 140, y, size: nameFontSize, font });
+                    page.drawText(`${member.FirstName || ''} ${member.LastName || ''}`.trim().toUpperCase(), { x: opX - 125, y, size: nameFontSize, font });
+                    page.drawText("OP", { x: opX, y, size: nameFontSize, font });
+                }
                 
-                const numFC = parseInt(el('j-fc-count')?.value || 2);
-                const numCC = parseInt(el('j-cc-count')?.value || 7);
-                const sectorsString = 'x'.repeat(dailyLegs.filter(l => l['j-flt'] || l['j-dep']).length);
-
-                const getFDP = (startMins) => {
-                    const onBlocksMins = dailyLegs[dailyLegs.length-1] ? (typeof parseTimeString === 'function' ? parseTimeString(dailyLegs[dailyLegs.length-1]['j-in']) : 0) : null;
-                    if (onBlocksMins == null) return "";
-                    let diff = onBlocksMins - startMins;
-                    if (diff < 0) diff += 1440;
-                    return typeof minsToTime === 'function' ? minsToTime(diff) : "";
-                };
-
-                const fcStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-duty-start')?.value) : 0;
-                const ccStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-cc-duty-start')?.value) : 0;
-                
-                for(let i = 0; i < (numFC + numCC); i++) {
-                    const y = crewBaselineY - (i * (JOURNEY_CONFIG?.rowGap || 17));
-                    const isFC = (i < numFC);
-                    const myStart = isFC ? fcStartMins : ccStartMins;
-
-                    const member = activeCrewList[i];
-                    if (member && crewCols['DUTY']) {
-                        const opX = crewCols['DUTY'];
-                        page.drawText(String(member.EmployeeID || '').toUpperCase(), { x: opX - 175, y, size: nameFontSize, font });
-                        page.drawText(String(member.Position || '').toUpperCase(), { x: opX - 140, y, size: nameFontSize, font });
-                        page.drawText(`${member.FirstName || ''} ${member.LastName || ''}`.trim().toUpperCase(), { x: opX - 125, y, size: nameFontSize, font });
-                        page.drawText("OP", { x: opX, y, size: nameFontSize, font });
-                    }
-                    
+                // ONLY print Duty Times, FDP Limits & Sectors if "Hide Crew Duty Data" is unchecked
+                if (!shouldHideDutyTimes) {
                     if (crewCols['Duty time']) page.drawText(getFDP(myStart), { x: crewCols['Duty time'], y, size: nameFontSize, font });
                     if (crewCols['Night duty']) page.drawText(typeof getNightDutyForCrew === 'function' ? getNightDutyForCrew(myStart) : '', { x: crewCols['Night duty'], y, size: nameFontSize, font });
                     if (crewCols['Alwd. time']) page.drawText(isFC ? (el('j-max-fdp')?.value || '') : (el('j-cc-max-fdp-hidden')?.value || ''), { x: crewCols['Alwd. time'], y, size: nameFontSize, font });
                     if (crewCols['LEGS']) page.drawText(sectorsString, { x: crewCols['LEGS'], y, size: nameFontSize, font });
                 }
-            }
+            });
 
             // 8. FINAL SAVE AND EXPORT
             const outBytes = await pdfDoc.save();
@@ -5109,7 +5133,14 @@ function parsePageOne(lines) {
                 if (typeof downloadBlob === 'function') downloadBlob(outBytes, filename);
             }
 
-            const userChoice = await showConfirmDialog('Journey Log Generated', '<div style="text-align:center;">Save this log and start a new day?<br>Click <strong>Save Log</strong> to store it permanently and clear leg data.<br>Click <strong>Keep Data</strong> to make changes and generate again.</div>', 'Save Log', 'Keep Data', 'info', true);
+            const userChoice = await showConfirmDialog(
+                'Journey Log Generated', 
+                '<div style="text-align:center;">Save this log and start a new day?<br>Click <strong>Save Log</strong> to store it permanently and clear leg data.<br>Click <strong>Keep Data</strong> to make changes and generate again.</div>', 
+                'Save Log', 
+                'Keep Data', 
+                'info', 
+                true
+            );
 
             if (userChoice) {
                 const blob = new Blob([outBytes], { type: 'application/pdf' });
@@ -5125,6 +5156,55 @@ function parsePageOne(lines) {
         }
     };
 
+// ==========================================
+// 11. Download Managment
+// ==========================================
+
+    async function sharePdf(pdfBytes, filename, subject, body) {
+        // Create Blob and File in one clean line
+        const file = new File([new Blob([pdfBytes], { type: 'application/pdf' })], filename, { type: 'application/pdf' });
+
+        // Fire-and-forget clipboard copy (silently handles failure if permissions are denied)
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText("ofp@airastana.com").catch(() => {});
+        }
+
+        // Try native iOS/iPadOS Share Sheet
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            try {
+                await navigator.share({
+                    files: [file],
+                    title: subject,
+                    text: body || subject
+                });
+                return; // Native share successful
+            } catch (err) {
+                console.warn("Share cancelled or failed, falling back to download.");
+                // Let it fall through to downloadBlob
+            }
+        }
+        
+        // Fallback for Desktop browsers or unsupported devices
+        downloadBlob(pdfBytes, filename);
+    }
+
+    // High-performance download with Memory Leak protection
+    function downloadBlob(bytes, name) {
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = name;
+        
+        // Modern DOM appending and clicking
+        document.body.appendChild(link);
+        link.click();
+        link.remove(); 
+        
+        // CRITICAL: Release the memory back to the iPad after a short delay
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+    }
 
 // ==========================================
 // 10. OFP Download
@@ -7110,6 +7190,10 @@ function showClearancePopup() {
 // Aircraft Defects (ADD / CDD) Management
 // ==========================================
 
+// ==========================================
+// Aircraft Defects (ADD / CDD) - Offline-First
+// ==========================================
+
 window.fetchAircraftDefects = async function(tailNumber) {
     if (!tailNumber || tailNumber === '-' || tailNumber === 'TBA') {
         renderADDTable([], tailNumber || '-');
@@ -7117,13 +7201,45 @@ window.fetchAircraftDefects = async function(tailNumber) {
     }
 
     const cleanTail = tailNumber.trim().toUpperCase();
+    const cacheKey = `add_cache_${cleanTail}`;
     const tailEl = document.getElementById('add-tail-number');
     if (tailEl) tailEl.textContent = cleanTail;
 
-    const token = await getValidSkyplanToken();
-    if (!token) return [];
+    // 1. Try reading saved defects from local cache first
+    let cachedDefects = null;
+    try {
+        const rawCache = localStorage.getItem(cacheKey);
+        if (rawCache) cachedDefects = JSON.parse(rawCache);
+    } catch (e) {
+        console.warn('Failed to parse cached ADD data', e);
+    }
+
+    // 2. Check if device is offline
+    if (!navigator.onLine) {
+        if (cachedDefects) {
+            console.log(`[ADD Offline] Using cached defects for ${cleanTail}`);
+            window.currentAircraftADDs = cachedDefects;
+            window.currentADDRegistration = cleanTail;
+            renderADDTable(cachedDefects, cleanTail, null, true); // true = show offline badge
+            return cachedDefects;
+        } else {
+            renderADDTable([], cleanTail, "Device is offline and no cached ADD data is available.");
+            return [];
+        }
+    }
+
+    // 3. Online: Get valid token
+    const token = await getValidSkyplanToken().catch(() => null);
+    if (!token) {
+        if (cachedDefects) {
+            renderADDTable(cachedDefects, cleanTail, null, true);
+            return cachedDefects;
+        }
+        return [];
+    }
 
     try {
+        console.log(`[ADD Fetch] Requesting defect reports for aircraft: ${cleanTail}`);
         
         const response = await fetch('https://kcskyplanapi.airastana.com/api/v1/defect-reports', {
             method: 'POST',
@@ -7132,34 +7248,62 @@ window.fetchAircraftDefects = async function(tailNumber) {
                 'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify({ TailNumbers: [cleanTail] })
-        });
+        }).catch(() => null); // Intercept network failures cleanly
 
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        if (!response || !response.ok) {
+            // Fallback to cache on network error
+            if (cachedDefects) {
+                console.log(`[ADD Fallback] Server error/network drop. Restoring local cache for ${cleanTail}`);
+                window.currentAircraftADDs = cachedDefects;
+                window.currentADDRegistration = cleanTail;
+                renderADDTable(cachedDefects, cleanTail, null, true);
+                return cachedDefects;
+            }
+            throw new Error(response ? `HTTP ${response.status}` : "Network connection error");
         }
 
         const data = await response.json();
         const defects = data.DefectReports || [];
+        console.log(`[ADD Fetch] Received ${defects.length} defect reports for ${cleanTail}:`, defects);
+
+        // 4. SAVE TO LOCAL STORAGE FOR OFFLINE USE
+        try {
+            localStorage.setItem(cacheKey, JSON.stringify(defects));
+            localStorage.setItem(`add_cache_time_${cleanTail}`, new Date().toISOString());
+        } catch (e) {
+            console.warn("Could not write ADDs to local storage:", e);
+        }
 
         window.currentAircraftADDs = defects;
         window.currentADDRegistration = cleanTail;
 
-        renderADDTable(defects, cleanTail);
+        renderADDTable(defects, cleanTail, null, false);
         return defects;
 
     } catch (error) {
-        if (typeof showToast === 'function') {
-            showToast(`Failed to load ADDs for ${cleanTail}: ${error.message}`, 'error');
+        console.error(`[ADD Fetch] Failed for ${cleanTail}:`, error);
+        if (cachedDefects) {
+            window.currentAircraftADDs = cachedDefects;
+            window.currentADDRegistration = cleanTail;
+            renderADDTable(cachedDefects, cleanTail, null, true);
+            return cachedDefects;
         }
         renderADDTable([], cleanTail, error.message);
         return [];
     }
 };
 
-function renderADDTable(defects, tailNumber, errorMessage = null) {
+function renderADDTable(defects, tailNumber, errorMessage = null, isCached = false) {
     const tbody = document.getElementById('add-tbody');
     const tailEl = document.getElementById('add-tail-number');
-    if (tailEl) tailEl.textContent = tailNumber || '-';
+    
+    if (tailEl) {
+        const statusTag = isCached 
+            ? ' <span class="badge warning" style="margin-left: 8px; font-size: 11px; padding: 2px 6px;">⚡ OFFLINE CACHE</span>' 
+            : '';
+        tailEl.innerHTML = `${tailNumber || '-'}${statusTag}`;
+    }
+    
     if (!tbody) return;
 
     if (errorMessage) {
