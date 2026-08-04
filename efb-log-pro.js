@@ -7839,9 +7839,9 @@ window.loadAssignedFlights = async function() {
                     <td style="padding: 15px; font-size: 13px; color: #fbbc04;">${blockTime}</td>
                     <td style="padding: 15px; font-size: 13px; color: #b3e5fc;">${aircraft}</td>
                     <td style="padding: 15px; text-align: right;">
-                        <button onclick="importOFPFromSkyplan('${f.ID}', '${flightNum}', '${dateStr}')" 
+                        <button onclick="importOFPFromSkyplan('${f.ID}', '${flightNum}', '${dateStr}', '${f.RegistrationNumber || ''}')" 
                                 style="background: #81c995; color: #000; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer;">
-                            Sync OFP
+                            Activate OFP
                         </button>
                     </td>
                 </tr>
@@ -7857,7 +7857,7 @@ window.loadAssignedFlights = async function() {
     }
 };
 
-window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr) {
+window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailNumber) {
     try {
         const token = await getValidSkyplanToken();
         if (!token) {
@@ -7888,7 +7888,7 @@ window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr) {
             bytes[i] = binaryString.charCodeAt(i);
         }
 
-        // 3. FORCE THE CORRECT FILENAME so the parser knows what flight it is!
+        // 3. Force correct filename for parser
         const safeDate = dateStr ? dateStr.replace(/-/g, '') : 'UnknownDate';
         const safeFlight = flightNum ? flightNum.replace(/\s+/g, '') : 'UnknownFlight';
         const fileName = `${safeFlight}_${safeDate}_OFP.pdf`;
@@ -7897,17 +7897,19 @@ window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr) {
 
         if (typeof showToast === 'function') showToast("OFP Downloaded! Extracting data...", "success");
 
-        // 4. Send it directly to your existing pipeline
+        // 4. Send to PDF analyzer pipeline
         if (typeof runAnalysis === 'function') {
-            // runAnalysis will now parse it, save it, and auto-activate it automatically
             await runAnalysis(file, false);
         } else {
             alert("Error: Core PDF analyzer is missing.");
         }
 
-        // Inside importOFPFromSkyplan / activation pipeline after identifying flight details:
-        const aircraftReg = f.RegistrationNumber || (document.getElementById('view-reg')?.innerText || '').trim();
-        if (aircraftReg && aircraftReg !== '-') {
+        // 5. Fetch Aircraft ADDs safely using passed tail number or fallback to DOM
+        const aircraftReg = (tailNumber && tailNumber !== 'TBA') 
+            ? tailNumber 
+            : (document.getElementById('view-reg')?.innerText || '').trim();
+
+        if (aircraftReg && aircraftReg !== '-' && aircraftReg !== 'TBA' && typeof window.fetchAircraftDefects === 'function') {
             window.fetchAircraftDefects(aircraftReg);
         }
 
@@ -7915,6 +7917,6 @@ window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr) {
         console.error("Failed to import OFP:", error);
         alert("Error syncing OFP: " + error.message);
     }
-}
+};
 
 })();
