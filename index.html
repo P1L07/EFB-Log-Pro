@@ -970,7 +970,6 @@ button:disabled,
         <button class="nav-btn" data-tab="journey">Journey Log</button>
         <button class="nav-btn" data-tab="add">Aircraft ADD</button>
         <button class="nav-btn" data-tab="confirm">Finalize OFP</button>
-        <button class="nav-btn" data-tab="sectors">File Manager</button>
         <button class="nav-btn" data-tab="settings">Settings</button>
     </div>
         <div class="sidebar-footer">
@@ -981,17 +980,38 @@ button:disabled,
     <main class="main-content">
         <section id="section-assigned" class="tool-section">
             <div class="panel" style="height: 85vh; padding: 20px; overflow: hidden; display: flex; flex-direction: column;">
-                <!-- Header -->
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h2 style="color: var(--text); margin: 0; font-family: sans-serif;">My Flights</h2>
-                    <button onclick="loadAssignedFlights()" class="btn-refresh">
-                        ↻ Refresh Flights
-                    </button>
+                <!-- Header & Control Bar -->
+                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 15px;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <h2 style="color: var(--text); margin: 0; font-family: sans-serif;">My Flights</h2>
+                        <span id="assigned-cache-badge" style="display: none; font-size: 11px; padding: 3px 8px; border-radius: 6px; background: rgba(255, 179, 0, 0.2); color: #ffb300; border: 1px solid #ffb300; font-weight: 600;">
+                            ⚡ OFFLINE CACHE
+                        </span>
+                    </div>
+
+                    <!-- Search & Filters -->
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <input type="text" id="assigned-search-text" placeholder="Search flight, route, reg..." oninput="filterAssignedFlightsTable()" 
+                            style="padding: 6px 10px; background: var(--input, #2c2c2e); color: var(--text, #fff); border: 1px solid var(--border, #38383a); border-radius: 6px; font-size: 13px; width: 170px;">
+                        
+                        <input type="date" id="assigned-date-from" style="padding: 5px 8px; background: var(--input, #2c2c2e); color: var(--text, #fff); border: 1px solid var(--border, #38383a); border-radius: 6px; font-size: 13px;">
+                        <span style="color: var(--dim);">to</span>
+                        <input type="date" id="assigned-date-to" style="padding: 5px 8px; background: var(--input, #2c2c2e); color: var(--text, #fff); border: 1px solid var(--border, #38383a); border-radius: 6px; font-size: 13px;">
+
+                        <button onclick="loadAssignedFlights(true)" class="btn-primary" style="padding: 6px 14px; font-size: 13px; border-radius: 6px; font-weight: 600;">
+                            🔍 Search Date
+                        </button>
+
+                        <button onclick="loadAssignedFlights(true, true)" class="btn-refresh" style="padding: 6px 14px; font-size: 13px; border-radius: 6px;">
+                            ↻ Sync Roster
+                        </button>
+                    </div>
                 </div>
+
                 <!-- Scrollable Table Container -->
-                <div id="assigned-flights-container" class="assigned-table-wrapper">
+                <div id="assigned-flights-container" class="assigned-table-wrapper" style="flex: 1; overflow-y: auto;">
                     <div style="color: var(--dim); text-align: center; padding: 40px; font-family: sans-serif;">
-                        Click "Refresh Flights" to load your roster.
+                        Click "Sync Roster" to load your flights.
                     </div>
                 </div>
             </div>
@@ -1095,7 +1115,7 @@ button:disabled,
                     <label>PIC Block Fuel</label>
                     <input id="view-pic-block" class="input" type="tel" pattern="\d*" 
                         style="color:var(--accent); font-weight:bold; font-size:18px;" 
-                        oninput="calculateExtraFromTotal()">
+                        oninput="calculateExtraFuel()">
                 </div>
             </div>
             <div class="btn-group">
@@ -1135,7 +1155,6 @@ button:disabled,
         </section>
         <section id="section-altn" class="tool-section">
             <div class="panel">
-                <h3>Alternate Route</h3>
                 <div class="table-container">
                     <table>
                         <thead>
@@ -1321,7 +1340,7 @@ button:disabled,
                         <tbody id="add-tbody">
                             <tr>
                                 <td colspan="7" style="text-align: center; color: var(--dim); padding: 30px;">
-                                    No active flight / registration loaded.
+                                    No registration loaded.
                                 </td>
                             </tr>
                         </tbody>
@@ -1343,67 +1362,6 @@ button:disabled,
                 </div>
                 <div class="btn-group">
                     <button id="btn-send-ofp" class="btn btn-save" onclick="DownloadOFP('email')" disabled>Finalize OFP</button>
-                </div>
-            </div>
-        </section>
-        <section id="section-sectors" class="tool-section">
-            <!-- Tab buttons -->
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <button id="tab-ofp" class="btn-tab active">📋 OFP List</button>
-                <button id="tab-journey" class="btn-tab">📓 Journey Logs</button>
-            </div>
-
-            <!-- OFP table container -->
-            <div id="ofp-table-container">
-                <div class="ofp-search" style="margin-bottom: 15px;">
-                    <input type="text" id="ofp-search-input" class="input" 
-                        placeholder="🔍 Filter by flight, date, departure or destination..." 
-                        oninput="filterOFPs()">
-                </div>
-                <div class="table-container">
-                    <table id="file-manager-table">
-                        <thead>
-                            <tr>
-                                <th>Flight</th>
-                                <th>Date</th>
-                                <th>Departure</th>
-                                <th>Destination</th>
-                                <th>Trip</th>
-                                <th>Max SR</th>
-                                <th>Request #</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="ofp-manager-tbody">
-                            <!-- dynamic content -->
-                        </tbody>
-                    </table>
-                </div>
-                <div class="btn-group" style="margin-top: 20px;">
-                    <button onclick="clearAllOFPs()" class="btn btn-danger">
-                        🗑️ Clear All
-                    </button>
-                </div>
-            </div>
-
-            <!-- Journey Log table container (initially hidden) -->
-            <div id="journey-table-container" hidden>
-                <div class="table-container">
-                    <table id="journey-log-table">
-                        <thead>
-                            <tr>
-                                <th>Flight</th>
-                                <th>Date</th>
-                                <th>Legs</th>
-                                <th>Finalized</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="journey-log-tbody">
-                            <!-- populated dynamically -->
-                        </tbody>
-                    </table>
                 </div>
             </div>
         </section>
