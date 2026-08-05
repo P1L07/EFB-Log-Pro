@@ -6358,7 +6358,7 @@ const RELEASE_NOTES = {
         });
         
         // Auto-save triggers
-        ['auto-lock-time', 'pdf-quality', 'hide-all-duty', 'auto-activate-next'].forEach(id => {
+        ['auto-lock-time', 'pdf-quality', 'hide-all-duty'].forEach(id => {
             document.getElementById(id)?.addEventListener('change', saveSettings);
         });
 
@@ -6398,13 +6398,11 @@ const RELEASE_NOTES = {
             const autoLock = document.getElementById('auto-lock-time');
             const pdfQual = document.getElementById('pdf-quality');
             const hideDuty = document.getElementById('hide-all-duty');
-            const autoAct = document.getElementById('auto-activate-next');
             const atisMode = document.getElementById('atis-input-mode');
 
             if (autoLock && settings.autoLockTime) autoLock.value = settings.autoLockTime;
             if (pdfQual && settings.pdfQuality) pdfQual.value = settings.pdfQuality;
             if (hideDuty) hideDuty.checked = settings.hideAllDuty === true;
-            if (autoAct) autoAct.checked = settings.autoActivateNext !== false;
 
             if (atisMode) {
                 const mode = settings.atisInputMode || 'typing';
@@ -6423,7 +6421,6 @@ const RELEASE_NOTES = {
             autoLockTime: autoLockVal,
             pdfQuality: document.getElementById('pdf-quality')?.value || '2.0',
             hideAllDuty: document.getElementById('hide-all-duty')?.checked || false,
-            autoActivateNext: document.getElementById('auto-activate-next')?.checked !== false,
             atisInputMode: document.getElementById('atis-input-mode')?.value || 'typing',
             lastSaved: new Date().toISOString()
         };
