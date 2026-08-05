@@ -1231,9 +1231,17 @@ button:disabled,
                         <div class="field"><label>Night Block</label><input type="time" id="j-night" class="input"></div>
                     </div>
                     <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">
-                        <div class="field"><label>TO</label><input type="number" id="j-to" class="input"></div>
-                        <div class="field"><label>LDG</label><input type="number" id="j-ldg" class="input"></div>
-                        <div class="field"><label>Manual/Automatic</label><input id="j-ldg-type" class="input"></div>
+                        <div class="field">
+                            <label>TO</label>
+                            <input type="text" id="j-to" class="input crew-id-input" placeholder="Crew ID" autocomplete="off" list="crew-id-list">
+                        </div>
+
+                        <div class="field">
+                            <label>LDG</label>
+                            <input type="text" id="j-ldg" class="input crew-id-input" placeholder="Crew ID" autocomplete="off" list="crew-id-list">
+                        </div>
+                        <datalist id="crew-id-list"></datalist>
+                        <div class="field"><label>Manual/Automatic</label ><input id="j-ldg-type" class="input"></div>
                         <div class="field"><label>DETAILS</label><input id="j-ldg-detail" class="input"></div>
                     </div>
                     <div class="grid-row" style="margin-top:15px; border-top:1px solid var(--border); padding-top:15px">

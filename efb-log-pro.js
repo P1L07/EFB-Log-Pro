@@ -1428,6 +1428,14 @@ const RELEASE_NOTES = {
                 }, 200);
             }
 
+            // Restore crew members to memory & refresh TO/LDG lists
+            if (userData.crewData && Array.isArray(userData.crewData)) {
+                window.crewData = userData.crewData;
+                if (typeof updateCrewDatalists === 'function') {
+                    updateCrewDatalists();
+                }
+            }
+
             // MIGRATION CLEAR-OUT: Move legacy data to the new DB format and wipe it from the main object
             if (ofp.userWaypoints || ofp.userInputs) {
                 await saveOFPUserData(numericId, waypointsToRestore, inputsToRestore);
@@ -4660,7 +4668,6 @@ const RELEASE_NOTES = {
         }
     }
 
-    // High-speed array scanner (O(N) instead of parsing the whole PDF)
     function findAnchor(textItems, searchText) {
         if (!textItems || !searchText) return null;
         const searchTarget = searchText.toLowerCase();
@@ -7701,936 +7708,948 @@ function getDepartureICAO(routeStr) {
 // ==========================================
 // Server connection
 // ==========================================
-let tokenModalPromise = null;
+    let tokenModalPromise = null;
 
-async function savePdfToOfflineCache(flightId, flightNum, dateStr, pdfBytes, isFinalized = false) {
-    if (!pdfBytes || pdfBytes.length < 500) return;
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-
-    try {
-        const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
-        const fDigits = String(flightNum || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-        const fDateStr = String(dateStr || '').replace(/[-/]/g, '');
-
-        // Find existing record in EFB_PDF_DB ofps store
-        const localMatch = cachedOFPs.find(o => {
-            if (!o) return false;
-            const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || o.id || '');
-            if (flightId && oExtId && String(flightId) === oExtId) return true;
-
-            const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-            const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
-
-            return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr);
-        });
-
-        if (localMatch?.id && typeof updateOFP === 'function') {
-            // Update existing record in EFB_PDF_DB
-            const updates = isFinalized 
-                ? { loggedPdfData: blob, finalized: true } 
-                : { data: blob };
-            await updateOFP(localMatch.id, updates);
-        } else if (typeof saveOFPToDB === 'function') {
-            // Create a new un-activated record in EFB_PDF_DB for offline viewing
-            await saveOFPToDB(blob, {
-                flight: flightNum || 'N/A',
-                date: dateStr || 'N/A',
-                externalFlightId: flightId,
-                finalized: isFinalized
-            }, false);
-        }
-    } catch (e) {
-        console.warn("[EFB_PDF_DB Cache] Write warning:", e);
-    }
-}
-
-async function getPdfFromOfflineCache(flightId, flightNum, dateStr) {
-    try {
-        const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
-        const fDigits = String(flightNum || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-        const fDateStr = String(dateStr || '').replace(/[-/]/g, '');
-
-        const localMatch = cachedOFPs.find(o => {
-            if (!o) return false;
-            const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || o.id || '');
-            if (flightId && oExtId && String(flightId) === oExtId) return true;
-
-            const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-            const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
-
-            return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr);
-        });
-
-        if (localMatch) {
-            // Check loggedPdfData (finalized) first, then fallback to data (raw vector PDF)
-            const targetBlob = localMatch.loggedPdfData || localMatch.data;
-            if (targetBlob && targetBlob.size > 500) {
-                const arrBuf = await targetBlob.arrayBuffer();
-                return { 
-                    pdfBytes: new Uint8Array(arrBuf), 
-                    isFinalized: Boolean(localMatch.finalized), 
-                    isCached: true 
-                };
-            }
-        }
-    } catch (e) {
-        console.warn("[EFB_PDF_DB Cache] Read warning:", e);
-    }
-    return null;
-}
-
-async function cleanupOldOfflineOFPs(retentionDays = 7) {
-    try {
-        // Fetch all cached OFPs from EFB_PDF_DB
-        const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
-        if (!cachedOFPs || cachedOFPs.length === 0) return;
-
-        const activeId = localStorage.getItem('activeOFPId');
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-
-        for (const ofp of cachedOFPs) {
-            // Never purge the currently active flight
-            if (activeId && String(ofp.id) === String(activeId)) continue;
-
-            // Determine the flight date or record creation date
-            const dateVal = ofp.date || ofp.flightDate || ofp.uploadTime;
-            if (!dateVal) continue;
-
-            const ofpDate = new Date(dateVal);
-            
-            // If the flight date is older than retention threshold (7 days ago)
-            if (!isNaN(ofpDate.getTime()) && ofpDate < cutoffDate) {
-                
-                // Delete record & PDF blob from EFB_PDF_DB
-                if (typeof deleteOFPFromDB === 'function') {
-                    await deleteOFPFromDB(ofp.id);
-                }
-
-                // Clean up associated localStorage flags
-                const extId = ofp.externalFlightId || ofp.flightId;
-                if (extId) {
-                    localStorage.removeItem(`skyplan_finalized_${extId}`);
-                }
-            }
-        }
-    } catch (e) {
-        console.warn("Failed to clean up old OFPs:", e);
-    }
-}
-
-async function extractPdfFromZipOrRaw(inputData) {
-    if (!inputData) return null;
-    let bytes = null;
-
-    if (typeof inputData === 'string') {
-        const cleanB64 = inputData.replace(/^data:application\/[a-z-]+;base64,/, '').trim();
-        if (cleanB64.length < 50) return null;
-        try {
-            const binaryString = atob(cleanB64);
-            bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-        } catch (e) {
-            return null;
-        }
-    } else if (inputData instanceof ArrayBuffer) {
-        bytes = new Uint8Array(inputData);
-    } else if (inputData instanceof Uint8Array) {
-        bytes = inputData;
-    }
-
-    if (!bytes || bytes.length < 50) return null;
-
-    // A. Check for ZIP Magic Bytes: PK\x03\x04 (0x50, 0x4B, 0x03, 0x04)
-    const isZip = (bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04);
-
-    if (isZip && typeof JSZip !== 'undefined') {
-        try {
-            const zip = await JSZip.loadAsync(bytes);
-            const pdfEntry = Object.values(zip.files).find(f => !f.dir && f.name.toLowerCase().endsWith('.pdf'));
-            if (pdfEntry) {
-                return await pdfEntry.async('uint8array');
-            }
-        } catch (err) {
-            console.warn("[ZIP Unpacker Warning]", err);
-        }
-    }
-
-    // B. Check for PDF Magic Bytes: %PDF- (0x25, 0x50, 0x44, 0x46)
-    let pdfStart = -1;
-    for (let i = 0; i < Math.min(bytes.length - 4, 2048); i++) {
-        if (bytes[i] === 0x25 && bytes[i+1] === 0x50 && bytes[i+2] === 0x44 && bytes[i+3] === 0x46) {
-            pdfStart = i;
-            break;
-        }
-    }
-
-    if (pdfStart !== -1) {
-        return bytes.subarray(pdfStart);
-    }
-
-    return null;
-}
-
-async function getLocalFinalizedPdfBlob(flightId, flightNum, dateStr) {
-    try {
-        const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
-        const fDigits = String(flightNum || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-        const fDateStr = String(dateStr || '').replace(/[-/]/g, '');
-
-        const localMatch = cachedOFPs.find(o => {
-            if (!o || !o.loggedPdfData) return false;
-            
-            const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || o.id || '');
-            if (flightId && oExtId && String(flightId) === oExtId) return true;
-
-            const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-            const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
-
-            return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr);
-        });
-
-        if (localMatch && localMatch.loggedPdfData) {
-            if (localMatch.loggedPdfData instanceof Blob) {
-                return localMatch.loggedPdfData;
-            }
-            const buf = localMatch.loggedPdfData instanceof ArrayBuffer 
-                ? localMatch.loggedPdfData 
-                : new Uint8Array(localMatch.loggedPdfData);
-            return new Blob([buf], { type: 'application/pdf' });
-        }
-    } catch (e) {
-        console.warn("[Local PDF Lookup] Warning:", e);
-    }
-    return null;
-}
-
-async function preloadAssignedOFPs(flights, token) {
-    if (!navigator.onLine || !token || !Array.isArray(flights) || flights.length === 0) return;
-
-    // 1. Run automatic cleanup to delete OFPs older than 7 days
-    await cleanupOldOfflineOFPs(7);
-
-    const now = new Date();
-
-    // 2. Pre-cache eligible assigned flights (< 36 hours in future)
-    for (const f of flights) {
-        if (!f.ID) continue;
-        const flightId = f.ID;
-        const flightNum = `${f.CarrierCode}${f.FlightNumber}`;
-        const dateStr = f.StdLt ? f.StdLt.split('T')[0] : '';
-
-        const stdDate = f.StdLt ? new Date(f.StdLt) : null;
-        const hoursUntilStd = stdDate ? (stdDate - now) / (1000 * 60 * 60) : 0;
-
-        if (hoursUntilStd > 36) {
-            continue;
-        }
+    async function savePdfToOfflineCache(flightId, flightNum, dateStr, pdfBytes, isFinalized = false) {
+        if (!pdfBytes || pdfBytes.length < 500) return;
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
 
         try {
-            const existing = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
-            if (!existing) {
-                await fetchSkyplanOFPBytes(flightId, token, flightNum, dateStr);
-            }
-        } catch (e) {
-            console.info(`${flightNum}: ${e.message}`);
-        }
-    }
-}
+            const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
+            const fDigits = String(flightNum || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+            const fDateStr = String(dateStr || '').replace(/[-/]/g, '');
 
-async function fetchSkyplanOFPBytes(flightId, token, flightNum = '', dateStr = '') {
-    // 0. Offline Check
-    if (!navigator.onLine) {
-        const offlineData = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
-        if (offlineData) return offlineData;
-        throw new Error(`Device offline. ${flightNum || 'Flight'} has not been cached for offline use yet.`);
-    }
+            // Find existing record in EFB_PDF_DB ofps store
+            const localMatch = cachedOFPs.find(o => {
+                if (!o) return false;
+                const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || o.id || '');
+                if (flightId && oExtId && String(flightId) === oExtId) return true;
 
-    // 1. Query v2 for finalization metadata
-    let isFinalizedOnServer = false;
-    let v2Status = null;
+                const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+                const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
 
-    try {
-        const v2Resp = await fetch(`https://kcskyplanapi.airastana.com/api/v2/flights/${flightId}/ofp`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        
-        v2Status = v2Resp.status;
-
-        if (v2Resp.ok) {
-            const v2Data = await v2Resp.json();
-            const filledObj = v2Data['Filled Document'] || v2Data.FilledDocument;
-            if (filledObj && typeof filledObj === 'object') {
-                isFinalizedOnServer = true;
-                localStorage.setItem(`skyplan_finalized_${flightId}`, 'true');
-            }
-        }
-    } catch (e) {
-        console.warn('[Skyplan v2 Metadata Warning]', e);
-    }
-
-    // Immediate bail-out if v2 returned 422 (flight plan not generated by dispatch yet)
-    if (v2Status === 422) {
-        throw new Error(`OFP not generated by flight dispatch yet (HTTP 422).`);
-    }
-
-    // 2. Query v1 endpoint for PDF payload
-    const v1Url = `https://kcskyplanapi.airastana.com/api/v1/flights/${flightId}/ofp`;
-    const v1Resp = await fetch(v1Url, { headers: { 'Authorization': `Bearer ${token}` } }).catch(() => null);
-
-    if (!v1Resp) {
-        const offlineData = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
-        if (offlineData) return offlineData;
-        throw new Error("Network request failed.");
-    }
-
-    if (v1Resp.status === 422) {
-        throw new Error(`OFP not generated by flight dispatch yet (HTTP 422).`);
-    }
-
-    if (!v1Resp.ok) {
-        const offlineData = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
-        if (offlineData) return offlineData;
-        throw new Error(`Skyplan error (HTTP ${v1Resp.status})`);
-    }
-
-    const v1Data = await v1Resp.json();
-    const rawPayload = v1Data.FileContent || v1Data.File || v1Data.fileContent || v1Data.file;
-
-    if (!rawPayload) {
-        throw new Error("No OFP document content returned by Skyplan.");
-    }
-
-    // Decompress ZIP or parse raw PDF
-    const pdfBytes = await extractPdfFromZipOrRaw(rawPayload);
-    if (!pdfBytes || pdfBytes.length < 500) {
-        throw new Error("Failed to extract valid PDF from Skyplan response.");
-    }
-
-    // Save PDF directly to EFB_PDF_DB for offline access
-    await savePdfToOfflineCache(flightId, flightNum, dateStr, pdfBytes, isFinalizedOnServer);
-
-    return { pdfBytes, isFinalized: isFinalizedOnServer, isServerFilled: false };
-}
-
-function promptForTokenModal() {
-    if (tokenModalPromise) return tokenModalPromise;
-
-    tokenModalPromise = new Promise((resolve) => {
-        const bodyHTML = `
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                <label style="font-size: 12px; font-weight: 600; color: var(--dim);">Paste New Skyplan Access Token</label>
-                <textarea id="modal-skyplan-token" placeholder='eyJhbGciOi...' 
-                    style="width: 100%; height: 120px; padding: 10px; border-radius: 8px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 13px; font-family: monospace; resize: vertical; word-break: break-all; outline: none;"></textarea>
-            </div>
-        `;
-
-        const finish = (resultToken) => {
-            tokenModalPromise = null;
-            resolve(resultToken);
-        };
-
-        if (typeof createModal === 'function') {
-            createModal({
-                title: 'Skyplan Token Expired',
-                icon: '🔑',
-                type: 'info',
-                confirmText: 'Save Token',
-                cancelText: 'Disregard',
-                centered: true,
-                compact: true,
-                maxWidth: '500px',
-                bodyHTML: bodyHTML,
-                onConfirm: async () => {
-                    const inputElem = document.getElementById('modal-skyplan-token');
-                    let rawToken = inputElem ? inputElem.value.trim() : '';
-
-                    // Automatically strip double quotes from beginning/end
-                    rawToken = rawToken.replace(/^"+|"+$/g, '').trim();
-
-                    if (rawToken) {
-                        localStorage.setItem('skyplan_token', rawToken);
-                        const settingInput = document.getElementById('skyplan_token');
-                        if (settingInput) settingInput.value = rawToken;
-                        if (typeof showToast === 'function') showToast('Skyplan token updated!', 'success');
-                        finish(rawToken);
-                    } else {
-                        finish(null);
-                    }
-                },
-                onCancel: () => {
-                    finish(null);
-                }
+                return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr);
             });
-        } else {
-            let rawToken = prompt("Skyplan Access Token expired. Please paste new token:");
-            if (rawToken) {
-                rawToken = rawToken.trim().replace(/^"+|"+$/g, '').trim();
-                localStorage.setItem('skyplan_token', rawToken);
-                finish(rawToken);
-            } else {
-                finish(null);
+
+            if (localMatch?.id && typeof updateOFP === 'function') {
+                // Update existing record in EFB_PDF_DB
+                const updates = isFinalized 
+                    ? { loggedPdfData: blob, finalized: true } 
+                    : { data: blob };
+                await updateOFP(localMatch.id, updates);
+            } else if (typeof saveOFPToDB === 'function') {
+                // Create a new un-activated record in EFB_PDF_DB for offline viewing
+                await saveOFPToDB(blob, {
+                    flight: flightNum || 'N/A',
+                    date: dateStr || 'N/A',
+                    externalFlightId: flightId,
+                    finalized: isFinalized
+                }, false);
+            }
+        } catch (e) {
+            console.warn("[EFB_PDF_DB Cache] Write warning:", e);
+        }
+    }
+
+    async function getPdfFromOfflineCache(flightId, flightNum, dateStr) {
+        try {
+            const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
+            const fDigits = String(flightNum || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+            const fDateStr = String(dateStr || '').replace(/[-/]/g, '');
+
+            const localMatch = cachedOFPs.find(o => {
+                if (!o) return false;
+                const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || o.id || '');
+                if (flightId && oExtId && String(flightId) === oExtId) return true;
+
+                const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+                const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
+
+                return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr);
+            });
+
+            if (localMatch) {
+                // Check loggedPdfData (finalized) first, then fallback to data (raw vector PDF)
+                const targetBlob = localMatch.loggedPdfData || localMatch.data;
+                if (targetBlob && targetBlob.size > 500) {
+                    const arrBuf = await targetBlob.arrayBuffer();
+                    return { 
+                        pdfBytes: new Uint8Array(arrBuf), 
+                        isFinalized: Boolean(localMatch.finalized), 
+                        isCached: true 
+                    };
+                }
+            }
+        } catch (e) {
+            console.warn("[EFB_PDF_DB Cache] Read warning:", e);
+        }
+        return null;
+    }
+
+    async function cleanupOldOfflineOFPs(retentionDays = 7) {
+        try {
+            // Fetch all cached OFPs from EFB_PDF_DB
+            const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
+            if (!cachedOFPs || cachedOFPs.length === 0) return;
+
+            const activeId = localStorage.getItem('activeOFPId');
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+
+            for (const ofp of cachedOFPs) {
+                // Never purge the currently active flight
+                if (activeId && String(ofp.id) === String(activeId)) continue;
+
+                // Determine the flight date or record creation date
+                const dateVal = ofp.date || ofp.flightDate || ofp.uploadTime;
+                if (!dateVal) continue;
+
+                const ofpDate = new Date(dateVal);
+                
+                // If the flight date is older than retention threshold (7 days ago)
+                if (!isNaN(ofpDate.getTime()) && ofpDate < cutoffDate) {
+                    
+                    // Delete record & PDF blob from EFB_PDF_DB
+                    if (typeof deleteOFPFromDB === 'function') {
+                        await deleteOFPFromDB(ofp.id);
+                    }
+
+                    // Clean up associated localStorage flags
+                    const extId = ofp.externalFlightId || ofp.flightId;
+                    if (extId) {
+                        localStorage.removeItem(`skyplan_finalized_${extId}`);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("Failed to clean up old OFPs:", e);
+        }
+    }
+
+    async function extractPdfFromZipOrRaw(inputData) {
+        if (!inputData) return null;
+        let bytes = null;
+
+        if (typeof inputData === 'string') {
+            const cleanB64 = inputData.replace(/^data:application\/[a-z-]+;base64,/, '').trim();
+            if (cleanB64.length < 50) return null;
+            try {
+                const binaryString = atob(cleanB64);
+                bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+            } catch (e) {
+                return null;
+            }
+        } else if (inputData instanceof ArrayBuffer) {
+            bytes = new Uint8Array(inputData);
+        } else if (inputData instanceof Uint8Array) {
+            bytes = inputData;
+        }
+
+        if (!bytes || bytes.length < 50) return null;
+
+        // A. Check for ZIP Magic Bytes: PK\x03\x04 (0x50, 0x4B, 0x03, 0x04)
+        const isZip = (bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04);
+
+        if (isZip && typeof JSZip !== 'undefined') {
+            try {
+                const zip = await JSZip.loadAsync(bytes);
+                const pdfEntry = Object.values(zip.files).find(f => !f.dir && f.name.toLowerCase().endsWith('.pdf'));
+                if (pdfEntry) {
+                    return await pdfEntry.async('uint8array');
+                }
+            } catch (err) {
+                console.warn("[ZIP Unpacker Warning]", err);
             }
         }
-    });
 
-    return tokenModalPromise;
-}
-
-window.getValidSkyplanToken = async function() {
-    let token = localStorage.getItem('skyplan_token');
-    if (token) {
-        token = token.trim().replace(/^"+|"+$/g, '').trim();
-        localStorage.setItem('skyplan_token', token);
-    }
-
-    // 1. Missing Token -> Open Modal directly
-    if (!token) {
-        return await promptForTokenModal();
-    }
-
-    // 2. Invalid JWT Format -> Open Modal directly
-    const decoded = typeof decodeJWT === 'function' ? decodeJWT(token) : null;
-    if (!decoded || typeof decoded.exp !== 'number') {
-        return await promptForTokenModal();
-    }
-
-    // 3. Check Expiration (with 5-minute buffer)
-    const now = Math.floor(Date.now() / 1000);
-    if (decoded.exp <= now + 300) {
-        console.warn("Skyplan token expired. Requesting new token...");
-        // Bypasses fetch() to avoid ERR_NAME_NOT_RESOLVED browser console noise
-        return await promptForTokenModal();
-    }
-
-    // 4. Token is valid -> Return token immediately
-    return token;
-};
-
-window.loadAssignedFlights = async function(isManualSearch = false, forceOnlineSync = false) {
-    const container = document.getElementById('assigned-flights-container');
-    const badgeEl = document.getElementById('assigned-cache-badge');
-    if (!container) return;
-
-    const cacheKey = 'assigned_flights_cache';
-    const cacheTimeKey = 'assigned_flights_cache_time';
-
-    const renderTable = async (flights, isCached = false, lastSyncTime = '') => {
-        if (badgeEl) {
-            if (isCached) {
-                badgeEl.style.display = 'inline-block';
-                badgeEl.textContent = `OFFLINE SINCE: ${lastSyncTime ? '(' + lastSyncTime + ')' : ''}`;
-            } else {
-                badgeEl.style.display = 'none';
+        // B. Check for PDF Magic Bytes: %PDF- (0x25, 0x50, 0x44, 0x46)
+        let pdfStart = -1;
+        for (let i = 0; i < Math.min(bytes.length - 4, 2048); i++) {
+            if (bytes[i] === 0x25 && bytes[i+1] === 0x50 && bytes[i+2] === 0x44 && bytes[i+3] === 0x46) {
+                pdfStart = i;
+                break;
             }
         }
 
-        if (!flights || flights.length === 0) {
-            container.innerHTML = '<div style="color: var(--dim); text-align: center; padding: 40px; font-family: sans-serif;">No assigned flights found for the selected period.</div>';
-            return;
+        if (pdfStart !== -1) {
+            return bytes.subarray(pdfStart);
         }
 
-        // Fetch local active & finalized OFPs from IndexedDB/cache
-        const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
+        return null;
+    }
+
+    async function getLocalFinalizedPdfBlob(flightId, flightNum, dateStr) {
+        try {
+            const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
+            const fDigits = String(flightNum || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+            const fDateStr = String(dateStr || '').replace(/[-/]/g, '');
+
+            const localMatch = cachedOFPs.find(o => {
+                if (!o || !o.loggedPdfData) return false;
+                
+                const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || o.id || '');
+                if (flightId && oExtId && String(flightId) === oExtId) return true;
+
+                const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+                const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
+
+                return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr);
+            });
+
+            if (localMatch && localMatch.loggedPdfData) {
+                if (localMatch.loggedPdfData instanceof Blob) {
+                    return localMatch.loggedPdfData;
+                }
+                const buf = localMatch.loggedPdfData instanceof ArrayBuffer 
+                    ? localMatch.loggedPdfData 
+                    : new Uint8Array(localMatch.loggedPdfData);
+                return new Blob([buf], { type: 'application/pdf' });
+            }
+        } catch (e) {
+            console.warn("[Local PDF Lookup] Warning:", e);
+        }
+        return null;
+    }
+
+    async function preloadAssignedOFPs(flights, token) {
+        if (!navigator.onLine || !token || !Array.isArray(flights) || flights.length === 0) return;
+
+        // 1. Run automatic cleanup to delete OFPs older than 7 days
+        await cleanupOldOfflineOFPs(7);
 
         const now = new Date();
-        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-        let html = `
-            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
-                <thead style="background: var(--panel); position: sticky; top: 0; z-index: 10;">
-                    <tr>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Date</th>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Flight</th>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Routing</th>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">STD</th>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">STA</th>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Block</th>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Aircraft</th>
-                        <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent); text-align: right;">Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-        `;
-
-        flights.forEach(f => {
-            const dateStr = f.StdLt ? f.StdLt.split('T')[0] : 'Unknown';
+        // 2. Pre-cache eligible assigned flights (< 36 hours in future)
+        for (const f of flights) {
+            if (!f.ID) continue;
+            const flightId = f.ID;
             const flightNum = `${f.CarrierCode}${f.FlightNumber}`;
-            const routing = `${f.DepartureStationIcaoCode || f.DepartureStationCode} ➔ ${f.ArrivalStationIcaoCode || f.ArrivalStationCode}`;
-            
-            const stdStr = f.StdLt ? f.StdLt.split('T')[1].substring(0, 5) : '--:--';
-            const staStr = f.StaLt ? f.StaLt.split('T')[1].substring(0, 5) : '--:--';
-            
-            const aircraft = f.RegistrationNumber || f.AircraftDescription || 'TBA';
+            const dateStr = f.StdLt ? f.StdLt.split('T')[0] : '';
 
-            // Calculate Block Time
-            let blockTime = '--:--';
-            if (f.DurationMinutes) {
-                const hrs = Math.floor(f.DurationMinutes / 60);
-                const mins = f.DurationMinutes % 60;
-                blockTime = `${hrs}h ${mins.toString().padStart(2, '0')}m`;
-            } else if (f.Std && f.Sta) {
-                const diffMs = new Date(f.Sta) - new Date(f.Std);
-                if (diffMs > 0) {
-                    const hrs = Math.floor(diffMs / 3600000);
-                    const mins = Math.floor((diffMs % 3600000) / 60000);
-                    blockTime = `${hrs}h ${mins.toString().padStart(2, '0')}m`;
-                }
+            const stdDate = f.StdLt ? new Date(f.StdLt) : null;
+            const hoursUntilStd = stdDate ? (stdDate - now) / (1000 * 60 * 60) : 0;
+
+            if (hoursUntilStd > 36) {
+                continue;
             }
 
-            // Detect finalization state
-            const isFinalized = typeof isFlightFinalized === 'function' ? isFlightFinalized(f, cachedOFPs) : false;
+            try {
+                const existing = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
+                if (!existing) {
+                    await fetchSkyplanOFPBytes(flightId, token, flightNum, dateStr);
+                }
+            } catch (e) {
+                console.info(`${flightNum}: ${e.message}`);
+            }
+        }
+    }
 
-            // Row styling for current date (uses --success color)
-            const isToday = (dateStr === todayStr);
-            const todayRowHighlight = isToday ? 'border-left: 4px solid var(--success); background: rgba(50, 215, 75, 0.08);' : '';
+    async function fetchSkyplanOFPBytes(flightId, token, flightNum = '', dateStr = '') {
+        // 0. Offline Check
+        if (!navigator.onLine) {
+            const offlineData = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
+            if (offlineData) return offlineData;
+            throw new Error(`Device offline. ${flightNum || 'Flight'} has not been cached for offline use yet.`);
+        }
 
-            // ── UNIFORM BUTTON & BADGE STYLING ──
-            const btnBaseStyle = `height: 30px; padding: 0 12px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 4px; border-radius: 6px; box-sizing: border-box; white-space: nowrap; transition: all 0.2s; cursor: pointer;`;
+        // 1. Query v2 for finalization metadata
+        let isFinalizedOnServer = false;
+        let v2Status = null;
 
-            const actionHtml = `
-                <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
-                    <button onclick="previewOFPFromSkyplan('${f.ID}', '${flightNum}', '${dateStr}', '${f.RegistrationNumber || ''}')" 
-                            style="${btnBaseStyle} background: var(--input); color: var(--text); border: 1px solid var(--border);">
-                        Preview / Activate
-                    </button>
+        try {
+            const v2Resp = await fetch(`https://kcskyplanapi.airastana.com/api/v2/flights/${flightId}/ofp`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            v2Status = v2Resp.status;
+
+            if (v2Resp.ok) {
+                const v2Data = await v2Resp.json();
+                const filledObj = v2Data['Filled Document'] || v2Data.FilledDocument;
+                if (filledObj && typeof filledObj === 'object') {
+                    isFinalizedOnServer = true;
+                    localStorage.setItem(`skyplan_finalized_${flightId}`, 'true');
+                }
+            }
+        } catch (e) {
+            console.warn('[Skyplan v2 Metadata Warning]', e);
+        }
+
+        // Immediate bail-out if v2 returned 422 (flight plan not generated by dispatch yet)
+        if (v2Status === 422) {
+            throw new Error(`OFP not generated by flight dispatch yet (HTTP 422).`);
+        }
+
+        // 2. Query v1 endpoint for PDF payload
+        const v1Url = `https://kcskyplanapi.airastana.com/api/v1/flights/${flightId}/ofp`;
+        const v1Resp = await fetch(v1Url, { headers: { 'Authorization': `Bearer ${token}` } }).catch(() => null);
+
+        if (!v1Resp) {
+            const offlineData = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
+            if (offlineData) return offlineData;
+            throw new Error("Network request failed.");
+        }
+
+        if (v1Resp.status === 422) {
+            throw new Error(`OFP not generated by flight dispatch yet (HTTP 422).`);
+        }
+
+        if (!v1Resp.ok) {
+            const offlineData = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
+            if (offlineData) return offlineData;
+            throw new Error(`Skyplan error (HTTP ${v1Resp.status})`);
+        }
+
+        const v1Data = await v1Resp.json();
+        const rawPayload = v1Data.FileContent || v1Data.File || v1Data.fileContent || v1Data.file;
+
+        if (!rawPayload) {
+            throw new Error("No OFP document content returned by Skyplan.");
+        }
+
+        // Decompress ZIP or parse raw PDF
+        const pdfBytes = await extractPdfFromZipOrRaw(rawPayload);
+        if (!pdfBytes || pdfBytes.length < 500) {
+            throw new Error("Failed to extract valid PDF from Skyplan response.");
+        }
+
+        // Save PDF directly to EFB_PDF_DB for offline access
+        await savePdfToOfflineCache(flightId, flightNum, dateStr, pdfBytes, isFinalizedOnServer);
+
+        return { pdfBytes, isFinalized: isFinalizedOnServer, isServerFilled: false };
+    }
+
+    function promptForTokenModal() {
+        if (tokenModalPromise) return tokenModalPromise;
+
+        tokenModalPromise = new Promise((resolve) => {
+            const bodyHTML = `
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <label style="font-size: 12px; font-weight: 600; color: var(--dim);">Paste New Skyplan Access Token</label>
+                    <textarea id="modal-skyplan-token" placeholder='eyJhbGciOi...' 
+                        style="width: 100%; height: 120px; padding: 10px; border-radius: 8px; background: var(--input); color: var(--text); border: 1px solid var(--border); font-size: 13px; font-family: monospace; resize: vertical; word-break: break-all; outline: none;"></textarea>
                 </div>
             `;
 
-            const aircraftClickable = (aircraft !== 'TBA' && aircraft !== '-')
-                ? `<span onclick="navigateToADDTab('${aircraft}')" style="color: var(--accent); text-decoration: underline; cursor: pointer; font-weight: 600;">${aircraft}</span>`
-                : `<span style="color: var(--dim);">${aircraft}</span>`;
+            const finish = (resultToken) => {
+                tokenModalPromise = null;
+                resolve(resultToken);
+            };
 
-            html += `
-                <tr class="assigned-flight-row" style="${todayRowHighlight}">
-                    <td style="padding: 14px 12px; ${isToday ? 'font-weight: bold; color: var(--success);' : 'color: var(--text);'}">${dateStr} ${isToday ? '★' : ''}</td>
-                    <td class="assigned-flight" style="padding: 14px 12px;">${flightNum}</td>
-                    <td style="padding: 14px 12px; color: var(--text); letter-spacing: 0.5px;">${routing}</td>
-                    <td class="assigned-time" style="padding: 14px 12px; color: var(--text);">${stdStr}</td>
-                    <td class="assigned-sta" style="padding: 14px 12px;">${staStr}</td>
-                    <td class="assigned-block" style="padding: 14px 12px;">${blockTime}</td>
-                    <td class="assigned-reg" style="padding: 14px 12px;">${aircraftClickable}</td>
-                    <td style="padding: 10px 12px; text-align: right;">${actionHtml}</td>
-                </tr>
-            `;
+            if (typeof createModal === 'function') {
+                createModal({
+                    title: 'Skyplan Token Expired',
+                    icon: '🔑',
+                    type: 'info',
+                    confirmText: 'Save Token',
+                    cancelText: 'Disregard',
+                    centered: true,
+                    compact: true,
+                    maxWidth: '500px',
+                    bodyHTML: bodyHTML,
+                    onConfirm: async () => {
+                        const inputElem = document.getElementById('modal-skyplan-token');
+                        let rawToken = inputElem ? inputElem.value.trim() : '';
+
+                        // Automatically strip double quotes from beginning/end
+                        rawToken = rawToken.replace(/^"+|"+$/g, '').trim();
+
+                        if (rawToken) {
+                            localStorage.setItem('skyplan_token', rawToken);
+                            const settingInput = document.getElementById('skyplan_token');
+                            if (settingInput) settingInput.value = rawToken;
+                            if (typeof showToast === 'function') showToast('Skyplan token updated!', 'success');
+                            finish(rawToken);
+                        } else {
+                            finish(null);
+                        }
+                    },
+                    onCancel: () => {
+                        finish(null);
+                    }
+                });
+            } else {
+                let rawToken = prompt("Skyplan Access Token expired. Please paste new token:");
+                if (rawToken) {
+                    rawToken = rawToken.trim().replace(/^"+|"+$/g, '').trim();
+                    localStorage.setItem('skyplan_token', rawToken);
+                    finish(rawToken);
+                } else {
+                    finish(null);
+                }
+            }
         });
 
-        html += `</tbody></table>`;
-        container.innerHTML = html;
+        return tokenModalPromise;
+    }
 
-        if (typeof filterAssignedFlightsTable === 'function') filterAssignedFlightsTable();
+    window.getValidSkyplanToken = async function() {
+        let token = localStorage.getItem('skyplan_token');
+        if (token) {
+            token = token.trim().replace(/^"+|"+$/g, '').trim();
+            localStorage.setItem('skyplan_token', token);
+        }
+
+        // 1. Missing Token -> Open Modal directly
+        if (!token) {
+            return await promptForTokenModal();
+        }
+
+        // 2. Invalid JWT Format -> Open Modal directly
+        const decoded = typeof decodeJWT === 'function' ? decodeJWT(token) : null;
+        if (!decoded || typeof decoded.exp !== 'number') {
+            return await promptForTokenModal();
+        }
+
+        // 3. Check Expiration (with 5-minute buffer)
+        const now = Math.floor(Date.now() / 1000);
+        if (decoded.exp <= now + 300) {
+            console.warn("Skyplan token expired. Requesting new token...");
+            // Bypasses fetch() to avoid ERR_NAME_NOT_RESOLVED browser console noise
+            return await promptForTokenModal();
+        }
+
+        // 4. Token is valid -> Return token immediately
+        return token;
     };
 
-    const getCachedFlights = () => {
-        try {
-            const raw = localStorage.getItem(cacheKey);
-            const rawTime = localStorage.getItem(cacheTimeKey) || '';
-            const flights = raw ? JSON.parse(raw) : null;
-            return { flights, lastSyncTime: rawTime };
-        } catch (e) {
-            return { flights: null, lastSyncTime: '' };
-        }
-    };
+    window.loadAssignedFlights = async function(isManualSearch = false, forceOnlineSync = false) {
+        const container = document.getElementById('assigned-flights-container');
+        const badgeEl = document.getElementById('assigned-cache-badge');
+        if (!container) return;
 
-    if (!navigator.onLine) {
-        const { flights, lastSyncTime } = getCachedFlights();
-        if (flights && flights.length > 0) {
-            await renderTable(flights, true, lastSyncTime);
-            return;
-        } else {
-            container.innerHTML = '<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">⚡ Offline: No cached flights available. Please connect online to sync roster.</div>';
-            return;
-        }
-    }
+        const cacheKey = 'assigned_flights_cache';
+        const cacheTimeKey = 'assigned_flights_cache_time';
 
-    const token = await getValidSkyplanToken().catch(() => null);
-    if (!token) {
-        const { flights, lastSyncTime } = getCachedFlights();
-        if (flights && flights.length > 0) {
-            await renderTable(flights, true, lastSyncTime);
-        } else {
-            container.innerHTML = '<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">⚠️ No Skyplan token found. Please add it in Settings.</div>';
-        }
-        return;
-    }
-
-    const fromInput = document.getElementById('assigned-date-from');
-    const toInput = document.getElementById('assigned-date-to');
-
-    let fromStr = fromInput?.value;
-    let toStr = toInput?.value;
-
-    if (!fromStr || !toStr || !isManualSearch) {
-        const today = new Date();
-        const fromDate = new Date(today);
-        fromDate.setDate(today.getDate() - 3);
-        const toDate = new Date(today);
-        toDate.setDate(today.getDate() + 3);
-
-        fromStr = fromDate.toISOString().slice(0, 10);
-        toStr = toDate.toISOString().slice(0, 10);
-
-        if (fromInput) fromInput.value = fromStr;
-        if (toInput) toInput.value = toStr;
-    }
-
-    container.innerHTML = `
-        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; gap: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; margin: 10px 0;">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: efbSpin 0.9s linear infinite;">
-                <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-            </svg>
-            <div style="font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: 0.3px;">Syncing roster with Skyplan...</div>
-            <div style="font-size: 12px; color: var(--dim);">Fetching latest flight schedules and status</div>
-            <style>
-                @keyframes efbSpin { 100% { transform: rotate(360deg); } }
-            </style>
-        </div>
-    `;
-
-    try {
-        let employeeId = null;
-        try {
-            const employee = decodeJWT(token);
-            employeeId = employee.employeeid;
-        } catch (e) {
-            console.warn('Failed to decode JWT for employee ID.');
-        }
-
-        if (!employeeId) {
-            const { flights, lastSyncTime } = getCachedFlights();
-            if (flights) {
-                await renderTable(flights, true, lastSyncTime);
-            } else {
-                container.innerHTML = '<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">⚠️ Could not find Employee ID in your token.</div>';
+        const renderTable = async (flights, isCached = false, lastSyncTime = '') => {
+            if (badgeEl) {
+                if (isCached) {
+                    badgeEl.style.display = 'inline-block';
+                    badgeEl.textContent = `OFFLINE SINCE: ${lastSyncTime ? '(' + lastSyncTime + ')' : ''}`;
+                } else {
+                    badgeEl.style.display = 'none';
+                }
             }
-            return;
-        }
 
-        const payload = {
-            EmployeeID: employeeId,
-            From: fromStr,
-            To: toStr
+            if (!flights || flights.length === 0) {
+                container.innerHTML = '<div style="color: var(--dim); text-align: center; padding: 40px; font-family: sans-serif;">No assigned flights found for the selected period.</div>';
+                return;
+            }
+
+            // Fetch local active & finalized OFPs from IndexedDB/cache
+            const cachedOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
+
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+            let html = `
+                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
+                    <thead style="background: var(--panel); position: sticky; top: 0; z-index: 10;">
+                        <tr>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Date</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Flight</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Routing</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">STD</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">STA</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Block</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent);">Aircraft</th>
+                            <th style="padding: 12px 15px; border-bottom: 1px solid var(--border); color: var(--accent); text-align: right;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            flights.forEach(f => {
+                const dateStr = f.StdLt ? f.StdLt.split('T')[0] : 'Unknown';
+                const flightNum = `${f.CarrierCode}${f.FlightNumber}`;
+                const routing = `${f.DepartureStationIcaoCode || f.DepartureStationCode} ➔ ${f.ArrivalStationIcaoCode || f.ArrivalStationCode}`;
+                
+                const stdStr = f.StdLt ? f.StdLt.split('T')[1].substring(0, 5) : '--:--';
+                const staStr = f.StaLt ? f.StaLt.split('T')[1].substring(0, 5) : '--:--';
+                
+                const aircraft = f.RegistrationNumber || f.AircraftDescription || 'TBA';
+
+                // Calculate Block Time
+                let blockTime = '--:--';
+                if (f.DurationMinutes) {
+                    const hrs = Math.floor(f.DurationMinutes / 60);
+                    const mins = f.DurationMinutes % 60;
+                    blockTime = `${hrs}h ${mins.toString().padStart(2, '0')}m`;
+                } else if (f.Std && f.Sta) {
+                    const diffMs = new Date(f.Sta) - new Date(f.Std);
+                    if (diffMs > 0) {
+                        const hrs = Math.floor(diffMs / 3600000);
+                        const mins = Math.floor((diffMs % 3600000) / 60000);
+                        blockTime = `${hrs}h ${mins.toString().padStart(2, '0')}m`;
+                    }
+                }
+
+                // Detect finalization state
+                const isFinalized = typeof isFlightFinalized === 'function' ? isFlightFinalized(f, cachedOFPs) : false;
+
+                // Row styling for current date (uses --success color)
+                const isToday = (dateStr === todayStr);
+                const todayRowHighlight = isToday ? 'border-left: 4px solid var(--success); background: rgba(50, 215, 75, 0.08);' : '';
+
+                // ── UNIFORM BUTTON & BADGE STYLING ──
+                const btnBaseStyle = `height: 30px; padding: 0 12px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 4px; border-radius: 6px; box-sizing: border-box; white-space: nowrap; transition: all 0.2s; cursor: pointer;`;
+
+                const actionHtml = `
+                    <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
+                        <button onclick="previewOFPFromSkyplan('${f.ID}', '${flightNum}', '${dateStr}', '${f.RegistrationNumber || ''}')" 
+                                style="${btnBaseStyle} background: var(--input); color: var(--text); border: 1px solid var(--border);">
+                            Preview / Activate
+                        </button>
+                    </div>
+                `;
+
+                const aircraftClickable = (aircraft !== 'TBA' && aircraft !== '-')
+                    ? `<span onclick="navigateToADDTab('${aircraft}')" style="color: var(--accent); text-decoration: underline; cursor: pointer; font-weight: 600;">${aircraft}</span>`
+                    : `<span style="color: var(--dim);">${aircraft}</span>`;
+
+                html += `
+                    <tr class="assigned-flight-row" style="${todayRowHighlight}">
+                        <td style="padding: 14px 12px; ${isToday ? 'font-weight: bold; color: var(--success);' : 'color: var(--text);'}">${dateStr} ${isToday ? '★' : ''}</td>
+                        <td class="assigned-flight" style="padding: 14px 12px;">${flightNum}</td>
+                        <td style="padding: 14px 12px; color: var(--text); letter-spacing: 0.5px;">${routing}</td>
+                        <td class="assigned-time" style="padding: 14px 12px; color: var(--text);">${stdStr}</td>
+                        <td class="assigned-sta" style="padding: 14px 12px;">${staStr}</td>
+                        <td class="assigned-block" style="padding: 14px 12px;">${blockTime}</td>
+                        <td class="assigned-reg" style="padding: 14px 12px;">${aircraftClickable}</td>
+                        <td style="padding: 10px 12px; text-align: right;">${actionHtml}</td>
+                    </tr>
+                `;
+            });
+
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+
+            if (typeof filterAssignedFlightsTable === 'function') filterAssignedFlightsTable();
         };
 
-        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/crew-roster-flights-details', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify(payload)
-        }).catch(() => null);
+        const getCachedFlights = () => {
+            try {
+                const raw = localStorage.getItem(cacheKey);
+                const rawTime = localStorage.getItem(cacheTimeKey) || '';
+                const flights = raw ? JSON.parse(raw) : null;
+                return { flights, lastSyncTime: rawTime };
+            } catch (e) {
+                return { flights: null, lastSyncTime: '' };
+            }
+        };
 
-        if (!resp || !resp.ok) {
+        if (!navigator.onLine) {
             const { flights, lastSyncTime } = getCachedFlights();
             if (flights && flights.length > 0) {
                 await renderTable(flights, true, lastSyncTime);
-                if (typeof showToast === 'function') showToast('OFFLINE: Displaying cached roster.', 'info');
+                return;
+            } else {
+                container.innerHTML = '<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">⚡ Offline: No cached flights available. Please connect online to sync roster.</div>';
                 return;
             }
-            throw new Error(resp ? `API Error: ${resp.status}` : "Network connection error");
         }
-
-        const data = await resp.json();
-        let flights = data.Flights || [];
-
-        flights = flights.filter(f => ['KC', 'AYN', 'FS'].includes(f.CarrierCode));
-        flights.sort((a, b) => new Date(a.StdLt) - new Date(b.StdLt));
-
-        const syncTimeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        try {
-            localStorage.setItem(cacheKey, JSON.stringify(flights));
-            localStorage.setItem(cacheTimeKey, syncTimeString);
-        } catch (e) {
-            console.warn("Could not write roster cache:", e);
-        }
-
-        await renderTable(flights, false);
-        // ── TRIGGER BACKGROUND OFP PRE-CACHING ──
-        // Automatically stores all OFP PDFs into EFB_PDF_DB so preview works offline
-        setTimeout(() => {
-            preloadAssignedOFPs(flights, token);
-        }, 500);
-
-    } catch (e) {
-        console.error("Schedule fetch failed:", e);
-        const { flights, lastSyncTime } = getCachedFlights();
-        if (flights && flights.length > 0) {
-            await renderTable(flights, true, lastSyncTime);
-        } else {
-            container.innerHTML = `<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">Error: ${e.message}</div>`;
-        }
-    }
-};
-
-function isFlightFinalized(f, cachedOFPs = []) {
-    if (!f) return false;
-    const flightIdStr = String(f.ID || f.id || f.FlightID || f.FlightId || '');
-
-    if (flightIdStr && localStorage.getItem(`skyplan_finalized_${flightIdStr}`) === 'true') {
-        return true;
-    }
-
-    // Direct inspection of server object properties
-    if (f['Filled Document'] || f.FilledDocument || f.isFinalized || f.IsFinalized || f.HasFilledDocument) {
-        return true;
-    }
-
-    const fDigits = String(f.FlightNumber || f.flightNumber || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-    const fDateStr = String(f.StdLt || f.Std || f.Date || f.flightDate || '').split('T')[0].replace(/[-/]/g, '');
-
-    const localMatch = cachedOFPs.find(o => {
-        if (!o) return false;
-        const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || '');
-        if (flightIdStr && oExtId && flightIdStr === oExtId) return o.finalized === true;
-
-        const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-        const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
-
-        return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr && o.finalized === true);
-    });
-
-    return Boolean(localMatch);
-}
-
-async function fetchCrewInfo(flightId, token) {
-    try {
-        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ FlightIDs: [flightId] })
-        });
-
-        if (!resp.ok) throw new Error(`Status ${resp.status}`);
-
-        const data = await resp.json();
-        const flightData = data.FlightsCrewMembers?.[0];
-
-        if (!flightData || !Array.isArray(flightData.CrewMembers)) {
-            window.crewData = [];
-            return null;
-        }
-
-        const extractEmpId = m => m.EmployeeID || m.EmployeeId || m.StaffNo || m.StaffNumber || m.Code || m.Id || '';
-
-        const members = flightData.CrewMembers;
-        const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
-        const flightDeck = members.filter(m => flightDeckPositions.includes(m.Position));
-        const cabinCrew = members.filter(m => !flightDeckPositions.includes(m.Position));
-
-        // Format crew list with EmployeeID preserved
-        const formattedCrew = [...flightDeck, ...cabinCrew].map(m => ({
-            EmployeeID: extractEmpId(m),
-            FirstName: m.FirstName || '',
-            LastName: m.LastName || '',
-            Position: m.Position || ''
-        }));
-
-        // Cache in memory
-        window.crewData = formattedCrew;
-
-        // Permanent save to active flight storage
-        const activeId = localStorage.getItem('activeOFPId');
-        if (activeId && typeof saveOFPUserData === 'function') {
-            await saveOFPUserData(Number(activeId), { crewData: formattedCrew });
-        }
-
-        return { crewData: formattedCrew };
-    } catch (e) {
-        console.error('[Crew Fetch] Error:', e);
-        return null;
-    }
-}
-
-async function uploadOFPToSkyplan(pdfBytes, filename) {
-    let extId = window.currentExternalFlightId || localStorage.getItem('activeExternalFlightId');
-    
-    if (!extId) {
-        const fltRaw = document.getElementById('j-flt')?.value || document.getElementById('view-flt')?.innerText || '';
-        const dateRaw = document.getElementById('j-date')?.value || document.getElementById('view-date')?.innerText || '';
-        const depRaw = document.getElementById('j-dep')?.value || document.getElementById('view-dep')?.innerText || '';
-        
-        if (fltRaw && dateRaw && depRaw && typeof fetchFlightIdFromRoster === 'function') {
-            extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
-            if (extId) window.currentExternalFlightId = extId;
-        }
-    }
-
-    if (!extId) {
-        throw new Error("Skyplan Flight ID missing. Please ensure the flight was synced from Skyplan roster.");
-    }
-
-    const token = typeof getValidSkyplanToken === 'function' ? await getValidSkyplanToken() : null;
-    if (!token) {
-        throw new Error("Skyplan token missing or expired. Please log in again.");
-    }
-
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-    const formData = new FormData();
-    formData.append('file', blob, filename);
-
-    const uploadUrl = `https://kcskyplanapi.airastana.com/api/v1/flights/${extId}/ofp/upload`;
-
-    const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData
-    });
-
-    if (response.status === 204 || response.ok) {
-        // Mark flight as finalized in persistent local storage
-        localStorage.setItem(`skyplan_finalized_${extId}`, 'true');
-        return true;
-    } else {
-        const errText = await response.text().catch(() => '');
-        throw new Error(`Upload failed (HTTP ${response.status}): ${errText || 'Server Error'}`);
-    }
-}
-
-window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailNumber) {
-    try {
-        if (typeof showToast === 'function') showToast("Loading..", "info");
 
         const token = await getValidSkyplanToken().catch(() => null);
-        const { pdfBytes, isFinalized } = await fetchSkyplanOFPBytes(flightId, token, flightNum, dateStr);
-
-        const safeDate = dateStr ? dateStr.replace(/-/g, '') : 'UnknownDate';
-        const safeFlight = flightNum ? flightNum.replace(/\s+/g, '') : 'UnknownFlight';
-
-        if (isFinalized) {
-            localStorage.setItem(`skyplan_finalized_${flightId}`, 'true');
-            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-            const fileName = `${safeFlight}_${safeDate}_FINALIZED.pdf`;
-            
-            if (typeof downloadBlob === 'function') downloadBlob(blob, fileName);
-            if (typeof showToast === 'function') showToast("This OFP is finalized on Cloud.", "warning");
+        if (!token) {
+            const { flights, lastSyncTime } = getCachedFlights();
+            if (flights && flights.length > 0) {
+                await renderTable(flights, true, lastSyncTime);
+            } else {
+                container.innerHTML = '<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">⚠️ No Skyplan token found. Please add it in Settings.</div>';
+            }
             return;
         }
 
-        const fileName = `${safeFlight}_${safeDate}_OFP.pdf`;
-        const file = new File([pdfBytes], fileName, { type: 'application/pdf' });
+        const fromInput = document.getElementById('assigned-date-from');
+        const toInput = document.getElementById('assigned-date-to');
 
-        if (typeof runAnalysis === 'function') {
-            // Run analysis (false = don't activate yet during initial parse)
-            const analysisResult = await runAnalysis(file, false);
-            
-            // Extract the generated IndexedDB ID for this OFP
-            const newId = (analysisResult && typeof analysisResult === 'object') 
-                ? (analysisResult.id || analysisResult.recordId) 
-                : localStorage.getItem('activeOFPId');
+        let fromStr = fromInput?.value;
+        let toStr = toInput?.value;
 
-            // ── CALL YOUR EXISTING ACTIVATE FUNCTION ──
-            if (newId && typeof window.activateOFP === 'function') {
-                await window.activateOFP(Number(newId), true);
-            }
-        } else {
-            alert("Error: Core PDF analyzer is missing.");
+        if (!fromStr || !toStr || !isManualSearch) {
+            const today = new Date();
+            const fromDate = new Date(today);
+            fromDate.setDate(today.getDate() - 3);
+            const toDate = new Date(today);
+            toDate.setDate(today.getDate() + 3);
+
+            fromStr = fromDate.toISOString().slice(0, 10);
+            toStr = toDate.toISOString().slice(0, 10);
+
+            if (fromInput) fromInput.value = fromStr;
+            if (toInput) toInput.value = toStr;
         }
 
-        const aircraftReg = (tailNumber && tailNumber !== 'TBA') 
-            ? tailNumber 
-            : (document.getElementById('view-reg')?.innerText || '').trim();
-
-        if (aircraftReg && aircraftReg !== '-' && aircraftReg !== 'TBA' && typeof window.fetchAircraftDefects === 'function') {
-            window.fetchAircraftDefects(aircraftReg);
-        }
-
-    } catch (error) {
-        showToast("Failed to import OFP:", "error");
-        alert("Error syncing OFP: " + error.message);
-    }
-};
-
-window.previewOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailNumber = '') {
-    try {
-        if (typeof showToast === 'function') showToast("Loading OFP", "info");
-
-        let pdfBlob = null;
-        let isFinalized = false;
-        let isCached = false;
-
-        // 1. Try offline read directly from EFB_PDF_DB if device is offline
-        if (!navigator.onLine) {
-            const cached = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
-            if (cached && cached.pdfBytes) {
-                pdfBlob = new Blob([cached.pdfBytes], { type: 'application/pdf' });
-                isFinalized = cached.isFinalized;
-                isCached = true;
-            }
-        }
-
-        // 2. Online or fallback: fetch from Skyplan (which updates EFB_PDF_DB)
-        if (!pdfBlob) {
-            const token = await getValidSkyplanToken().catch(() => null);
-            const result = await fetchSkyplanOFPBytes(flightId, token, flightNum, dateStr);
-            isFinalized = result.isFinalized;
-            isCached = Boolean(result.isCached || !navigator.onLine);
-            pdfBlob = new Blob([result.pdfBytes], { type: 'application/pdf' });
-        }
-
-        if (!pdfBlob || pdfBlob.size < 500) {
-            throw new Error("Unable to generate PDF preview: Document data is empty.");
-        }
-
-        const pdfUrl = URL.createObjectURL(pdfBlob);
-        
-        let statusTag = '';
-        if (isCached) {
-            statusTag = ' <span style="color: #ffb300; font-size: 11px; font-weight: bold; margin-left: 8px;">⚡Offline Cache</span>';
-        } else if (isFinalized) {
-            statusTag = ' <span style="color: var(--success, #32d74b); font-size: 11px; font-weight: bold; margin-left: 8px;">✔ (Finalized)</span>';
-        }
-
-        const bodyHTML = `
-            <div style="width: 100%; height: 75vh; position: relative; background: var(--bg, #000); border-radius: 8px; overflow: hidden;">
-                <object data="${pdfUrl}" type="application/pdf" style="width: 100%; height: 100%; border: none;">
-                    <iframe src="${pdfUrl}" style="width: 100%; height: 100%; border: none;"></iframe>
-                </object>
+        container.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; gap: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; margin: 10px 0;">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: efbSpin 0.9s linear infinite;">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                </svg>
+                <div style="font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: 0.3px;">Syncing roster with Skyplan...</div>
+                <div style="font-size: 12px; color: var(--dim);">Fetching latest flight schedules and status</div>
+                <style>
+                    @keyframes efbSpin { 100% { transform: rotate(360deg); } }
+                </style>
             </div>
         `;
 
-        // Configure Modal Action Buttons
-        const modalConfig = {
-            title: `${flightNum || 'FLT'} (${dateStr || ''})${statusTag}`,
-            bodyHTML: bodyHTML,
-            maxWidth: '92%',
-            compact: true
-        };
+        try {
+            let employeeId = null;
+            try {
+                const employee = decodeJWT(token);
+                employeeId = employee.employeeid;
+            } catch (e) {
+                console.warn('Failed to decode JWT for employee ID.');
+            }
 
-        if (isFinalized) {
-            modalConfig.confirmText = 'Close';
-            modalConfig.cancelText = 'Open Fullscreen';
-            modalConfig.onCancel = () => window.open(pdfUrl, '_blank');
-        } else {
-            modalConfig.confirmText = 'Activate OFP';
-            modalConfig.cancelText = 'Close';
-            modalConfig.onConfirm = () => {
-                if (typeof importOFPFromSkyplan === 'function') {
-                    importOFPFromSkyplan(flightId, flightNum, dateStr, tailNumber);
+            if (!employeeId) {
+                const { flights, lastSyncTime } = getCachedFlights();
+                if (flights) {
+                    await renderTable(flights, true, lastSyncTime);
+                } else {
+                    container.innerHTML = '<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">⚠️ Could not find Employee ID in your token.</div>';
                 }
+                return;
+            }
+
+            const payload = {
+                EmployeeID: employeeId,
+                From: fromStr,
+                To: toStr
             };
+
+            const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/crew-roster-flights-details', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(payload)
+            }).catch(() => null);
+
+            if (!resp || !resp.ok) {
+                const { flights, lastSyncTime } = getCachedFlights();
+                if (flights && flights.length > 0) {
+                    await renderTable(flights, true, lastSyncTime);
+                    if (typeof showToast === 'function') showToast('OFFLINE: Displaying cached roster.', 'info');
+                    return;
+                }
+                throw new Error(resp ? `API Error: ${resp.status}` : "Network connection error");
+            }
+
+            const data = await resp.json();
+            let flights = data.Flights || [];
+
+            flights = flights.filter(f => ['KC', 'AYN', 'FS'].includes(f.CarrierCode));
+            flights.sort((a, b) => new Date(a.StdLt) - new Date(b.StdLt));
+
+            const syncTimeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            try {
+                localStorage.setItem(cacheKey, JSON.stringify(flights));
+                localStorage.setItem(cacheTimeKey, syncTimeString);
+            } catch (e) {
+                console.warn("Could not write roster cache:", e);
+            }
+
+            await renderTable(flights, false);
+            // ── TRIGGER BACKGROUND OFP PRE-CACHING ──
+            // Automatically stores all OFP PDFs into EFB_PDF_DB so preview works offline
+            setTimeout(() => {
+                preloadAssignedOFPs(flights, token);
+            }, 500);
+
+        } catch (e) {
+            console.error("Schedule fetch failed:", e);
+            const { flights, lastSyncTime } = getCachedFlights();
+            if (flights && flights.length > 0) {
+                await renderTable(flights, true, lastSyncTime);
+            } else {
+                container.innerHTML = `<div style="color: var(--error); text-align: center; padding: 40px; font-family: sans-serif;">Error: ${e.message}</div>`;
+            }
+        }
+    };
+
+    function isFlightFinalized(f, cachedOFPs = []) {
+        if (!f) return false;
+        const flightIdStr = String(f.ID || f.id || f.FlightID || f.FlightId || '');
+
+        if (flightIdStr && localStorage.getItem(`skyplan_finalized_${flightIdStr}`) === 'true') {
+            return true;
         }
 
-        createModal(modalConfig);
-    } catch (error) {
-        console.error("Preview failed:", error);
-        alert(error.message);
+        // Direct inspection of server object properties
+        if (f['Filled Document'] || f.FilledDocument || f.isFinalized || f.IsFinalized || f.HasFilledDocument) {
+            return true;
+        }
+
+        const fDigits = String(f.FlightNumber || f.flightNumber || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+        const fDateStr = String(f.StdLt || f.Std || f.Date || f.flightDate || '').split('T')[0].replace(/[-/]/g, '');
+
+        const localMatch = cachedOFPs.find(o => {
+            if (!o) return false;
+            const oExtId = String(o.externalFlightId || o.flightId || o.skyplanFlightId || o.extId || '');
+            if (flightIdStr && oExtId && flightIdStr === oExtId) return o.finalized === true;
+
+            const oDigits = String(o.flightNumber || o.flight || '').replace(/[^0-9]/g, '').replace(/^0+/, '');
+            const oDateStr = String(o.flightDate || o.date || '').replace(/[-/]/g, '');
+
+            return (fDigits && oDigits && fDigits === oDigits && fDateStr && oDateStr && fDateStr === oDateStr && o.finalized === true);
+        });
+
+        return Boolean(localMatch);
     }
-};
 
-window.filterAssignedFlightsTable = function() {
-    const query = (document.getElementById('assigned-search-text')?.value || '').toLowerCase().trim();
-    const rows = document.querySelectorAll('#assigned-flights-container tbody tr');
+    async function fetchCrewInfo(flightId, token) {
+        try {
+            const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ FlightIDs: [flightId] })
+            });
 
-    rows.forEach(row => {
-        const text = row.innerText.toLowerCase();
-        row.style.display = text.includes(query) ? '' : 'none';
-    });
-};
+            if (!resp.ok) throw new Error(`Status ${resp.status}`);
+
+            const data = await resp.json();
+            const flightData = data.FlightsCrewMembers?.[0];
+
+            if (!flightData || !Array.isArray(flightData.CrewMembers)) {
+                window.crewData = [];
+                if (typeof updateCrewDatalists === 'function') updateCrewDatalists();
+                return null;
+            }
+
+            const extractEmpId = m => m.EmployeeID || m.EmployeeId || m.StaffNo || m.StaffNumber || m.Code || m.Id || '';
+
+            const members = flightData.CrewMembers;
+            const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
+            const flightDeck = members.filter(m => flightDeckPositions.includes(m.Position));
+            const cabinCrew = members.filter(m => !flightDeckPositions.includes(m.Position));
+
+            const formattedCrew = [...flightDeck, ...cabinCrew].map(m => ({
+                EmployeeID: extractEmpId(m),
+                FirstName: m.FirstName || '',
+                LastName: m.LastName || '',
+                Position: m.Position || ''
+            }));
+
+            // Cache in memory
+            window.crewData = formattedCrew;
+
+            // Permanent save to active flight storage
+            try {
+                const activeId = localStorage.getItem('activeOFPId');
+                if (activeId && typeof saveOFPUserData === 'function') {
+                    await saveOFPUserData(Number(activeId), { crewData: formattedCrew });
+                }
+            } catch (storageErr) {
+                console.warn('[Crew Storage Warning]', storageErr);
+            }
+
+            // ── TRIGGER UI DROPDOWN REFRESH ──
+            if (typeof updateCrewDatalists === 'function') {
+                updateCrewDatalists();
+            }
+
+            return { crewData: formattedCrew };
+        } catch (e) {
+            console.error('[Crew Fetch] Error:', e);
+            return null;
+        }
+    }
+
+    async function uploadOFPToSkyplan(pdfBytes, filename) {
+        let extId = window.currentExternalFlightId || localStorage.getItem('activeExternalFlightId');
+        
+        if (!extId) {
+            const fltRaw = document.getElementById('j-flt')?.value || document.getElementById('view-flt')?.innerText || '';
+            const dateRaw = document.getElementById('j-date')?.value || document.getElementById('view-date')?.innerText || '';
+            const depRaw = document.getElementById('j-dep')?.value || document.getElementById('view-dep')?.innerText || '';
+            
+            if (fltRaw && dateRaw && depRaw && typeof fetchFlightIdFromRoster === 'function') {
+                extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
+                if (extId) window.currentExternalFlightId = extId;
+            }
+        }
+
+        if (!extId) {
+            throw new Error("Skyplan Flight ID missing. Please ensure the flight was synced from Skyplan roster.");
+        }
+
+        const token = typeof getValidSkyplanToken === 'function' ? await getValidSkyplanToken() : null;
+        if (!token) {
+            throw new Error("Skyplan token missing or expired. Please log in again.");
+        }
+
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const formData = new FormData();
+        formData.append('file', blob, filename);
+
+        const uploadUrl = `https://kcskyplanapi.airastana.com/api/v1/flights/${extId}/ofp/upload`;
+
+        const response = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+
+        if (response.status === 204 || response.ok) {
+            // Mark flight as finalized in persistent local storage
+            localStorage.setItem(`skyplan_finalized_${extId}`, 'true');
+            return true;
+        } else {
+            const errText = await response.text().catch(() => '');
+            throw new Error(`Upload failed (HTTP ${response.status}): ${errText || 'Server Error'}`);
+        }
+    }
+
+    window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailNumber) {
+        try {
+            if (typeof showToast === 'function') showToast("Loading..", "info");
+
+            const token = await getValidSkyplanToken().catch(() => null);
+            const { pdfBytes, isFinalized } = await fetchSkyplanOFPBytes(flightId, token, flightNum, dateStr);
+
+            const safeDate = dateStr ? dateStr.replace(/-/g, '') : 'UnknownDate';
+            const safeFlight = flightNum ? flightNum.replace(/\s+/g, '') : 'UnknownFlight';
+
+            if (isFinalized) {
+                localStorage.setItem(`skyplan_finalized_${flightId}`, 'true');
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                const fileName = `${safeFlight}_${safeDate}_FINALIZED.pdf`;
+                
+                if (typeof downloadBlob === 'function') downloadBlob(blob, fileName);
+                if (typeof showToast === 'function') showToast("This OFP is finalized on Cloud.", "warning");
+                return;
+            }
+
+            const fileName = `${safeFlight}_${safeDate}_OFP.pdf`;
+            const file = new File([pdfBytes], fileName, { type: 'application/pdf' });
+
+            if (typeof runAnalysis === 'function') {
+                // Run analysis (false = don't activate yet during initial parse)
+                const analysisResult = await runAnalysis(file, false);
+                
+                // Extract the generated IndexedDB ID for this OFP
+                const newId = (analysisResult && typeof analysisResult === 'object') 
+                    ? (analysisResult.id || analysisResult.recordId) 
+                    : localStorage.getItem('activeOFPId');
+
+                // ── CALL YOUR EXISTING ACTIVATE FUNCTION ──
+                if (newId && typeof window.activateOFP === 'function') {
+                    await window.activateOFP(Number(newId), true);
+                }
+
+                // ── AUTO-FETCH CREW MEMBERS ON ACTIVATION ──
+                if (typeof updateCrewDatalists === 'function') updateCrewDatalists();
+            } else {
+                alert("Error: Core PDF analyzer is missing.");
+            }
+
+            const aircraftReg = (tailNumber && tailNumber !== 'TBA') 
+                ? tailNumber 
+                : (document.getElementById('view-reg')?.innerText || '').trim();
+
+            if (aircraftReg && aircraftReg !== '-' && aircraftReg !== 'TBA' && typeof window.fetchAircraftDefects === 'function') {
+                window.fetchAircraftDefects(aircraftReg);
+            }
+
+        } catch (error) {
+            showToast("Failed to import OFP:", "error");
+            alert("Error syncing OFP: " + error.message);
+        }
+    };
+
+    window.previewOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailNumber = '') {
+        try {
+            if (typeof showToast === 'function') showToast("Loading OFP", "info");
+
+            let pdfBlob = null;
+            let isFinalized = false;
+            let isCached = false;
+
+            // 1. Try offline read directly from EFB_PDF_DB if device is offline
+            if (!navigator.onLine) {
+                const cached = await getPdfFromOfflineCache(flightId, flightNum, dateStr);
+                if (cached && cached.pdfBytes) {
+                    pdfBlob = new Blob([cached.pdfBytes], { type: 'application/pdf' });
+                    isFinalized = cached.isFinalized;
+                    isCached = true;
+                }
+            }
+
+            // 2. Online or fallback: fetch from Skyplan (which updates EFB_PDF_DB)
+            if (!pdfBlob) {
+                const token = await getValidSkyplanToken().catch(() => null);
+                const result = await fetchSkyplanOFPBytes(flightId, token, flightNum, dateStr);
+                isFinalized = result.isFinalized;
+                isCached = Boolean(result.isCached || !navigator.onLine);
+                pdfBlob = new Blob([result.pdfBytes], { type: 'application/pdf' });
+            }
+
+            if (!pdfBlob || pdfBlob.size < 500) {
+                throw new Error("Unable to generate PDF preview: Document data is empty.");
+            }
+
+            const pdfUrl = URL.createObjectURL(pdfBlob);
+            
+            let statusTag = '';
+            if (isCached) {
+                statusTag = ' <span style="color: #ffb300; font-size: 11px; font-weight: bold; margin-left: 8px;">⚡Offline Cache</span>';
+            } else if (isFinalized) {
+                statusTag = ' <span style="color: var(--success, #32d74b); font-size: 11px; font-weight: bold; margin-left: 8px;">✔ (Finalized)</span>';
+            }
+
+            const bodyHTML = `
+                <div style="width: 100%; height: 75vh; position: relative; background: var(--bg, #000); border-radius: 8px; overflow: hidden;">
+                    <object data="${pdfUrl}" type="application/pdf" style="width: 100%; height: 100%; border: none;">
+                        <iframe src="${pdfUrl}" style="width: 100%; height: 100%; border: none;"></iframe>
+                    </object>
+                </div>
+            `;
+
+            // Configure Modal Action Buttons
+            const modalConfig = {
+                title: `${flightNum || 'FLT'} (${dateStr || ''})${statusTag}`,
+                bodyHTML: bodyHTML,
+                maxWidth: '92%',
+                compact: true
+            };
+
+            if (isFinalized) {
+                modalConfig.confirmText = 'Close';
+                modalConfig.cancelText = 'Open Fullscreen';
+                modalConfig.onCancel = () => window.open(pdfUrl, '_blank');
+            } else {
+                modalConfig.confirmText = 'Activate OFP';
+                modalConfig.cancelText = 'Close';
+                modalConfig.onConfirm = () => {
+                    if (typeof importOFPFromSkyplan === 'function') {
+                        importOFPFromSkyplan(flightId, flightNum, dateStr, tailNumber);
+                    }
+                };
+            }
+
+            createModal(modalConfig);
+        } catch (error) {
+            console.error("Preview failed:", error);
+            alert(error.message);
+        }
+    };
+
+    window.filterAssignedFlightsTable = function() {
+        const query = (document.getElementById('assigned-search-text')?.value || '').toLowerCase().trim();
+        const rows = document.querySelectorAll('#assigned-flights-container tbody tr');
+
+        rows.forEach(row => {
+            const text = row.innerText.toLowerCase();
+            row.style.display = text.includes(query) ? '' : 'none';
+        });
+    };
 
 })();
