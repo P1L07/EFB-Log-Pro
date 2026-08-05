@@ -3716,7 +3716,7 @@ const RELEASE_NOTES = {
 
         const activeSection = document.querySelector('.tool-section.active');
         const activeTabId = activeSection ? activeSection.id.replace('section-', '') : '';
-        const hiddenTabs = new Set(['journey', 'settings', 'assigned']);
+        const hiddenTabs = new Set(['journey', 'settings', 'assigned', 'add']);
 
         // Early exit: Hide overlay if an OFP is loaded or if on a system tab
         if (isOFPLoaded || hiddenTabs.has(activeTabId)) {
@@ -5158,7 +5158,9 @@ const RELEASE_NOTES = {
         return `${cleanFlight}_${cleanDate}${suffix ? '_' + suffix : ''}.pdf`;
     }
 
-    function showOFPFinalizeModal(pdfBytes, filename, flt, date) {
+    window.showOFPFinalizeModal = function(pdfBytes, filename, flt, date) {
+        window.lastGeneratedOFPPdfBytes = pdfBytes;
+
         const bodyHTML = `
             <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 5px;">
                 <button id="btn-ofp-skyplan" style="padding: 14px; background: var(--accent, #007aff); border: none; color: white; border-radius: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
@@ -5197,7 +5199,8 @@ const RELEASE_NOTES = {
             cancelBtn.onclick = () => closeModal();
         }
 
-        const executeActionThenReset = async (actionCallback) => {
+        // Inline action executor & post-send reset handler
+        const executeActionAndReset = async (actionCallback) => {
             closeModal();
             try {
                 await actionCallback();
@@ -5205,10 +5208,58 @@ const RELEASE_NOTES = {
                 console.error('[Action Error]', err);
                 alert(`Error: ${err?.message || err}`);
             }
+
+            // Post-send reset prompt
             setTimeout(async () => {
-                if (typeof resetOFPAfterSend === 'function') {
-                    await resetOFPAfterSend();
+                const userConfirmed = await createModal({
+                    title: 'OFP Generated',
+                    message: '<div style="text-align:center;">Click <strong>Close</strong> to wipe the active OFP.<br>Click <strong>Modify</strong> to keep editing.</div>',
+                    confirmText: 'Close',
+                    cancelText: 'Modify',
+                    icon: '✅',
+                    type: 'info',
+                    centered: true
+                });
+
+                if (!userConfirmed) {
+                    window.lastGeneratedOFPPdfBytes = null;
+                    return;
                 }
+
+                try {
+                    const activeId = localStorage.getItem('activeOFPId');
+                    if (activeId && window.lastGeneratedOFPPdfBytes) {
+                        const loggedBlob = (window.lastGeneratedOFPPdfBytes instanceof Blob)
+                            ? window.lastGeneratedOFPPdfBytes
+                            : new Blob([window.lastGeneratedOFPPdfBytes], { type: 'application/pdf' });
+
+                        if (typeof updateOFP === 'function') {
+                            await updateOFP(activeId, { 
+                                finalized: true, 
+                                isActive: false, 
+                                loggedPdfData: loggedBlob, 
+                                finalizedAt: new Date().toISOString() 
+                            });
+                        }
+                        if (typeof showToast !== 'undefined') showToast("OFP finalized and logged", 'success');
+                    }
+                } catch (error) {
+                    console.error("Failed to save logged OFP:", error);
+                } finally {
+                    window.lastGeneratedOFPPdfBytes = null;
+                }
+
+                if (typeof performDataReset === 'function') await performDataReset(true, false);
+                if (typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
+                localStorage.removeItem('activeOFPId');
+                
+                setTimeout(() => {
+                    if (typeof updateEmptyStates === 'function') updateEmptyStates();
+                    if (document.querySelector('.tool-section.active')) {
+                        if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+                        if (typeof validateOFPInputs === 'function') validateOFPInputs();
+                    }
+                }, 100);
             }, 100);
         };
 
@@ -5217,7 +5268,7 @@ const RELEASE_NOTES = {
             skyBtn.onclick = () => {
                 skyBtn.disabled = true;
                 skyBtn.textContent = 'Uploading to Cloud...';
-                executeActionThenReset(async () => {
+                executeActionAndReset(async () => {
                     await uploadOFPToSkyplan(pdfBytes, filename);
                     if (typeof showToast !== 'undefined') showToast('OFP uploaded to Cloud', 'success');
                     else alert('OFP uploaded to Skyplan successfully!');
@@ -5228,12 +5279,13 @@ const RELEASE_NOTES = {
         const emailBtn = document.getElementById('btn-ofp-email');
         if (emailBtn) {
             emailBtn.onclick = () => {
-                executeActionThenReset(async () => {
+                executeActionAndReset(async () => {
                     const subject = `OFP: ${flt} ${date}`;
                     if (typeof sharePdf === 'function') {
                         await sharePdf(pdfBytes, filename, subject, `Please find attached the OFP for flight ${flt} on ${date}`);
                     } else if (typeof downloadBlob === 'function') {
-                        downloadBlob(pdfBytes, filename);
+                        const blob = (pdfBytes instanceof Blob) ? pdfBytes : new Blob([pdfBytes], { type: 'application/pdf' });
+                        downloadBlob(blob, filename);
                     }
                 });
             };
@@ -5242,14 +5294,15 @@ const RELEASE_NOTES = {
         const downloadBtn = document.getElementById('btn-ofp-download');
         if (downloadBtn) {
             downloadBtn.onclick = () => {
-                executeActionThenReset(async () => {
+                executeActionAndReset(async () => {
+                    const blob = (pdfBytes instanceof Blob) ? pdfBytes : new Blob([pdfBytes], { type: 'application/pdf' });
                     if (typeof downloadBlob === 'function') {
-                        downloadBlob(pdfBytes, filename);
+                        downloadBlob(blob, filename);
                     }
                 });
             };
         }
-    }
+    };
 
     window.DownloadOFP = async function(mode = 'download') {
         const container = document.getElementById('download-progress-container');
@@ -5420,110 +5473,6 @@ const RELEASE_NOTES = {
             if (container) container.style.display = 'none';
         }
     };
-
-    window.downloadSavedOFP = async function(id) {
-        try {
-            const db = await (typeof getDB === 'function' ? getDB() : null);
-            if (!db) return;
-            
-            const tx = db.transaction("ofps", "readonly");
-            const store = tx.objectStore("ofps");
-            const request = store.get(Number(id));
-            
-            request.onsuccess = () => {
-                const ofp = request.result;
-                if (ofp && ofp.loggedPdfData) {
-                    const url = URL.createObjectURL(ofp.loggedPdfData);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = typeof generateOFPDFilename === 'function' ? generateOFPDFilename(ofp.flight, ofp.date) : `OFP_${ofp.flight}.pdf`;
-                    
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    
-                    setTimeout(() => URL.revokeObjectURL(url), 100); // Memory leak fix
-                    if (typeof showToast !== 'undefined') showToast("Logged OFP downloaded", 'success');
-                } else {
-                    if (typeof showToast !== 'undefined') showToast("No logged version found", 'error');
-                }
-            };
-        } catch (error) {
-            console.error("Error downloading logged OFP:", error);
-            if (typeof showToast !== 'undefined') showToast("Download failed", 'error');
-        }
-    };
-
-    async function resetOFPAfterSend() {
-        const userConfirmed = await createModal({
-            title: 'OFP Generated',
-            message: '<div style="text-align:center;">Click Finalize to wipe the form.<br>Click Modify to make changes.</div>',
-            confirmText: 'Finalize',
-            cancelText: 'Modify',
-            icon: '✅',
-            type: 'info',
-            centered: true
-        });
-
-        if (!userConfirmed) {
-            window.lastGeneratedOFPPdfBytes = null;
-            return;
-        }
-
-        try {
-            const activeId = localStorage.getItem('activeOFPId');
-            if (activeId && window.lastGeneratedOFPPdfBytes) {
-                const loggedBlob = new Blob([window.lastGeneratedOFPPdfBytes], { type: 'application/pdf' });
-                if (typeof updateOFP === 'function') {
-                    await updateOFP(activeId, { finalized: true, isActive: false, loggedPdfData: loggedBlob, finalizedAt: new Date().toISOString() });
-                }
-                if (typeof showToast !== 'undefined') showToast("OFP finalized", 'success');
-            }
-        } catch (error) {
-            console.error("Failed to save logged OFP:", error);
-        } finally {
-            window.lastGeneratedOFPPdfBytes = null;
-        }
-
-        if (typeof performDataReset === 'function') await performDataReset(true, false);
-
-        const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-        const autoActivate = settings.autoActivateNext !== false;
-
-        const allOFPs = typeof getCachedOFPs === 'function' ? await getCachedOFPs(true) : [];
-        const nonFinalizedOFPs = allOFPs.filter(ofp => !ofp.finalized);
-
-        if (nonFinalizedOFPs.length === 0) {
-            if (typeof showToast !== 'undefined') showToast("Do not forget to send your Journey Log", 'info');
-            const journeyBtn = document.querySelector('.nav-btn[data-tab="journey"], .nav-btn[onclick*="journey"]');
-            if (journeyBtn) (typeof window.showTab === 'function') ? window.showTab('journey', journeyBtn) : journeyBtn.click();
-            return;
-        }
-
-        let nextOFP = null;
-        if (autoActivate && allOFPs.length > 0) {
-            const currentActiveId = localStorage.getItem('activeOFPId');
-            if (currentActiveId) {
-                const currentIndex = allOFPs.findIndex(o => o.id === Number(currentActiveId));
-                if (currentIndex !== -1 && currentIndex < allOFPs.length - 1) nextOFP = allOFPs[currentIndex + 1];
-            }
-            if (!nextOFP && nonFinalizedOFPs.length > 0) nextOFP = nonFinalizedOFPs[0];
-        }
-
-        if (nextOFP) {
-            if (typeof activateOFP === 'function') await activateOFP(nextOFP.id);
-        } else {
-            if (typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
-            localStorage.removeItem('activeOFPId');
-            setTimeout(() => {
-                if (typeof updateEmptyStates === 'function') updateEmptyStates();
-                if (document.querySelector('.tool-section.active')) {
-                    if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
-                    if (typeof validateOFPInputs === 'function') validateOFPInputs();
-                }
-            }, 100);
-        }
-    }
 
 // ==========================================
 // 12. LOCAL STORAGE
