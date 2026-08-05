@@ -1328,7 +1328,15 @@ const RELEASE_NOTES = {
     }
 
     window.deleteOFP = async function(id) {
-        const confirmed = await showConfirmDialog('Delete OFP', 'Are you sure you want to delete this OFP?', 'Delete', 'Cancel', 'error');
+        const confirmed = await createModal({
+            title: 'Delete OFP',
+            message: 'Are you sure you want to delete this OFP?',
+            confirmText: 'Delete',
+            cancelText: 'Cancel',
+            type: 'error',
+            icon: '🗑️',
+            centered: true
+        });
         if (!confirmed) return;
         
         try {
@@ -1357,7 +1365,15 @@ const RELEASE_NOTES = {
     };
 
     window.clearAllOFPs = async function() {
-        const confirmed = await showConfirmDialog('Clear All OFPs', 'This will delete ALL stored OFPs. Continue?', 'Clear All', 'Cancel', 'error');
+        const confirmed = await createModal({
+            title: 'Clear All OFPs',
+            message: 'This will delete ALL stored OFPs. Continue?',
+            confirmText: 'Clear All',
+            cancelText: 'Cancel',
+            type: 'error',
+            icon: '⚠️',
+            centered: true
+        });
         if (!confirmed) return;
         
         try {
@@ -3647,15 +3663,6 @@ function parsePageOne(lines) {
         }, 3000);
     }
 
-    function showConfirmDialog(title, message, confirmText = 'Continue', cancelText = 'Cancel', type = 'warning', centered = false) {
-        return createModal({
-            title, message, confirmText, cancelText,
-            type: type === 'error' ? 'error' : 'info',
-            icon: type === 'error' ? '⚠️' : '❓',
-            centered
-        });
-    }
-
     function showUpdateModal(version, releaseData, onReload) {
         createModal({
             title: 'Update Available',
@@ -3671,12 +3678,43 @@ function parsePageOne(lines) {
     }
 
     // Unified Modal Builder (Optimized layout rendering)
-    function createModal({ title, message = '', confirmText = 'OK', cancelText = null, onConfirm, onCancel, type = 'info', icon = '📋', showVersion = null, listItems = null, bodyHTML = '', centered = true, compact = false, maxWidth = null }) {
+    // Unified Modal Builder (Supports both Object options and Legacy positional arguments)
+    function createModal(options, legacyMessage = '', legacyConfirm = 'OK', legacyCancel = null) {
+        let opts = {};
+        if (typeof options === 'string') {
+            // Handled legacy positional calls: createModal("Title", "Message", "ConfirmText", "CancelText")
+            opts = {
+                title: options,
+                message: legacyMessage,
+                confirmText: legacyConfirm,
+                cancelText: legacyCancel
+            };
+        } else if (options && typeof options === 'object') {
+            opts = options;
+        }
+
+        const {
+            title = 'Notice',
+            message = '',
+            confirmText = 'OK',
+            cancelText = null,
+            onConfirm,
+            onCancel,
+            type = 'info',
+            icon = '📋',
+            showVersion = null,
+            listItems = null,
+            bodyHTML = '',
+            centered = true,
+            compact = false,
+            maxWidth = null
+        } = opts;
+
         return new Promise((resolve) => {
             const dialog = document.createElement('div');
             dialog.style.cssText = `position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 10001; backdrop-filter: blur(5px); animation: fadeIn 0.2s ease;`;
 
-            const color = type === 'error' ? 'var(--error)' : 'var(--accent)';
+            const color = type === 'error' ? 'var(--error, #ff3b30)' : 'var(--accent, #007aff)';
             const align = centered ? 'text-align: center;' : 'text-align: left;';
             const width = maxWidth || (compact ? '400px' : '500px');
 
@@ -3689,19 +3727,19 @@ function parsePageOne(lines) {
                 : '';
 
             dialog.innerHTML = `
-                <div style="background: var(--panel); border-radius: 20px; padding: ${compact ? '15px' : '30px'}; max-width: ${width}; width: 90%; border: 2px solid ${color}; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: left;">
+                <div style="background: var(--panel, #1c1c1e); border-radius: 20px; padding: ${compact ? '15px' : '30px'}; max-width: ${width}; width: 90%; border: 2px solid ${color}; box-shadow: 0 20px 40px rgba(0,0,0,0.5); text-align: left;">
                     <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
                         <span style="font-size: 40px;">${icon}</span>
                         <div>
-                            <h2 style="color: ${color}; margin: 0; font-size: 24px;">${title}</h2>
-                            ${showVersion ? `<p style="color: var(--dim); margin: 5px 0 0 0;">Version ${showVersion}</p>` : ''}
+                            <h2 style="color: ${color}; margin: 0; font-size: 24px;">${title || 'Notice'}</h2>
+                            ${showVersion ? `<p style="color: var(--dim, #8e8e93); margin: 5px 0 0 0;">Version ${showVersion}</p>` : ''}
                         </div>
                     </div>
-                    ${message ? `<div style="color: var(--text); margin-bottom: 25px; line-height: 1.5; ${align}">${message}</div>` : ''}
+                    ${message ? `<div style="color: var(--text, #ffffff); margin-bottom: 25px; line-height: 1.5; ${align}">${message}</div>` : ''}
                     ${listHTML}
                     ${bodyHTML ? `<div style="margin-bottom: 25px;">${bodyHTML}</div>` : ''}
                     <div style="display: flex; gap: 15px; margin-top: 25px;">
-                        ${cancelText ? `<button id="modal-cancel" style="flex:1; padding:14px; background:var(--input); border:1px solid var(--border); color:var(--text); border-radius:12px; font-weight:600; cursor:pointer;">${cancelText}</button>` : ''}
+                        ${cancelText ? `<button id="modal-cancel" style="flex:1; padding:14px; background:var(--input, #2c2c2e); border:1px solid var(--border, #38383a); color:var(--text, #ffffff); border-radius:12px; font-weight:600; cursor:pointer;">${cancelText}</button>` : ''}
                         <button id="modal-confirm" style="flex:1; padding:14px; background:${color}; border:none; color:white; border-radius:12px; font-weight:800; cursor:pointer;">${confirmText}</button>
                     </div>
                 </div>
@@ -3709,18 +3747,24 @@ function parsePageOne(lines) {
 
             document.body.appendChild(dialog);
 
-            dialog.querySelector('#modal-confirm').onclick = () => { 
-                if (onConfirm) onConfirm(); 
-                dialog.remove(); 
-                resolve(true); 
-            };
+            const confirmBtn = dialog.querySelector('#modal-confirm');
+            if (confirmBtn) {
+                confirmBtn.onclick = () => { 
+                    if (onConfirm) onConfirm(); 
+                    dialog.remove(); 
+                    resolve(true); 
+                };
+            }
             
             if (cancelText) {
-                dialog.querySelector('#modal-cancel').onclick = () => { 
-                    if (onCancel) onCancel(); 
-                    dialog.remove(); 
-                    resolve(false); 
-                };
+                const cancelBtn = dialog.querySelector('#modal-cancel');
+                if (cancelBtn) {
+                    cancelBtn.onclick = () => { 
+                        if (onCancel) onCancel(); 
+                        dialog.remove(); 
+                        resolve(false); 
+                    };
+                }
             }
         });
     }
@@ -4865,354 +4909,379 @@ function parsePageOne(lines) {
         return Array.from(uniqueMap.values());
     }
 
-window.downloadJourneyLog = async function(mode = 'download') {
-    if (!dailyLegs || dailyLegs.length === 0) return showToast("No legs to print.", "error");
+    window.downloadJourneyLog = async function(mode = 'download') {
+        if (!dailyLegs || dailyLegs.length === 0) return showToast("No legs to print.", "error");
 
-    try {
-        if (typeof logSecurityEvent === 'function') {
-            await logSecurityEvent('JOURNEY_LOG_GENERATE', { mode, legCount: dailyLegs.length });
-        }
-
-        if (!journeyLogTemplateBytes || journeyLogTemplateBytes.byteLength === 0) {
-            journeyLogTemplateBytes = await loadBuiltInTemplate();
-            if (!journeyLogTemplateBytes) {
-                if (typeof isFinalizingJourneyLog !== 'undefined') isFinalizingJourneyLog = false;
-                return; 
+        try {
+            if (typeof logSecurityEvent === 'function') {
+                await logSecurityEvent('JOURNEY_LOG_GENERATE', { mode, legCount: dailyLegs.length });
             }
-        }
 
-        // 1. EXTRACT UNIQUE CREW MEMBERS ACROSS ALL SECTORS
-        let activeCrewList = getUniqueDayCrew(dailyLegs);
+            if (!journeyLogTemplateBytes || journeyLogTemplateBytes.byteLength === 0) {
+                journeyLogTemplateBytes = await loadBuiltInTemplate();
+                if (!journeyLogTemplateBytes) {
+                    if (typeof isFinalizingJourneyLog !== 'undefined') isFinalizingJourneyLog = false;
+                    return; 
+                }
+            }
 
-        // 2. SETUP PDF PARSER & CANVAS
-        const loadingTask = pdfjsLib.getDocument({ data: journeyLogTemplateBytes });
-        const textPdf = await loadingTask.promise;
-        const textPage = await textPdf.getPage(1);
-        const textContent = await textPage.getTextContent();
-        const textItems = textContent.items;
+            // 1. EXTRACT UNIQUE CREW MEMBERS ACROSS ALL SECTORS
+            let activeCrewList = getUniqueDayCrew(dailyLegs);
 
-        const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
-        const page = pdfDoc.getPages()[0];
-        const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
-        
-        const isIpadMode = document.getElementById('chk-ipad-mode')?.checked;
-        if (!isIpadMode) page.setRotation(PDFLib.degrees(0));
+            // 2. SETUP PDF PARSER & CANVAS
+            const loadingTask = pdfjsLib.getDocument({ data: journeyLogTemplateBytes });
+            const textPdf = await loadingTask.promise;
+            const textPage = await textPdf.getPage(1);
+            const textContent = await textPage.getTextContent();
+            const textItems = textContent.items;
 
-        const templateRows = parseInt(document.getElementById('j-template-rows')?.value || "4");
-        const rowGap = JOURNEY_CONFIG?.rowGap || 15; 
-        const nameFontSize = JOURNEY_CONFIG?.fontSize || 8; 
+            const pdfDoc = await PDFLib.PDFDocument.load(journeyLogTemplateBytes);
+            const page = pdfDoc.getPages()[0];
+            const font = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+            
+            const isIpadMode = document.getElementById('chk-ipad-mode')?.checked;
+            if (!isIpadMode) page.setRotation(PDFLib.degrees(0));
 
-        // Check if user set "Hide Crew Duty Data" in Settings
-        const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
-        const shouldHideDutyTimes = settings.hideAllDuty === true;
-        
-        // 3. ONLINE FALLBACK FETCH (IF CREW IS COMPLETELY EMPTY)
-        if (activeCrewList.length === 0) {
-            try {
-                const token = typeof getValidSkyplanToken === 'function' ? await getValidSkyplanToken() : null;
-                if (token) {
-                    let extId = window.currentExternalFlightId;
-                    if (!extId && dailyLegs[0]) {
-                        const fltRaw = el('j-flt')?.value || '';
-                        const dateRaw = el('j-date')?.value || '';
-                        const depRaw = dailyLegs[0]['j-dep'] || '';
-                        if (fltRaw && dateRaw && depRaw && typeof fetchFlightIdFromRoster === 'function') {
-                            extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
-                            window.currentExternalFlightId = extId;
+            const templateRows = parseInt(document.getElementById('j-template-rows')?.value || "4");
+            const rowGap = JOURNEY_CONFIG?.rowGap || 15; 
+            const nameFontSize = JOURNEY_CONFIG?.fontSize || 8; 
+
+            // Check if user set "Hide Crew Duty Data" in Settings
+            const settings = JSON.parse(localStorage.getItem('efb_settings') || '{}');
+            const shouldHideDutyTimes = settings.hideAllDuty === true;
+            
+            // 3. ONLINE FALLBACK FETCH (IF CREW IS COMPLETELY EMPTY)
+            if (activeCrewList.length === 0) {
+                try {
+                    const token = typeof getValidSkyplanToken === 'function' ? await getValidSkyplanToken() : null;
+                    if (token) {
+                        let extId = window.currentExternalFlightId;
+                        if (!extId && dailyLegs[0]) {
+                            const fltRaw = el('j-flt')?.value || '';
+                            const dateRaw = el('j-date')?.value || '';
+                            const depRaw = dailyLegs[0]['j-dep'] || '';
+                            if (fltRaw && dateRaw && depRaw && typeof fetchFlightIdFromRoster === 'function') {
+                                extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
+                                window.currentExternalFlightId = extId;
+                            }
+                        }
+                        
+                        if (extId) {
+                            const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ FlightIDs: [extId] })
+                            });
+                            if (resp.ok) {
+                                const data = await resp.json();
+                                const members = data.FlightsCrewMembers?.[0]?.CrewMembers || [];
+                                const flightDeck = members.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
+                                const cabinCrew = members.filter(m => !['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
+                                window.crewData = [...flightDeck, ...cabinCrew];
+                                activeCrewList = getUniqueDayCrew(dailyLegs);
+                            }
                         }
                     }
+                } catch(e) {
+                    console.warn("Failed to fetch crew manifest fallback:", e);
+                }
+            }
+
+            // 4. DRAW STATIC HEADERS
+            const headerAnchor = findAnchor(textItems, "AIR ASTANA/FLY ARYSTAN") || findAnchor(textItems, "AIR ASTANA");
+            if (headerAnchor) {
+                const now = new Date();
+                const day = String(now.getDate()).padStart(2, '0');
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const year = now.getFullYear();
+                const hours = String(now.getHours()).padStart(2, '0');
+                const mins = String(now.getMinutes()).padStart(2, '0');
+                
+                const currentDateTimeStr = `${day}/${month}/${year} ${hours}:${mins}`;
+
+                page.drawText(currentDateTimeStr, { 
+                    x: headerAnchor[4] + 140, 
+                    y: headerAnchor[5], 
+                    size: nameFontSize, 
+                    font 
+                });
+            }
+
+            // ── DRAW JOURNEY LOG NO. (MM-DD - [FLT] - 1) ──
+            const jlAnchor = findAnchor(textItems, "Journey Log No./Задание на полет") || findAnchor(textItems, "Journey Log No.");
+            if (jlAnchor) {
+                const dateVal = (el('j-date')?.value || (dailyLegs[0] ? dailyLegs[0]['j-date'] : '') || '').trim();
+                
+                let month = '08';
+                let day = '05';
+
+                if (dateVal) {
+                    // Split by common date separators: '-', '/', or '.'
+                    const parts = dateVal.split(/[-/.]/);
                     
-                    if (extId) {
-                        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                            body: JSON.stringify({ FlightIDs: [extId] })
+                    if (parts.length === 3) {
+                        if (parts[0].length === 4) {
+                            // Format: YYYY-MM-DD
+                            month = parts[1].padStart(2, '0');
+                            day = parts[2].padStart(2, '0');
+                        } else if (parts[2].length === 4 || parts[2].length === 2) {
+                            // Format: DD-MM-YYYY or DD-MM-YY
+                            day = parts[0].padStart(2, '0');
+                            month = parts[1].padStart(2, '0');
+                        }
+                    } else {
+                        // Fallback parse if string is standard
+                        const d = new Date(dateVal);
+                        if (!isNaN(d.getTime())) {
+                            month = String(d.getMonth() + 1).padStart(2, '0');
+                            day = String(d.getDate()).padStart(2, '0');
+                        }
+                    }
+                } else {
+                    const now = new Date();
+                    month = String(now.getMonth() + 1).padStart(2, '0');
+                    day = String(now.getDate()).padStart(2, '0');
+                }
+
+                const rawFlt = el('j-flt')?.value || el('view-flt')?.innerText || (dailyLegs[0] ? dailyLegs[0]['j-flt'] : '') || '';
+                const fltDigits = rawFlt.replace(/[^0-9]/g, '') || rawFlt.trim();
+
+                const journeyLogNoStr = `${month}-${day} - ${fltDigits} - 1`;
+
+                page.drawText(journeyLogNoStr, {
+                    x: jlAnchor[4] + 140,
+                    y: jlAnchor[5],
+                    size: nameFontSize,
+                    font
+                });
+            }
+
+            const catAnchor = findAnchor(textItems, "L/T");
+            if (catAnchor) page.drawText("75/125", { x: catAnchor[4] - 30, y: catAnchor[5], size: nameFontSize, font });
+
+            let captainNameStr = localStorage.getItem('efb_captain_name') || '';
+            if (!captainNameStr) {
+                const captObj = activeCrewList.find(m => m.Position === 'CP');
+                if (captObj) captainNameStr = `${captObj.FirstName} ${captObj.LastName}`.trim();
+            }
+
+            if (captainNameStr) {
+                const capAnchor = findAnchor(textItems, "Captain/KBC:");
+                if (capAnchor) {
+                    page.drawText(captainNameStr.toUpperCase(), { x: capAnchor[4] + 50, y: capAnchor[5], size: nameFontSize, font });
+                }
+            }
+
+            // 5. DRAW DYNAMIC HEADERS & LEGS
+            const headerDrop = 16; 
+            const drawLegData = (anchor, shiftX, keys, baselineY) => {
+                if (!anchor) return;
+                const colX = anchor[4] + shiftX;
+                const baseY = baselineY ?? (anchor[5] - headerDrop);
+
+                dailyLegs.forEach((leg, idx) => {
+                    if (idx >= templateRows) return;
+                    
+                    let val = keys.map(k => leg[k]).find(v => v !== undefined && v !== null && v !== "");
+                    
+                    if (!val && idx === 0) { // Fallback to DOM for first leg
+                        for (const key of keys) {
+                            const domEl = document.getElementById(key);
+                            if (domEl) {
+                                val = domEl.value || domEl.textContent;
+                                if (val) break;
+                            }
+                        }
+                    }
+
+                    if (val && String(val).trim() !== "") {
+                        page.drawText(String(val).trim().toUpperCase(), { 
+                            x: colX, 
+                            y: baseY - (idx * rowGap), 
+                            size: nameFontSize, 
+                            font 
                         });
-                        if (resp.ok) {
-                            const data = await resp.json();
-                            const members = data.FlightsCrewMembers?.[0]?.CrewMembers || [];
-                            const flightDeck = members.filter(m => ['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
-                            const cabinCrew = members.filter(m => !['CP', 'FO', 'P1', 'P2', 'SO'].includes(m.Position));
-                            window.crewData = [...flightDeck, ...cabinCrew];
-                            activeCrewList = getUniqueDayCrew(dailyLegs);
-                        }
                     }
-                }
-            } catch(e) {
-                console.warn("Failed to fetch crew manifest fallback:", e);
-            }
-        }
+                });
+            };
 
-        // 4. DRAW STATIC HEADERS
-        const headerAnchor = findAnchor(textItems, "AIR ASTANA/FLY ARYSTAN") || findAnchor(textItems, "AIR ASTANA");
-        if (headerAnchor) {
-            const now = new Date();
-            const day = String(now.getDate()).padStart(2, '0');
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            const year = now.getFullYear();
-            const hours = String(now.getHours()).padStart(2, '0');
-            const mins = String(now.getMinutes()).padStart(2, '0');
+            // ── SPECIFIC ANCHOR DERIVATION FOR STA (Between STD & ATD) ──
+            const stdAnchor = findAnchor(textItems, 'STD');
+            const atdAnchor = findAnchor(textItems, 'ATD');
+            let staAnchor = null;
+
+            if (stdAnchor && atdAnchor) {
+                const staX = (stdAnchor[4] + atdAnchor[4]) / 2;
+                staAnchor = [...stdAnchor];
+                staAnchor[4] = staX;
+            } else if (stdAnchor) {
+                staAnchor = [...stdAnchor];
+                staAnchor[4] = stdAnchor[4] + 35;
+            }
+
+            // ── SPECIFIC ANCHOR DERIVATION FOR MA (Between LD & FlAlt) ──
+            const ldAnchor = findAnchor(textItems, 'LD');
+            const flAltAnchor = findAnchor(textItems, 'FlAlt');
+            let maAnchor = null;
+
+            if (ldAnchor && flAltAnchor) {
+                const maX = (ldAnchor[4] + flAltAnchor[4]) / 2;
+                maAnchor = [...ldAnchor];
+                maAnchor[4] = maX;
+            } else if (ldAnchor) {
+                maAnchor = [...ldAnchor];
+                maAnchor[4] = ldAnchor[4] + 35;
+            }
+
+            // Top Headers
+            [
+                { anchor: findAnchor(textItems, 'Date'), shiftX: -10, keys: ['j-date'] },
+                { anchor: findAnchor(textItems, 'flight'), shiftX: -8, keys: ['j-flt'] },
+                { anchor: findAnchor(textItems, 'Ac.Reg'), shiftX: -5, keys: ['j-reg'] },
+                { anchor: findAnchor(textItems, 'Dep'), shiftX: -5, keys: ['j-dep'] },
+                { anchor: findAnchor(textItems, 'Arr'), shiftX: -5, keys: ['j-arr'] },
+                { anchor: stdAnchor, shiftX: -5, keys: ['j-std'] },
+                { anchor: staAnchor, shiftX: -5, keys: ['j-sta'] }
+            ].forEach(h => drawLegData(h.anchor, h.shiftX, h.keys));
+
+            // Main & Fuel Tables
+            const mainRefY = (atdAnchor || findAnchor(textItems, 'TKOF') || [0,0,0,0,0, 680 + headerDrop])[5] - headerDrop;
+            const fuelRefY = (findAnchor(textItems, 'Init') || findAnchor(textItems, 'UplfW') || [0,0,0,0,0, 480 + headerDrop])[5] - headerDrop;
+
+            const logColumnDefs = [
+                { search: 'ATD', keys: ['j-atd'], shiftX: -5, category: 'main' },
+                { search: 'ATA', keys: ['j-in'], shiftX: -5, category: 'main' },
+                { search: 'Off-Block', keys: ['j-out'], shiftX: -5, category: 'main' },
+                { search: 'TKOF', keys: ['j-off'], shiftX: -5, category: 'main' },
+                { search: 'TDWN', keys: ['j-on'], shiftX: -5, category: 'main' },
+                { search: 'Blk', keys: ['j-block'], shiftX: -5, category: 'main' },
+                { search: 'Flt', keys: ['j-flight'], shiftX: -5, category: 'main' },
+                { search: 'NtBLK', keys: ['j-night'], shiftX: -5, category: 'main' },
+                { search: 'TO', keys: ['j-to'], shiftX: -5, category: 'main' },
+                { search: 'LD', keys: ['j-ldg'], shiftX: -5, category: 'main' },
+                { anchor: maAnchor, search: 'MA', keys: ['j-ldg-type'], shiftX: -5, category: 'main' },
+                { search: 'FlAlt', keys: ['j-flt-alt'], shiftX: -5, category: 'main' },
+                { search: 'DETAIL', keys: ['j-ldg-detail'], shiftX: -5, category: 'main' },
+                { search: 'Init', keys: ['j-init'], shiftX: -5, category: 'fuel' },
+                { search: 'UplfW', keys: ['j-uplift-w'], shiftX: -5, category: 'fuel' },
+                { search: 'UplfV', keys: ['j-uplift-vol'], shiftX: -5, category: 'fuel' },
+                { search: 'Calc Ramp', keys: ['j-calc-ramp'], shiftX: -2, category: 'fuel' },
+                { search: 'Act Ramp', keys: ['j-act-ramp'], shiftX: -2, category: 'fuel' },
+                { search: 'Stdn', keys: ['j-shut'], shiftX: -5, category: 'fuel' },
+                { search: 'Burn', keys: ['j-burn'], shiftX: -5, category: 'fuel' },
+                { search: 'Fuel Disc', keys: ['j-disc'], shiftX: -2, category: 'fuel' },
+                { search: 'Slip 1', keys: ['j-slip'], shiftX: -5, category: 'fuel' },
+                { search: 'Slip 2', keys: ['j-slip-2'], shiftX: -5, category: 'fuel' },
+                { search: 'ADL', keys: ['j-adl'], shiftX: -5, category: 'fuel' },
+                { search: 'CHL', keys: ['j-chl'], shiftX: -5, category: 'fuel' },
+                { search: 'INF', keys: ['j-inf'], shiftX: -5, category: 'fuel' },
+                { search: 'Cargo', keys: ['j-cargo'], shiftX: -5, category: 'fuel' },
+                { search: 'Mail', keys: ['j-mail'], shiftX: -5, category: 'fuel' },
+                { search: 'BAG', keys: ['j-bag'], shiftX: -5, category: 'fuel' },
+                { search: 'ZFW', keys: ['j-zfw'], shiftX: -5, category: 'fuel' }
+            ];
+
+            logColumnDefs.forEach(col => {
+                const colAnchor = col.anchor || findAnchor(textItems, col.search);
+                drawLegData(colAnchor, col.shiftX, col.keys, col.category === 'fuel' ? fuelRefY : mainRefY);
+            });
+
+            // 6. DRAW SIGNATURE
+            const sigAnchor = findAnchor(textItems, "Captain's Signature");
+            if (sigAnchor && pads?.main?.pad && !pads.main.pad.isEmpty()) {
+                try {
+                    const sigImage = await pdfDoc.embedPng(pads.main.pad.toDataURL());
+                    page.drawImage(sigImage, { x: sigAnchor[4] + 120, y: sigAnchor[5] - 15, width: 200, height: 50 });
+                } catch (e) { console.warn("Signature skipped"); }
+            }
+
+            // 7. DRAW CREW ROSTER (ALWAYS PRINTS STAFF NO, POSITION, NAMES & OP)
+            const crewCols = {};
+            ['DUTY', 'Duty time', 'Night duty', 'Alwd. time', 'LEGS'].forEach(k => {
+                const a = findAnchor(textItems, k);
+                if (a) crewCols[k] = a[4];
+            });
+
+            let crewBaselineY = (findAnchor(textItems, 'DUTY') || findAnchor(textItems, 'OP') || [0,0,0,0,0, 333 + headerDrop])[5] - headerDrop;
+            const sectorsString = 'x'.repeat(dailyLegs.filter(l => l['j-flt'] || l['j-dep']).length);
+
+            const getFDP = (startMins) => {
+                const onBlocksMins = dailyLegs[dailyLegs.length-1] ? (typeof parseTimeString === 'function' ? parseTimeString(dailyLegs[dailyLegs.length-1]['j-in']) : 0) : null;
+                if (onBlocksMins == null) return "";
+                let diff = onBlocksMins - startMins;
+                if (diff < 0) diff += 1440;
+                return typeof minsToTime === 'function' ? minsToTime(diff) : "";
+            };
+
+            const fcStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-duty-start')?.value) : 0;
+            const ccStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-cc-duty-start')?.value) : 0;
             
-            const currentDateTimeStr = `${day}/${month}/${year} ${hours}:${mins}`;
+            // Separate Flight Deck from Cabin Crew
+            const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
+            const uniquePilots = activeCrewList.filter(m => flightDeckPositions.includes(m.Position));
+            const uniqueCabin = activeCrewList.filter(m => !flightDeckPositions.includes(m.Position));
+            const sortedCrew = [...uniquePilots, ...uniqueCabin];
 
-            page.drawText(currentDateTimeStr, { 
-                x: headerAnchor[4] + 140, 
-                y: headerAnchor[5], 
-                size: nameFontSize, 
-                font 
-            });
-        }
+            const extractEmpId = m => m.EmployeeID || m.EmployeeId || m.StaffNo || m.StaffNumber || m.Code || m.Id || '';
 
-        // ── DRAW JOURNEY LOG NO. (MM-DD - [FLT] - 1) ──
-        const jlAnchor = findAnchor(textItems, "Journey Log No./Задание на полет") || findAnchor(textItems, "Journey Log No.");
-        if (jlAnchor) {
-            const dateVal = el('j-date')?.value || (dailyLegs[0] ? dailyLegs[0]['j-date'] : '');
-            let dObj = new Date();
-            if (dateVal) {
-                const parsed = new Date(dateVal);
-                if (!isNaN(parsed.getTime())) dObj = parsed;
-            }
-            const month = String(dObj.getMonth() + 1).padStart(2, '0');
-            const day = String(dObj.getDate()).padStart(2, '0');
+            sortedCrew.forEach((member, i) => {
+                const y = crewBaselineY - (i * (JOURNEY_CONFIG?.rowGap || 17));
+                const isFC = flightDeckPositions.includes(member.Position);
+                const myStart = isFC ? fcStartMins : ccStartMins;
 
-            const rawFlt = el('j-flt')?.value || el('view-flt')?.innerText || (dailyLegs[0] ? dailyLegs[0]['j-flt'] : '') || '';
-            const fltDigits = rawFlt.replace(/[^0-9]/g, '') || rawFlt.trim();
+                if (crewCols['DUTY']) {
+                    const opX = crewCols['DUTY'];
+                    const staffNo = String(extractEmpId(member)).toUpperCase();
 
-            const journeyLogNoStr = `${month}-${day} - ${fltDigits} - 1`;
-
-            page.drawText(journeyLogNoStr, {
-                x: jlAnchor[4] + 150,
-                y: jlAnchor[5],
-                size: nameFontSize,
-                font
-            });
-        }
-
-        const catAnchor = findAnchor(textItems, "L/T");
-        if (catAnchor) page.drawText("75/125", { x: catAnchor[4] - 30, y: catAnchor[5], size: nameFontSize, font });
-
-        let captainNameStr = localStorage.getItem('efb_captain_name') || '';
-        if (!captainNameStr) {
-            const captObj = activeCrewList.find(m => m.Position === 'CP');
-            if (captObj) captainNameStr = `${captObj.FirstName} ${captObj.LastName}`.trim();
-        }
-
-        if (captainNameStr) {
-            const capAnchor = findAnchor(textItems, "Captain/KBC:");
-            if (capAnchor) {
-                page.drawText(captainNameStr.toUpperCase(), { x: capAnchor[4] + 50, y: capAnchor[5], size: nameFontSize, font });
-            }
-        }
-
-        // 5. DRAW DYNAMIC HEADERS & LEGS
-        const headerDrop = 16; 
-        const drawLegData = (anchor, shiftX, keys, baselineY) => {
-            if (!anchor) return;
-            const colX = anchor[4] + shiftX;
-            const baseY = baselineY ?? (anchor[5] - headerDrop);
-
-            dailyLegs.forEach((leg, idx) => {
-                if (idx >= templateRows) return;
-                
-                let val = keys.map(k => leg[k]).find(v => v !== undefined && v !== null && v !== "");
-                
-                if (!val && idx === 0) { // Fallback to DOM for first leg
-                    for (const key of keys) {
-                        const domEl = document.getElementById(key);
-                        if (domEl) {
-                            val = domEl.value || domEl.textContent;
-                            if (val) break;
-                        }
-                    }
+                    page.drawText(staffNo, { x: opX - 175, y, size: nameFontSize, font });
+                    page.drawText(String(member.Position || '').toUpperCase(), { x: opX - 140, y, size: nameFontSize, font });
+                    page.drawText(`${member.FirstName || ''} ${member.LastName || ''}`.trim().toUpperCase(), { x: opX - 125, y, size: nameFontSize, font });
+                    page.drawText("OP", { x: opX, y, size: nameFontSize, font });
                 }
-
-                if (val && String(val).trim() !== "") {
-                    page.drawText(String(val).trim().toUpperCase(), { 
-                        x: colX, 
-                        y: baseY - (idx * rowGap), 
-                        size: nameFontSize, 
-                        font 
-                    });
+                
+                // ONLY print Duty Times, FDP Limits & Sectors if "Hide Crew Duty Data" is unchecked
+                if (!shouldHideDutyTimes) {
+                    if (crewCols['Duty time']) page.drawText(getFDP(myStart), { x: crewCols['Duty time'], y, size: nameFontSize, font });
+                    if (crewCols['Night duty']) page.drawText(typeof getNightDutyForCrew === 'function' ? getNightDutyForCrew(myStart) : '', { x: crewCols['Night duty'], y, size: nameFontSize, font });
+                    if (crewCols['Alwd. time']) page.drawText(isFC ? (el('j-max-fdp')?.value || '') : (el('j-cc-max-fdp-hidden')?.value || ''), { x: crewCols['Alwd. time'], y, size: nameFontSize, font });
+                    if (crewCols['LEGS']) page.drawText(sectorsString, { x: crewCols['LEGS'], y, size: nameFontSize, font });
                 }
             });
-        };
 
-        // ── SPECIFIC ANCHOR DERIVATION FOR STA (Between STD & ATD) ──
-        const stdAnchor = findAnchor(textItems, 'STD');
-        const atdAnchor = findAnchor(textItems, 'ATD');
-        let staAnchor = null;
+            // 8. FINAL SAVE AND EXPORT
+            const outBytes = await pdfDoc.save();
+            const fltStr = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
+            const filename = `JOURNEY_LOG_${fltStr}.pdf`;
 
-        if (stdAnchor && atdAnchor) {
-            const staX = (stdAnchor[4] + atdAnchor[4]) / 2;
-            staAnchor = [...stdAnchor];
-            staAnchor[4] = staX;
-        } else if (stdAnchor) {
-            staAnchor = [...stdAnchor];
-            staAnchor[4] = stdAnchor[4] + 35;
-        }
-
-        // ── SPECIFIC ANCHOR DERIVATION FOR MA (Between LD & FlAlt) ──
-        const ldAnchor = findAnchor(textItems, 'LD');
-        const flAltAnchor = findAnchor(textItems, 'FlAlt');
-        let maAnchor = null;
-
-        if (ldAnchor && flAltAnchor) {
-            const maX = (ldAnchor[4] + flAltAnchor[4]) / 2;
-            maAnchor = [...ldAnchor];
-            maAnchor[4] = maX;
-        } else if (ldAnchor) {
-            maAnchor = [...ldAnchor];
-            maAnchor[4] = ldAnchor[4] + 35;
-        }
-
-        // Top Headers
-        [
-            { anchor: findAnchor(textItems, 'Date'), shiftX: -10, keys: ['j-date'] },
-            { anchor: findAnchor(textItems, 'flight'), shiftX: -8, keys: ['j-flt'] },
-            { anchor: findAnchor(textItems, 'Ac.Reg'), shiftX: -5, keys: ['j-reg'] },
-            { anchor: findAnchor(textItems, 'Dep'), shiftX: -5, keys: ['j-dep'] },
-            { anchor: findAnchor(textItems, 'Arr'), shiftX: -5, keys: ['j-arr'] },
-            { anchor: stdAnchor, shiftX: -5, keys: ['j-std'] },
-            { anchor: staAnchor, shiftX: -5, keys: ['j-sta'] }
-        ].forEach(h => drawLegData(h.anchor, h.shiftX, h.keys));
-
-        // Main & Fuel Tables
-        const mainRefY = (atdAnchor || findAnchor(textItems, 'TKOF') || [0,0,0,0,0, 680 + headerDrop])[5] - headerDrop;
-        const fuelRefY = (findAnchor(textItems, 'Init') || findAnchor(textItems, 'UplfW') || [0,0,0,0,0, 480 + headerDrop])[5] - headerDrop;
-
-        const logColumnDefs = [
-            { search: 'ATD', keys: ['j-atd'], shiftX: -5, category: 'main' },
-            { search: 'ATA', keys: ['j-in'], shiftX: -5, category: 'main' },
-            { search: 'Off-Block', keys: ['j-out'], shiftX: -5, category: 'main' },
-            { search: 'TKOF', keys: ['j-off'], shiftX: -5, category: 'main' },
-            { search: 'TDWN', keys: ['j-on'], shiftX: -5, category: 'main' },
-            { search: 'Blk', keys: ['j-block'], shiftX: -5, category: 'main' },
-            { search: 'Flt', keys: ['j-flight'], shiftX: -5, category: 'main' },
-            { search: 'NtBLK', keys: ['j-night'], shiftX: -5, category: 'main' },
-            { search: 'TO', keys: ['j-to'], shiftX: -5, category: 'main' },
-            { search: 'LD', keys: ['j-ldg'], shiftX: -5, category: 'main' },
-            { anchor: maAnchor, search: 'MA', keys: ['j-ldg-type'], shiftX: -5, category: 'main' },
-            { search: 'FlAlt', keys: ['j-flt-alt'], shiftX: -5, category: 'main' },
-            { search: 'DETAIL', keys: ['j-ldg-detail'], shiftX: -5, category: 'main' },
-            { search: 'Init', keys: ['j-init'], shiftX: -5, category: 'fuel' },
-            { search: 'UplfW', keys: ['j-uplift-w'], shiftX: -5, category: 'fuel' },
-            { search: 'UplfV', keys: ['j-uplift-vol'], shiftX: -5, category: 'fuel' },
-            { search: 'Calc Ramp', keys: ['j-calc-ramp'], shiftX: -2, category: 'fuel' },
-            { search: 'Act Ramp', keys: ['j-act-ramp'], shiftX: -2, category: 'fuel' },
-            { search: 'Stdn', keys: ['j-shut'], shiftX: -5, category: 'fuel' },
-            { search: 'Burn', keys: ['j-burn'], shiftX: -5, category: 'fuel' },
-            { search: 'Fuel Disc', keys: ['j-disc'], shiftX: -2, category: 'fuel' },
-            { search: 'Slip 1', keys: ['j-slip'], shiftX: -5, category: 'fuel' },
-            { search: 'Slip 2', keys: ['j-slip-2'], shiftX: -5, category: 'fuel' },
-            { search: 'ADL', keys: ['j-adl'], shiftX: -5, category: 'fuel' },
-            { search: 'CHL', keys: ['j-chl'], shiftX: -5, category: 'fuel' },
-            { search: 'INF', keys: ['j-inf'], shiftX: -5, category: 'fuel' },
-            { search: 'Cargo', keys: ['j-cargo'], shiftX: -5, category: 'fuel' },
-            { search: 'Mail', keys: ['j-mail'], shiftX: -5, category: 'fuel' },
-            { search: 'BAG', keys: ['j-bag'], shiftX: -5, category: 'fuel' },
-            { search: 'ZFW', keys: ['j-zfw'], shiftX: -5, category: 'fuel' }
-        ];
-
-        logColumnDefs.forEach(col => {
-            const colAnchor = col.anchor || findAnchor(textItems, col.search);
-            drawLegData(colAnchor, col.shiftX, col.keys, col.category === 'fuel' ? fuelRefY : mainRefY);
-        });
-
-        // 6. DRAW SIGNATURE
-        const sigAnchor = findAnchor(textItems, "Captain's Signature");
-        if (sigAnchor && pads?.main?.pad && !pads.main.pad.isEmpty()) {
-            try {
-                const sigImage = await pdfDoc.embedPng(pads.main.pad.toDataURL());
-                page.drawImage(sigImage, { x: sigAnchor[4] + 120, y: sigAnchor[5] - 15, width: 200, height: 50 });
-            } catch (e) { console.warn("Signature skipped"); }
-        }
-
-        // 7. DRAW CREW ROSTER (ALWAYS PRINTS STAFF NO, POSITION, NAMES & OP)
-        const crewCols = {};
-        ['DUTY', 'Duty time', 'Night duty', 'Alwd. time', 'LEGS'].forEach(k => {
-            const a = findAnchor(textItems, k);
-            if (a) crewCols[k] = a[4];
-        });
-
-        let crewBaselineY = (findAnchor(textItems, 'DUTY') || findAnchor(textItems, 'OP') || [0,0,0,0,0, 333 + headerDrop])[5] - headerDrop;
-        const sectorsString = 'x'.repeat(dailyLegs.filter(l => l['j-flt'] || l['j-dep']).length);
-
-        const getFDP = (startMins) => {
-            const onBlocksMins = dailyLegs[dailyLegs.length-1] ? (typeof parseTimeString === 'function' ? parseTimeString(dailyLegs[dailyLegs.length-1]['j-in']) : 0) : null;
-            if (onBlocksMins == null) return "";
-            let diff = onBlocksMins - startMins;
-            if (diff < 0) diff += 1440;
-            return typeof minsToTime === 'function' ? minsToTime(diff) : "";
-        };
-
-        const fcStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-duty-start')?.value) : 0;
-        const ccStartMins = typeof parseTimeString === 'function' ? parseTimeString(el('j-cc-duty-start')?.value) : 0;
-        
-        // Separate Flight Deck from Cabin Crew
-        const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
-        const uniquePilots = activeCrewList.filter(m => flightDeckPositions.includes(m.Position));
-        const uniqueCabin = activeCrewList.filter(m => !flightDeckPositions.includes(m.Position));
-        const sortedCrew = [...uniquePilots, ...uniqueCabin];
-
-        const extractEmpId = m => m.EmployeeID || m.EmployeeId || m.StaffNo || m.StaffNumber || m.Code || m.Id || '';
-
-        sortedCrew.forEach((member, i) => {
-            const y = crewBaselineY - (i * (JOURNEY_CONFIG?.rowGap || 17));
-            const isFC = flightDeckPositions.includes(member.Position);
-            const myStart = isFC ? fcStartMins : ccStartMins;
-
-            if (crewCols['DUTY']) {
-                const opX = crewCols['DUTY'];
-                const staffNo = String(extractEmpId(member)).toUpperCase();
-
-                page.drawText(staffNo, { x: opX - 175, y, size: nameFontSize, font });
-                page.drawText(String(member.Position || '').toUpperCase(), { x: opX - 140, y, size: nameFontSize, font });
-                page.drawText(`${member.FirstName || ''} ${member.LastName || ''}`.trim().toUpperCase(), { x: opX - 125, y, size: nameFontSize, font });
-                page.drawText("OP", { x: opX, y, size: nameFontSize, font });
+            if (mode === 'email' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+                await sharePdf(outBytes, filename, `Journey Log: ${fltStr}`, "Journey Log attached.");
+            } else {
+                if (typeof downloadBlob === 'function') downloadBlob(outBytes, filename);
             }
-            
-            // ONLY print Duty Times, FDP Limits & Sectors if "Hide Crew Duty Data" is unchecked
-            if (!shouldHideDutyTimes) {
-                if (crewCols['Duty time']) page.drawText(getFDP(myStart), { x: crewCols['Duty time'], y, size: nameFontSize, font });
-                if (crewCols['Night duty']) page.drawText(typeof getNightDutyForCrew === 'function' ? getNightDutyForCrew(myStart) : '', { x: crewCols['Night duty'], y, size: nameFontSize, font });
-                if (crewCols['Alwd. time']) page.drawText(isFC ? (el('j-max-fdp')?.value || '') : (el('j-cc-max-fdp-hidden')?.value || ''), { x: crewCols['Alwd. time'], y, size: nameFontSize, font });
-                if (crewCols['LEGS']) page.drawText(sectorsString, { x: crewCols['LEGS'], y, size: nameFontSize, font });
+
+            const userChoice = await createModal({
+                title: 'Journey Log Generated',
+                message: '<div style="text-align:center;">Save this log and start a new day?<br>Click <strong>Save Log</strong> to store it permanently and clear leg data.<br>Click <strong>Keep Data</strong> to make changes and generate again.</div>',
+                confirmText: 'Save Log',
+                cancelText: 'Keep Data',
+                type: 'info',
+                icon: '📋',
+                centered: true
+            });
+
+            if (userChoice) {
+                const blob = new Blob([outBytes], { type: 'application/pdf' });
+                if (typeof saveJourneyLog === 'function') await saveJourneyLog(blob, { flight: fltStr, date: el('j-date')?.value || new Date().toISOString().slice(0,10), legCount: dailyLegs.length });
+                if (typeof showToast !== 'undefined') showToast('Journey log saved', 'success');
+                if (typeof performDataReset === 'function') await performDataReset(false, false);
             }
-        });
 
-        // 8. FINAL SAVE AND EXPORT
-        const outBytes = await pdfDoc.save();
-        const fltStr = (el('j-flt')?.value || "FLT").replace(/\s+/g, '');
-        const filename = `JOURNEY_LOG_${fltStr}.pdf`;
-
-        if (mode === 'email' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-            await sharePdf(outBytes, filename, `Journey Log: ${fltStr}`, "Journey Log attached.");
-        } else {
-            if (typeof downloadBlob === 'function') downloadBlob(outBytes, filename);
+        } catch (e) {
+            console.error("Log Gen Error:", e);
+            if (typeof logSecurityEvent === 'function') await logSecurityEvent('JOURNEY_LOG_ERROR', { error: e.message, mode });
+            alert("Error generating Log: " + e.message);
         }
-
-        const userChoice = await showConfirmDialog(
-            'Journey Log Generated', 
-            '<div style="text-align:center;">Save this log and start a new day?<br>Click <strong>Save Log</strong> to store it permanently and clear leg data.<br>Click <strong>Keep Data</strong> to make changes and generate again.</div>', 
-            'Save Log', 
-            'Keep Data', 
-            'info', 
-            true
-        );
-
-        if (userChoice) {
-            const blob = new Blob([outBytes], { type: 'application/pdf' });
-            if (typeof saveJourneyLog === 'function') await saveJourneyLog(blob, { flight: fltStr, date: el('j-date')?.value || new Date().toISOString().slice(0,10), legCount: dailyLegs.length });
-            if (typeof showToast !== 'undefined') showToast('Journey log saved', 'success');
-            if (typeof performDataReset === 'function') await performDataReset(false, false);
-        }
-
-    } catch (e) {
-        console.error("Log Gen Error:", e);
-        if (typeof logSecurityEvent === 'function') await logSecurityEvent('JOURNEY_LOG_ERROR', { error: e.message, mode });
-        alert("Error generating Log: " + e.message);
-    }
-};
+    };
 
 // ==========================================
 // 11. Download Managment
@@ -5276,6 +5345,99 @@ window.downloadJourneyLog = async function(mode = 'download') {
         return `${cleanFlight}_${cleanDate}${suffix ? '_' + suffix : ''}.pdf`;
     }
 
+    function showOFPFinalizeModal(pdfBytes, filename, flt, date) {
+        const bodyHTML = `
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 5px;">
+                <button id="btn-ofp-skyplan" style="padding: 14px; background: var(--accent, #007aff); border: none; color: white; border-radius: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    ☁️ Upload to Cloud
+                </button>
+                <button id="btn-ofp-email" style="padding: 12px; background: var(--input, #2c2c2e); border: 1px solid var(--border, #38383a); color: var(--text, #ffffff); border-radius: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    📧 Send via Email
+                </button>
+                <button id="btn-ofp-download" style="padding: 12px; background: var(--input, #2c2c2e); border: 1px solid var(--border, #38383a); color: var(--text, #ffffff); border-radius: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    💾 Download PDF
+                </button>
+            </div>
+        `;
+
+        createModal({
+            title: 'OFP Submission',
+            message: `Select submission method for <strong>${flt}</strong> (${date}):`,
+            icon: '✈️',
+            cancelText: 'Modify',
+            bodyHTML: bodyHTML,
+            compact: true
+        });
+
+        const confirmBtn = document.getElementById('modal-confirm');
+        if (confirmBtn) confirmBtn.style.display = 'none';
+
+        const modalElement = document.body.lastElementChild;
+        const closeModal = () => {
+            if (modalElement && modalElement.parentNode) {
+                modalElement.remove();
+            }
+        };
+
+        const cancelBtn = document.getElementById('modal-cancel');
+        if (cancelBtn) {
+            cancelBtn.onclick = () => closeModal();
+        }
+
+        const executeActionThenReset = async (actionCallback) => {
+            closeModal();
+            try {
+                await actionCallback();
+            } catch (err) {
+                console.error('[Action Error]', err);
+                alert(`Error: ${err?.message || err}`);
+            }
+            setTimeout(async () => {
+                if (typeof resetOFPAfterSend === 'function') {
+                    await resetOFPAfterSend();
+                }
+            }, 100);
+        };
+
+        const skyBtn = document.getElementById('btn-ofp-skyplan');
+        if (skyBtn) {
+            skyBtn.onclick = () => {
+                skyBtn.disabled = true;
+                skyBtn.textContent = 'Uploading to Cloud...';
+                executeActionThenReset(async () => {
+                    await uploadOFPToSkyplan(pdfBytes, filename);
+                    if (typeof showToast !== 'undefined') showToast('OFP uploaded to Cloud', 'success');
+                    else alert('OFP uploaded to Skyplan successfully!');
+                });
+            };
+        }
+
+        const emailBtn = document.getElementById('btn-ofp-email');
+        if (emailBtn) {
+            emailBtn.onclick = () => {
+                executeActionThenReset(async () => {
+                    const subject = `OFP: ${flt} ${date}`;
+                    if (typeof sharePdf === 'function') {
+                        await sharePdf(pdfBytes, filename, subject, `Please find attached the OFP for flight ${flt} on ${date}`);
+                    } else if (typeof downloadBlob === 'function') {
+                        downloadBlob(pdfBytes, filename);
+                    }
+                });
+            };
+        }
+
+        const downloadBtn = document.getElementById('btn-ofp-download');
+        if (downloadBtn) {
+            downloadBtn.onclick = () => {
+                executeActionThenReset(async () => {
+                    if (typeof downloadBlob === 'function') {
+                        downloadBlob(pdfBytes, filename);
+                    }
+                });
+            };
+        }
+    }
+
     window.DownloadOFP = async function(mode = 'download') {
         const container = document.getElementById('download-progress-container');
         if (container) container.style.display = 'block';
@@ -5290,18 +5452,18 @@ window.downloadJourneyLog = async function(mode = 'download') {
                 return alert("Please Upload the OFP PDF first.");
             }
 
-            // 1. Load the original vector PDF directly (Keeps file size tiny!)
+            // 1. Load original vector PDF
             const sourcePdfDoc = await PDFLib.PDFDocument.load(window.ofpPdfBytes);
             const totalPages = sourcePdfDoc.getPageCount();
 
-            // 2. Create the output PDF
+            // 2. Create output PDF
             const newPdf = await PDFLib.PDFDocument.create();
 
             // 3. Determine Cutoff
             const cutoff = typeof window.cutoffPageIndex === 'number' ? window.cutoffPageIndex : -1;
             const lastPageIndex = (cutoff > 2 && cutoff < totalPages - 1) ? cutoff : totalPages - 1;
 
-            // 4. Copy the vector pages (Fast and clean)
+            // 4. Copy vector pages
             const pagesToCopy = Array.from({ length: lastPageIndex + 1 }, (_, i) => i);
             const copiedPages = await newPdf.copyPages(sourcePdfDoc, pagesToCopy);
             
@@ -5421,7 +5583,7 @@ window.downloadJourneyLog = async function(mode = 'download') {
                 if (typeof alternateWaypoints !== 'undefined') drawWp(alternateWaypoints, 'a');
             });
 
-            // 5. Save and Export
+            // 5. Save PDF
             const bytes = await newPdf.save();
             const flt = document.getElementById('view-flt')?.innerText || document.getElementById('j-flt')?.value || 'OFP';
             const date = document.getElementById('view-date')?.innerText || document.getElementById('j-date')?.value || '';
@@ -5429,29 +5591,66 @@ window.downloadJourneyLog = async function(mode = 'download') {
             
             window.lastGeneratedOFPPdfBytes = bytes;
 
-            if (mode === 'email' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-                const subject = `OFP: ${flt} ${date}`;
-                if (typeof sharePdf === 'function') await sharePdf(bytes, filename, subject, `Please find attached the OFP for flight ${flt} on ${date}`);
-            } else {
-                if (typeof downloadBlob === 'function') downloadBlob(bytes, filename);
-            }
-            
-            if (typeof resetOFPAfterSend === 'function') await resetOFPAfterSend();
+            // Hide loading indicator before opening modal
+            if (container) container.style.display = 'none';
+
+            // 6. Display Modal using your createModal layout
+            showOFPFinalizeModal(bytes, filename, flt, date);
 
         } catch (error) {
             window.lastGeneratedOFPPdfBytes = null;
             console.error("Download Error:", error);
-            if (typeof logSecurityEvent === 'function') await logSecurityEvent('OFP_DOWNLOAD_ERROR', { error: error.message, mode });
-            alert("Error generating PDF: " + error.message);
+            const msg = error ? (error.message || String(error)) : "Unknown error";
+            if (typeof logSecurityEvent === 'function') await logSecurityEvent('OFP_DOWNLOAD_ERROR', { error: msg, mode });
+            alert("Error generating PDF: " + msg);
         } finally {
             if (container) container.style.display = 'none';
         }
     };
 
+    window.downloadSavedOFP = async function(id) {
+        try {
+            const db = await (typeof getDB === 'function' ? getDB() : null);
+            if (!db) return;
+            
+            const tx = db.transaction("ofps", "readonly");
+            const store = tx.objectStore("ofps");
+            const request = store.get(Number(id));
+            
+            request.onsuccess = () => {
+                const ofp = request.result;
+                if (ofp && ofp.loggedPdfData) {
+                    const url = URL.createObjectURL(ofp.loggedPdfData);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = typeof generateOFPDFilename === 'function' ? generateOFPDFilename(ofp.flight, ofp.date) : `OFP_${ofp.flight}.pdf`;
+                    
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    
+                    setTimeout(() => URL.revokeObjectURL(url), 100); // Memory leak fix
+                    if (typeof showToast !== 'undefined') showToast("Logged OFP downloaded", 'success');
+                } else {
+                    if (typeof showToast !== 'undefined') showToast("No logged version found", 'error');
+                }
+            };
+        } catch (error) {
+            console.error("Error downloading logged OFP:", error);
+            if (typeof showToast !== 'undefined') showToast("Download failed", 'error');
+        }
+    };
+
     async function resetOFPAfterSend() {
-        const userConfirmed = typeof showConfirmDialog === 'function' 
-            ? await showConfirmDialog('OFP Generated', '<div style="text-align:center;">Click Finalize to wipe the form.<br>Click Modify to make changes.</div>', 'Finalize', 'Modify', 'info', true)
-            : confirm("Finalize and wipe the form?");
+        const userConfirmed = await createModal({
+            title: 'OFP Generated',
+            message: '<div style="text-align:center;">Click Finalize to wipe the form.<br>Click Modify to make changes.</div>',
+            confirmText: 'Finalize',
+            cancelText: 'Modify',
+            icon: '✅',
+            type: 'info',
+            centered: true
+        });
 
         if (!userConfirmed) {
             window.lastGeneratedOFPPdfBytes = null;
@@ -5513,38 +5712,6 @@ window.downloadJourneyLog = async function(mode = 'download') {
         }
     }
 
-    window.downloadSavedOFP = async function(id) {
-        try {
-            const db = await (typeof getDB === 'function' ? getDB() : null);
-            if (!db) return;
-            
-            const tx = db.transaction("ofps", "readonly");
-            const store = tx.objectStore("ofps");
-            const request = store.get(Number(id));
-            
-            request.onsuccess = () => {
-                const ofp = request.result;
-                if (ofp && ofp.loggedPdfData) {
-                    const url = URL.createObjectURL(ofp.loggedPdfData);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = typeof generateOFPDFilename === 'function' ? generateOFPDFilename(ofp.flight, ofp.date) : `OFP_${ofp.flight}.pdf`;
-                    
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    
-                    setTimeout(() => URL.revokeObjectURL(url), 100); // Memory leak fix
-                    if (typeof showToast !== 'undefined') showToast("Logged OFP downloaded", 'success');
-                } else {
-                    if (typeof showToast !== 'undefined') showToast("No logged version found", 'error');
-                }
-            };
-        } catch (error) {
-            console.error("Error downloading logged OFP:", error);
-            if (typeof showToast !== 'undefined') showToast("Download failed", 'error');
-        }
-    };
 
 // ==========================================
 // 12. LOCAL STORAGE
@@ -5697,6 +5864,235 @@ window.downloadJourneyLog = async function(mode = 'download') {
         } finally {
             isAppLoaded = true;
         }
+    }
+
+    async function exportAllData() {
+        try {
+            const data = {
+                version: typeof APP_VERSION !== 'undefined' ? APP_VERSION : '1.0',
+                exportDate: new Date().toISOString(),
+                flightData: {
+                    dailyLegs: dailyLegs || [],
+                    waypoints: waypoints || [],
+                    alternateWaypoints: alternateWaypoints || [],
+                    fuelData: fuelData || []
+                },
+                settings: JSON.parse(localStorage.getItem('efb_settings') || '{}'),
+                state: JSON.parse(localStorage.getItem('efb_log_state_fallback') || localStorage.getItem('efb_log_state_plain') || '{}')
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `efb-backup-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            
+            setTimeout(() => URL.revokeObjectURL(url), 100); // Memory leak prevention
+            
+            if (typeof showToast !== 'undefined') showToast('Data exported successfully');
+            
+        } catch (error) {
+            console.error('Export failed:', error);
+            if (typeof showToast !== 'undefined') showToast('Export failed: ' + error.message, 'error');
+        }
+    }
+
+    window.recoverLostData = async function() {
+        const confirmed = await createModal({
+            title: 'Data Recovery',
+            message: 'This will attempt to recover any lost data.<br>Continue?',
+            confirmText: 'Recover',
+            cancelText: 'Cancel',
+            type: 'error',
+            icon: '🔄',
+            centered: true
+        });
+                
+        if (!confirmed) return;
+
+        const methods = [
+            { key: 'efb_log_state', encrypted: true },
+            { key: 'efb_log_state_fallback', encrypted: false },
+            { key: 'efb_log_state_plain', encrypted: false }
+        ];
+        
+        for (const method of methods) {
+            try {
+                const data = localStorage.getItem(method.key);
+                if (!data) continue;
+                
+                let state;
+                if (method.encrypted && typeof decryptData === 'function') {
+                    state = await decryptData(data);
+                } else {
+                    state = JSON.parse(data);
+                }
+                
+                if (state && state.inputs) {
+                    Object.keys(state.inputs).forEach(id => {
+                        if (state.inputs[id]) safeSet(id, state.inputs[id]);
+                    });
+                    
+                    if (typeof showToast !== 'undefined') showToast(`Recovered data from ${method.encrypted ? 'encrypted' : 'unencrypted'} storage`, 'success');
+                    
+                    // Trigger UI updates
+                    if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
+                    return;
+                }
+            } catch (e) {
+                console.warn(`Recovery from ${method.key} failed:`, e);
+            }
+        }
+        if (typeof showToast !== 'undefined') showToast("No recoverable data found", 'info');
+    };
+
+    async function confirmFactoryReset() {
+        const confirmed = await createModal({
+            title: 'Factory Reset',
+            message: 'WARNING: This will delete ALL data including flight data, settings, PIN, and audit logs.<br><br>This action cannot be undone. Continue?',
+            confirmText: 'Reset',
+            cancelText: 'Cancel',
+            type: 'error',
+            icon: '⚠️',
+            centered: true
+        });
+
+        if (!confirmed) return;
+
+        try {
+            // 1. Clear Local/Session Storage completely
+            localStorage.clear();
+            sessionStorage.clear();
+
+            // 2. Clear IndexedDB (Awaiting strictly to prevent race conditions during reload)
+            const db = await getDB();
+            const storesToClear = ['ofps', 'files', 'ofp_orders', 'ofp_user_data', 'journey_logs'].filter(s => db.objectStoreNames.contains(s));
+            
+            if (storesToClear.length > 0) {
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(storesToClear, 'readwrite');
+                    storesToClear.forEach(s => tx.objectStore(s).clear());
+                    tx.oncomplete = resolve;
+                    tx.onerror = reject;
+                });
+            }
+
+            // 3. Unregister Service Workers (Wipes app cache)
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(registrations.map(reg => reg.unregister()));
+            }
+
+            if (typeof showToast !== 'undefined') showToast('All data reset. Reloading app...', 'info');
+            
+            // Force Hard Reload
+            setTimeout(() => window.location.replace(window.location.href), 1500);
+
+        } catch (e) {
+            console.error('Factory Reset encountered errors:', e);
+            alert("Reset partially failed. Please manually clear your browser data.");
+        }
+    }
+
+    async function performDataReset(preserveDailyLegs = true, setLoadedState = true) {
+
+        // 1. Reset Arrays & App State
+        waypoints = [];
+        alternateWaypoints = [];
+        fuelData = [];
+        blockFuelValue = 0;
+        window.cutoffPageIndex = -1;
+        window.ofpPdfBytes = null;
+        window.lastGeneratedOFPPdfBytes = null;
+        window.originalFileName = "Logged_OFP.pdf";
+        
+        frontCoords = { atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null, reasonLabel: null };
+
+        if(typeof clearPdfDB === 'function') await clearPdfDB();
+
+        // 2. Wipe UI Components efficiently
+        const wipeText = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.textContent = "-"; });
+        const wipeInput = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.value = ""; });
+        const wipeZero = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.textContent = "00:00"; });
+        
+        wipeText(['view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn', 'view-ci', 'view-dest-route', 'view-altn-route', 'view-altn2', 'view-min-block', 'view-pic-block', 'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 'view-dow', 'view-tow', 'view-lw', 'view-zfw','view-era','view-crz-wind-temp', 'view-seats-stn-jmp']);
+        
+        const inputsToWipe = ['front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'front-extra-kg', 'front-extra-reason', 'ofp-atd-in', 'view-pic-block', 'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std', 'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail', 'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw', 'ofp-file-in', 'journey-log-file'];
+        
+        if (!preserveDailyLegs) {
+            inputsToWipe.push('j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count');
+            if (typeof PERSIST_AUTH_KEY !== 'undefined') localStorage.removeItem(PERSIST_AUTH_KEY);
+        }
+        
+        wipeInput(inputsToWipe);
+        wipeZero(['j-block', 'j-flight', 'j-burn', 'j-calc-ramp', 'j-disc']);
+
+        // 3. Clear Dynamic Tables
+        ['ofp-tbody', 'altn-tbody', 'fuel-tbody'].forEach(id => {
+            const tb = document.getElementById(id);
+            if(tb) tb.innerHTML = '<tr><td colspan="13" style="text-align:center;color:gray;padding:20px">No data</td></tr>';
+        });
+
+        // 4. End-of-Day Logic
+        if (!preserveDailyLegs) {
+            const journeyList = document.getElementById('journey-list-body');
+            if (journeyList) journeyList.innerHTML = '<tr><td colspan="5" style="text-align:center; color:gray; padding:20px;">No legs.</td></tr>';
+            dailyLegs = []; 
+            dutyStartTime = null;
+            
+            localStorage.removeItem('efb_log_state');
+            localStorage.removeItem('efb_log_state_fallback'); 
+            localStorage.removeItem('efb_log_state_plain');
+            localStorage.removeItem('activeOFPId');
+        }
+
+        // 5. Reset UI View States
+        const container = document.getElementById('pdf-render-container');
+        const fallback = document.getElementById('pdf-fallback');
+        if (container) { container.innerHTML = ''; container.style.display = 'none'; }
+        if (fallback) { fallback.innerHTML = '<span style="font-size:30px; margin-bottom:10px;">📄</span>No OFP uploaded yet.'; fallback.style.display = 'flex'; }
+
+        // 6. Clear Memory Pads
+        ['main', 'atis', 'atc'].forEach(padName => {
+            if (typeof pads !== 'undefined' && pads[padName]?.pad) pads[padName].pad.clear();
+        });
+
+        // 7. DB State Sync
+        if (preserveDailyLegs) {
+            try {
+                const savedState = localStorage.getItem('efb_log_state');
+                const fallbackState = localStorage.getItem('efb_log_state_fallback');
+                let stateObj = {};
+
+                if (savedState && typeof decryptData === 'function') {
+                    try { stateObj = await decryptData(savedState); } catch(e) { stateObj = JSON.parse(savedState); }
+                } else if (fallbackState) {
+                    stateObj = JSON.parse(fallbackState);
+                }
+
+                const newState = { dailyLegs: stateObj.dailyLegs || [], dutyStartTime: stateObj.dutyStartTime || null, inputs: {} };
+                
+                ['j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count'].forEach(key => {
+                    if (stateObj?.inputs?.[key]) newState.inputs[key] = stateObj.inputs[key];
+                });
+
+                if (typeof encryptData === 'function') {
+                    localStorage.setItem('efb_log_state', await encryptData(newState));
+                } else {
+                    localStorage.setItem('efb_log_state_fallback', JSON.stringify(newState));
+                }
+            } catch (e) {
+                console.error("Error processing preserved state:", e);
+                localStorage.removeItem('efb_log_state');
+            }
+        }
+
+        // 8. UI Finalization
+        if (setLoadedState && typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
+        if (typeof validateOFPInputs === 'function') validateOFPInputs();
     }
 
 // ==========================================
@@ -6156,227 +6552,6 @@ window.downloadJourneyLog = async function(mode = 'download') {
             tx.oncomplete = res;
             tx.onerror = rej;
         });
-    }
-
-// ==========================================
-// 14. DATA HANDLING
-// ==========================================
-
-    async function exportAllData() {
-        try {
-            const data = {
-                version: typeof APP_VERSION !== 'undefined' ? APP_VERSION : '1.0',
-                exportDate: new Date().toISOString(),
-                flightData: {
-                    dailyLegs: dailyLegs || [],
-                    waypoints: waypoints || [],
-                    alternateWaypoints: alternateWaypoints || [],
-                    fuelData: fuelData || []
-                },
-                settings: JSON.parse(localStorage.getItem('efb_settings') || '{}'),
-                state: JSON.parse(localStorage.getItem('efb_log_state_fallback') || localStorage.getItem('efb_log_state_plain') || '{}')
-            };
-            
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `efb-backup-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            
-            setTimeout(() => URL.revokeObjectURL(url), 100); // Memory leak prevention
-            
-            if (typeof showToast !== 'undefined') showToast('Data exported successfully');
-            
-        } catch (error) {
-            console.error('Export failed:', error);
-            if (typeof showToast !== 'undefined') showToast('Export failed: ' + error.message, 'error');
-        }
-    }
-
-    window.recoverLostData = async function() {
-        const confirmed = typeof showConfirmDialog === 'function' 
-            ? await showConfirmDialog('Data Recovery', 'This will attempt to recover any lost data.<br>Continue?', 'Recover', 'Cancel', 'error')
-            : confirm("Attempt to recover lost data?");
-            
-        if (!confirmed) return;
-
-        const methods = [
-            { key: 'efb_log_state', encrypted: true },
-            { key: 'efb_log_state_fallback', encrypted: false },
-            { key: 'efb_log_state_plain', encrypted: false }
-        ];
-        
-        for (const method of methods) {
-            try {
-                const data = localStorage.getItem(method.key);
-                if (!data) continue;
-                
-                let state;
-                if (method.encrypted && typeof decryptData === 'function') {
-                    state = await decryptData(data);
-                } else {
-                    state = JSON.parse(data);
-                }
-                
-                if (state && state.inputs) {
-                    Object.keys(state.inputs).forEach(id => {
-                        if (state.inputs[id]) safeSet(id, state.inputs[id]);
-                    });
-                    
-                    if (typeof showToast !== 'undefined') showToast(`Recovered data from ${method.encrypted ? 'encrypted' : 'unencrypted'} storage`, 'success');
-                    
-                    // Trigger UI updates
-                    if (typeof runFlightLogCalculations === 'function') runFlightLogCalculations();
-                    return;
-                }
-            } catch (e) {
-                console.warn(`Recovery from ${method.key} failed:`, e);
-            }
-        }
-        if (typeof showToast !== 'undefined') showToast("No recoverable data found", 'info');
-    };
-
-    async function confirmFactoryReset() {
-        const confirmed = typeof showConfirmDialog === 'function'
-            ? await showConfirmDialog('Factory Reset', 'WARNING: This will delete ALL data including flight data, settings, PIN, and audit logs.<br><br>This action cannot be undone. Continue?', 'Reset', 'Cancel', 'error')
-            : confirm("WARNING: This deletes ALL data. Continue?");
-
-        if (!confirmed) return;
-
-        try {
-            // 1. Clear Local/Session Storage completely
-            localStorage.clear();
-            sessionStorage.clear();
-
-            // 2. Clear IndexedDB (Awaiting strictly to prevent race conditions during reload)
-            const db = await getDB();
-            const storesToClear = ['ofps', 'files', 'ofp_orders', 'ofp_user_data', 'journey_logs'].filter(s => db.objectStoreNames.contains(s));
-            
-            if (storesToClear.length > 0) {
-                await new Promise((resolve, reject) => {
-                    const tx = db.transaction(storesToClear, 'readwrite');
-                    storesToClear.forEach(s => tx.objectStore(s).clear());
-                    tx.oncomplete = resolve;
-                    tx.onerror = reject;
-                });
-            }
-
-            // 3. Unregister Service Workers (Wipes app cache)
-            if ('serviceWorker' in navigator) {
-                const registrations = await navigator.serviceWorker.getRegistrations();
-                await Promise.all(registrations.map(reg => reg.unregister()));
-            }
-
-            if (typeof showToast !== 'undefined') showToast('All data reset. Reloading app...', 'info');
-            
-            // Force Hard Reload
-            setTimeout(() => window.location.replace(window.location.href), 1500);
-
-        } catch (e) {
-            console.error('Factory Reset encountered errors:', e);
-            alert("Reset partially failed. Please manually clear your browser data.");
-        }
-    }
-
-    async function performDataReset(preserveDailyLegs = true, setLoadedState = true) {
-
-        // 1. Reset Arrays & App State
-        waypoints = [];
-        alternateWaypoints = [];
-        fuelData = [];
-        blockFuelValue = 0;
-        window.cutoffPageIndex = -1;
-        window.ofpPdfBytes = null;
-        window.lastGeneratedOFPPdfBytes = null;
-        window.originalFileName = "Logged_OFP.pdf";
-        
-        frontCoords = { atis: null, atcLabel: null, altm1: null, stby: null, altm2: null, picBlockLabel: null, reasonLabel: null };
-
-        if(typeof clearPdfDB === 'function') await clearPdfDB();
-
-        // 2. Wipe UI Components efficiently
-        const wipeText = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.textContent = "-"; });
-        const wipeInput = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.value = ""; });
-        const wipeZero = ids => ids.forEach(id => { const e = document.getElementById(id); if (e) e.textContent = "00:00"; });
-        
-        wipeText(['view-flt', 'view-reg', 'view-date', 'view-dep', 'view-dest', 'view-std-text', 'view-sta-text', 'view-altn', 'view-ci', 'view-dest-route', 'view-altn-route', 'view-altn2', 'view-min-block', 'view-pic-block', 'view-mtow', 'view-mlw', 'view-mzfw', 'view-mpld', 'view-fcap', 'view-dow', 'view-tow', 'view-lw', 'view-zfw','view-era','view-crz-wind-temp', 'view-seats-stn-jmp']);
-        
-        const inputsToWipe = ['front-atis', 'front-atc', 'front-altm1', 'front-stby', 'front-altm2', 'front-extra-kg', 'front-extra-reason', 'ofp-atd-in', 'view-pic-block', 'j-flt', 'j-reg', 'j-date', 'j-dep', 'j-dest', 'j-altn', 'j-std', 'j-out', 'j-off', 'j-on', 'j-in', 'j-night', 'j-night-calc', 'j-to', 'j-ldg', 'j-ldg-type', 'j-flt-alt', 'j-ldg-detail', 'j-init', 'j-uplift-w', 'j-uplift-vol', 'j-act-ramp', 'j-shut', 'j-slip', 'j-slip-2', 'j-adl', 'j-chl', 'j-inf', 'j-bag', 'j-cargo', 'j-mail', 'j-zfw', 'ofp-file-in', 'journey-log-file'];
-        
-        if (!preserveDailyLegs) {
-            inputsToWipe.push('j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count');
-            if (typeof PERSIST_AUTH_KEY !== 'undefined') localStorage.removeItem(PERSIST_AUTH_KEY);
-        }
-        
-        wipeInput(inputsToWipe);
-        wipeZero(['j-block', 'j-flight', 'j-burn', 'j-calc-ramp', 'j-disc']);
-
-        // 3. Clear Dynamic Tables
-        ['ofp-tbody', 'altn-tbody', 'fuel-tbody'].forEach(id => {
-            const tb = document.getElementById(id);
-            if(tb) tb.innerHTML = '<tr><td colspan="13" style="text-align:center;color:gray;padding:20px">No data</td></tr>';
-        });
-
-        // 4. End-of-Day Logic
-        if (!preserveDailyLegs) {
-            const journeyList = document.getElementById('journey-list-body');
-            if (journeyList) journeyList.innerHTML = '<tr><td colspan="5" style="text-align:center; color:gray; padding:20px;">No legs.</td></tr>';
-            dailyLegs = []; 
-            dutyStartTime = null;
-            
-            localStorage.removeItem('efb_log_state');
-            localStorage.removeItem('efb_log_state_fallback'); 
-            localStorage.removeItem('efb_log_state_plain');
-            localStorage.removeItem('activeOFPId');
-        }
-
-        // 5. Reset UI View States
-        const container = document.getElementById('pdf-render-container');
-        const fallback = document.getElementById('pdf-fallback');
-        if (container) { container.innerHTML = ''; container.style.display = 'none'; }
-        if (fallback) { fallback.innerHTML = '<span style="font-size:30px; margin-bottom:10px;">📄</span>No OFP uploaded yet.'; fallback.style.display = 'flex'; }
-
-        // 6. Clear Memory Pads
-        ['main', 'atis', 'atc'].forEach(padName => {
-            if (typeof pads !== 'undefined' && pads[padName]?.pad) pads[padName].pad.clear();
-        });
-
-        // 7. DB State Sync
-        if (preserveDailyLegs) {
-            try {
-                const savedState = localStorage.getItem('efb_log_state');
-                const fallbackState = localStorage.getItem('efb_log_state_fallback');
-                let stateObj = {};
-
-                if (savedState && typeof decryptData === 'function') {
-                    try { stateObj = await decryptData(savedState); } catch(e) { stateObj = JSON.parse(savedState); }
-                } else if (fallbackState) {
-                    stateObj = JSON.parse(fallbackState);
-                }
-
-                const newState = { dailyLegs: stateObj.dailyLegs || [], dutyStartTime: stateObj.dutyStartTime || null, inputs: {} };
-                
-                ['j-duty-start', 'j-cc-duty-start', 'j-max-fdp', 'j-fc-count', 'j-cc-count'].forEach(key => {
-                    if (stateObj?.inputs?.[key]) newState.inputs[key] = stateObj.inputs[key];
-                });
-
-                if (typeof encryptData === 'function') {
-                    localStorage.setItem('efb_log_state', await encryptData(newState));
-                } else {
-                    localStorage.setItem('efb_log_state_fallback', JSON.stringify(newState));
-                }
-            } catch (e) {
-                console.error("Error processing preserved state:", e);
-                localStorage.removeItem('efb_log_state');
-            }
-        }
-
-        // 8. UI Finalization
-        if (setLoadedState && typeof setOFPLoadedState === 'function') setOFPLoadedState(false);
-        if (typeof validateOFPInputs === 'function') validateOFPInputs();
     }
 
 // ==========================================
@@ -8017,6 +8192,58 @@ window.loadAssignedFlights = async function() {
     }
 };
 
+async function fetchCrewInfo(flightId, token) {
+    try {
+        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ FlightIDs: [flightId] })
+        });
+
+        if (!resp.ok) throw new Error(`Status ${resp.status}`);
+
+        const data = await resp.json();
+        const flightData = data.FlightsCrewMembers?.[0];
+
+        if (!flightData || !Array.isArray(flightData.CrewMembers)) {
+            window.crewData = [];
+            return null;
+        }
+
+        const extractEmpId = m => m.EmployeeID || m.EmployeeId || m.StaffNo || m.StaffNumber || m.Code || m.Id || '';
+
+        const members = flightData.CrewMembers;
+        const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
+        const flightDeck = members.filter(m => flightDeckPositions.includes(m.Position));
+        const cabinCrew = members.filter(m => !flightDeckPositions.includes(m.Position));
+
+        // Format crew list with EmployeeID preserved
+        const formattedCrew = [...flightDeck, ...cabinCrew].map(m => ({
+            EmployeeID: extractEmpId(m),
+            FirstName: m.FirstName || '',
+            LastName: m.LastName || '',
+            Position: m.Position || ''
+        }));
+
+        // Cache in memory
+        window.crewData = formattedCrew;
+
+        // Permanent save to active flight storage
+        const activeId = localStorage.getItem('activeOFPId');
+        if (activeId && typeof saveOFPUserData === 'function') {
+            await saveOFPUserData(Number(activeId), { crewData: formattedCrew });
+        }
+
+        return { crewData: formattedCrew };
+    } catch (e) {
+        console.error('[Crew Fetch] Error:', e);
+        return null;
+    }
+}
+
 window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailNumber) {
     try {
         const token = await getValidSkyplanToken();
@@ -8079,55 +8306,50 @@ window.importOFPFromSkyplan = async function(flightId, flightNum, dateStr, tailN
     }
 };
 
-async function fetchCrewInfo(flightId, token) {
-    try {
-        const resp = await fetch('https://kcskyplanapi.airastana.com/api/v1/flights-crew-members', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({ FlightIDs: [flightId] })
-        });
-
-        if (!resp.ok) throw new Error(`Status ${resp.status}`);
-
-        const data = await resp.json();
-        const flightData = data.FlightsCrewMembers?.[0];
-
-        if (!flightData || !Array.isArray(flightData.CrewMembers)) {
-            window.crewData = [];
-            return null;
+// Uploads the finalized OFP PDF directly to Skyplan API
+async function uploadOFPToSkyplan(pdfBytes, filename) {
+    let extId = window.currentExternalFlightId || localStorage.getItem('activeExternalFlightId');
+    
+    // Fallback ID lookup if missing
+    if (!extId) {
+        const fltRaw = document.getElementById('j-flt')?.value || document.getElementById('view-flt')?.innerText || '';
+        const dateRaw = document.getElementById('j-date')?.value || document.getElementById('view-date')?.innerText || '';
+        const depRaw = document.getElementById('j-dep')?.value || document.getElementById('view-dep')?.innerText || '';
+        
+        if (fltRaw && dateRaw && depRaw && typeof fetchFlightIdFromRoster === 'function') {
+            extId = await fetchFlightIdFromRoster(dateRaw, fltRaw, depRaw);
+            if (extId) window.currentExternalFlightId = extId;
         }
+    }
 
-        const extractEmpId = m => m.EmployeeID || m.EmployeeId || m.StaffNo || m.StaffNumber || m.Code || m.Id || '';
+    if (!extId) {
+        throw new Error("Skyplan Flight ID missing. Please ensure the flight was synced from Skyplan roster.");
+    }
 
-        const members = flightData.CrewMembers;
-        const flightDeckPositions = ['CP', 'FO', 'P1', 'P2', 'SO'];
-        const flightDeck = members.filter(m => flightDeckPositions.includes(m.Position));
-        const cabinCrew = members.filter(m => !flightDeckPositions.includes(m.Position));
+    const token = typeof getValidSkyplanToken === 'function' ? await getValidSkyplanToken() : null;
+    if (!token) {
+        throw new Error("Skyplan token missing or expired. Please log in again.");
+    }
 
-        // Format crew list with EmployeeID preserved
-        const formattedCrew = [...flightDeck, ...cabinCrew].map(m => ({
-            EmployeeID: extractEmpId(m),
-            FirstName: m.FirstName || '',
-            LastName: m.LastName || '',
-            Position: m.Position || ''
-        }));
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const formData = new FormData();
+    formData.append('file', blob, filename);
 
-        // Cache in memory
-        window.crewData = formattedCrew;
+    const uploadUrl = `https://kcskyplanapi.airastana.com/api/v1/flights/${extId}/ofp/upload`;
 
-        // Permanent save to active flight storage
-        const activeId = localStorage.getItem('activeOFPId');
-        if (activeId && typeof saveOFPUserData === 'function') {
-            await saveOFPUserData(Number(activeId), { crewData: formattedCrew });
-        }
+    const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`
+        },
+        body: formData
+    });
 
-        return { crewData: formattedCrew };
-    } catch (e) {
-        console.error('[Crew Fetch] Error:', e);
-        return null;
+    if (response.status === 204 || response.ok) {
+        return true;
+    } else {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`Upload failed (HTTP ${response.status}): ${errText || 'Server Error'}`);
     }
 }
 
